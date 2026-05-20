@@ -884,12 +884,14 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
     //    Passieve commando's (ranglijst, dossier, help, prompts) zijn wel toegestaan
     const PASSIEVE_COMMANDO_S = ['ranglijst', 'dossier', 'help', 'prompts'];
     if (isVerbannen(command.user_id) && !PASSIEVE_COMMANDO_S.includes(eersteWoord)) {
-      const banData = loadVerbanning()[command.user_id];
-      const nogDagen = banData ? dagenTotEinde(banData.tot) : '?';
-      await respond({
-        text: `⚖️ _Uw verbanning loopt nog ${nogDagen} dag(en). De Kroket God negeert uw verzoek._`,
-        response_type: 'ephemeral',
-      });
+      const ballingTekst = await kroketResponse(
+        `Een balling in het ballingschap probeert de Kroket God aan te roepen. ` +
+        `Spreek een cryptisch decreet uit: vanuit het ballingschap wordt door de Almachtige Kroket God geen gehoor gegeven aan ketters. ` +
+        `Noem de balling niet bij naam. Verwijs naar "de balling", "de ketter" of "de afvallige". ` +
+        `Eén tot twee zinnen. Geen inleidingszin.`,
+        150, false
+      );
+      await postToChannel(client, command.channel_id, ballingTekst);
       return;
     }
 
@@ -1529,14 +1531,15 @@ app.event('app_mention', async ({ event, client }) => {
     const bijnaam = members[userId]?.bijnaam || 'Ongepaneerde vreemdeling';
     const input   = vervangNamen(event.text.replace(/<@[^>]+>/g, '').trim());
 
-    // Verbannen gebruiker — bot reageert niet op hen maar spreekt over de afvallige
+    // Verbannen gebruiker — cryptisch bericht vanuit het ballingschap
     const banStatus = isVerbannen(userId);
     if (banStatus) {
-      const nogDagen = dagenTotEinde(banStatus.tot);
       const afvalligeTekst = await kroketResponse(
-        `De afvallige ${bijnaam} probeert de aandacht van de Kroket God te trekken maar is nog ${nogDagen} dag(en) verbannen. ` +
-        `Spreek in de derde persoon over de afvallige — minachtend maar waardig. Geen directe erkenning, geen reactie op hun boodschap. Geen inleidingszin.`,
-        200, false
+        `Een balling in het ballingschap probeert de Kroket God aan te spreken. ` +
+        `Spreek een cryptisch decreet uit: vanuit het ballingschap wordt door de Almachtige Kroket God geen gehoor gegeven aan ketters. ` +
+        `Noem de balling niet bij naam. Verwijs naar "de balling", "de ketter" of "de afvallige". ` +
+        `Eén tot twee zinnen. Geen inleidingszin.`,
+        150, false
       );
       const thread_ts = event.thread_ts || (event.parent_user_id ? event.ts : undefined);
       await postToChannel(client, event.channel, afvalligeTekst, { thread_ts });
@@ -1558,9 +1561,9 @@ app.event('app_mention', async ({ event, client }) => {
       if (banKans) {
         const verdictRuw = await kroketResponse(
           `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} heeft de Kroket God beledigd: "${input}". ` +
-          `Spreek een officieel verbanningsvonnis uit. Bepaal de duur (1–14 dagen) op basis van de ernst. ` +
-          `Beschrijf de verbanning in stijl — de afvallige wordt genegeerd en als afvallige beschouwd. ` +
-          `Sluit AF met EXACT deze regel op een nieuwe regel: VERBANNING:[X] waarbij X het aantal dagen is. Geen inleidingszin.`,
+          `Spreek een officieel verbanningsvonnis uit. Bepaal de duur (1–14 dagen) op basis van de ernst van de belediging. ` +
+          `Vertel plechtig dat ${bijnaam} dat aantal dagen in ballingschap zal leven om zijn zonden te overzien. ` +
+          `Sluit AF met EXACT deze regel op een nieuwe regel: VERBANNING:[X] waarbij X het gekozen aantal dagen is. Geen inleidingszin.`,
           450, false
         );
         const dagenMatch = verdictRuw.match(/VERBANNING:\[?(\d+)\]?/i);
@@ -1581,7 +1584,7 @@ app.event('app_mention', async ({ event, client }) => {
         const terugDatum = tot.toLocaleDateString('nl-NL', { timeZone: 'Europe/Amsterdam', day: 'numeric', month: 'long' });
         const thread_ts = event.thread_ts || (event.parent_user_id ? event.ts : undefined);
         await postToChannel(client, event.channel,
-          `${verdictTekst}\n\n_${bijnaam} is verbannen voor ${dagen} dag(en). Terugkeer: ${terugDatum}._`,
+          `${verdictTekst}\n\n_Terugkeer verwacht: ${terugDatum}._`,
           { thread_ts }
         );
         return;
