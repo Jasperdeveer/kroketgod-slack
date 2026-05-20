@@ -49,7 +49,7 @@ Regels:
 - Schrijf in correct Nederlands. Gebruik GEEN verzonnen samenstellingen of niet-bestaande woorden. Als je twijfelt of een woord bestaat — gebruik het niet.
 - Neem NOOIT format-labels op in je output (zoals "--- [decreet]" of "--- [one-liner]"). Die zijn alleen voor intern gebruik.
 - Ken NOOIT zelf kroketpunten toe of af tenzij de prompt dit expliciet meldt. Noem GEEN specifieke puntenaantallen — jij weet de actuele stand niet. Als het systeem een punt heeft toegekend of afgenomen staat dit in de prompt vermeld.
-- Als je reageert op iets wat een volgeling heeft gezegd of gevraagd, begin dan ALTIJD met één cursieve inleidingsregel in Slack-opmaak (_zoals dit_) die in maximaal één zin parafraseert wat er gezegd of gevraagd werd — in de stijl van de Kroket God, niet letterlijk. Dan een lege regel, dan pas de hoofdreactie. Doe dit NIET bij algemene aankondigingen zonder aanleiding.
+- INLEIDINGSZIN — KRITIEKE REGEL: Als het prompt de tekst "Geen inleidingszin" bevat: begin DIRECT met de inhoud — absoluut geen cursieve openingsregel, geen introductie, niets. Direct de hoofdtekst. Als het prompt "Geen inleidingszin" NIET bevat: begin met één cursieve inleidingsregel (_zoals dit_) die in maximaal één zin parafraseert wat er gezegd of gevraagd werd, gevolgd door een lege regel. Doe dit NIET bij algemene aankondigingen.
 - Houd berichten kort: max 4-5 regels hoofdtekst. Elke zin telt.
 - Gebruik Slack blockquote opmaak: zet de hoofdtekst als blockquote met "> ". Header en ondertekening staan buiten de blockquote.
 
@@ -995,7 +995,7 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
       }
       const [zondeId, zondebok] = lid;
       pasScoreAan(zondeId, -1);
-      const tekst = await kroketResponse(`De Kroket God wijst ${zondebok.bijnaam} aan als zondebok — uit eigen goddelijke wil. Begin DIRECT met het vonnis, geen inleidingszin, geen verwijzing naar wie dit aanvroeg of waarom.`);
+      const tekst = await kroketResponse(`De Kroket God wijst ${zondebok.bijnaam} aan als zondebok — uit eigen goddelijke wil. Begin DIRECT met het vonnis, geen inleidingszin, geen verwijzing naar wie dit aanvroeg of waarom.`, 400, false);
       await postToChannel(client, command.channel_id, tekst);
       return;
     }
@@ -1012,14 +1012,15 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
           // Strafpunt voor de hoogmoed
           await pasScoreAanMetCheck(client, command.user_id, -1);
           const waarschuwing = await kroketResponse(
-            `${aanvrager} heeft zojuist geprobeerd ZICHZELF te eren — een daad van ongekende hoogmoed binnen de snackleer. De Kroket God spreekt een felle waarschuwing uit: zelflof is een doodzonde tegen de Hoge Frituurraad. Als straf wordt 1 kroketpunt afgenomen. Wees scherp, plechtig en publiekelijk. Geen inleidingszin.`
+            `${aanvrager} heeft zojuist geprobeerd ZICHZELF te eren — een daad van ongekende hoogmoed binnen de snackleer. De Kroket God spreekt een felle waarschuwing uit: zelflof is een doodzonde tegen de Hoge Frituurraad. Als straf wordt 1 kroketpunt afgenomen. Wees scherp, plechtig en publiekelijk. Geen inleidingszin.`,
+            400, false
           );
           await postToChannel(client, command.channel_id, waarschuwing);
           return;
         }
 
         await pasScoreAanMetCheck(client, eerId, 1);
-        const tekst = await kroketResponse(`De Kroket God zegent ${lid.bijnaam} met een kroketpunt — uit eigen goddelijke wil, zonder aanleiding. Begin DIRECT met de zegen, geen inleidingszin, geen verwijzing naar een aanvraag of reden.`);
+        const tekst = await kroketResponse(`De Kroket God zegent ${lid.bijnaam} met een kroketpunt — uit eigen goddelijke wil, zonder aanleiding. Begin DIRECT met de zegen, geen inleidingszin, geen verwijzing naar een aanvraag of reden.`, 400, false);
         await postToChannel(client, command.channel_id, tekst);
       } else {
         await respond(`De Kroket God kent geen volgeling genaamd "${invoer}". Ongepaneerde vreemdeling.`);
@@ -1167,9 +1168,9 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
       }
       const [, lid] = uitverkorene;
       const prompt = positief
-        ? `Kondig plechtig aan dat ${lid.bijnaam} de uitverkorene is van dit moment — en dat dit goed nieuws is. De Kroket God is gunstig gestemd. Zegen hen dramatisch.`
-        : `Onthul plechtig dat ${lid.bijnaam} de uitverkorene is van dit moment — en dat de Hoge Frituurraad hen vriendelijk maar nauwlettend in het oog houdt. Dreigend maar met ironie.`;
-      const tekst = await kroketResponse(prompt);
+        ? `Kondig plechtig aan dat ${lid.bijnaam} de uitverkorene is van dit moment — en dat dit goed nieuws is. De Kroket God is gunstig gestemd. Zegen hen dramatisch. Geen inleidingszin.`
+        : `Onthul plechtig dat ${lid.bijnaam} de uitverkorene is van dit moment — en dat de Hoge Frituurraad hen vriendelijk maar nauwlettend in het oog houdt. Dreigend maar met ironie. Geen inleidingszin.`;
+      const tekst = await kroketResponse(prompt, 400, false);
       await postToChannel(client, command.channel_id, tekst);
       return;
     }
