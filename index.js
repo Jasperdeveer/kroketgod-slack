@@ -1908,10 +1908,39 @@ cron.schedule('0 9 1 * *', async () => {
   }
 }, { timezone: 'Europe/Amsterdam' });
 
+// ── Eenmalige migratie: begrens bestaande verbanning Mr. KroketPet tot 2 dagen ─
+
+async function migreerVerbanningKroketPet(client) {
+  const JASPER_ID = 'U08ALFNQB1V';
+  const verbanning = loadVerbanning();
+  const v = verbanning[JASPER_ID];
+  if (!v) return; // al verlopen of niet aanwezig
+
+  const tot = new Date(v.tot);
+  const maxTot = new Date();
+  maxTot.setDate(maxTot.getDate() + 2);
+
+  if (tot <= maxTot) return; // al binnen 2 dagen, niets doen
+
+  // Pas aan naar 2 dagen vanaf nu
+  verbanning[JASPER_ID] = { ...v, tot: maxTot.toISOString(), dagen: 2 };
+  saveVerbanning(verbanning);
+
+  const terugDatum = maxTot.toLocaleDateString('nl-NL', { timeZone: 'Europe/Amsterdam', day: 'numeric', month: 'long' });
+  const tekst = await kroketResponse(
+    `De Kroket God herziet zijn eigen vonnis. Het oorspronkelijke oordeel van 7 dagen voor Mr. KroketPet wordt teruggebracht naar 2 dagen — ` +
+    `niet uit genade, maar omdat de Hoge Frituurraad erkent dat dit een eerste overtreding betrof en buitenproportionele straffen de snackleer ondermijnen. ` +
+    `Spreek dit plechtig uit als een decreet van zelfcorrectie. Terugkeer: ${terugDatum}. Geen inleidingszin.`,
+    400, false
+  );
+  await postToChannel(client, process.env.SLACK_CHANNEL_ID, tekst);
+}
+
 // ── Start ──────────────────────────────────────────────────────────────────────
 
 (async () => {
   backfillAchievements();
   await app.start();
   console.log('⚜️ De Kroket God is wakker. Poort 3000 staat open.');
+  await migreerVerbanningKroketPet(app.client);
 })();
