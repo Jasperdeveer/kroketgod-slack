@@ -1064,6 +1064,18 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
       const gevonden = getMemberByNaam(invoer);
       if (gevonden) {
         const [eerId, lid] = gevonden;
+
+        // Verbod: jezelf eren is een doodzonde
+        if (eerId === command.user_id) {
+          // Strafpunt voor de hoogmoed
+          await pasScoreAanMetCheck(client, command.user_id, -1);
+          const waarschuwing = await kroketResponse(
+            `${aanvrager} heeft zojuist geprobeerd ZICHZELF te eren — een daad van ongekende hoogmoed binnen de snackleer. De Kroket God spreekt een felle waarschuwing uit: zelflof is een doodzonde tegen de Hoge Frituurraad. Als straf wordt 1 kroketpunt afgenomen. Wees scherp, plechtig en publiekelijk. Geen inleidingszin.`
+          );
+          await postToChannel(client, command.channel_id, waarschuwing);
+          return;
+        }
+
         await pasScoreAanMetCheck(client, eerId, 1);
         const tekst = await kroketResponse(`De Kroket God zegent ${lid.bijnaam} met een kroketpunt — uit eigen goddelijke wil, zonder aanleiding. Begin DIRECT met de zegen, geen inleidingszin, geen verwijzing naar een aanvraag of reden.`);
         await postToChannel(client, command.channel_id, tekst);
