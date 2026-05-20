@@ -1561,13 +1561,13 @@ app.event('app_mention', async ({ event, client }) => {
       if (banKans) {
         const verdictRuw = await kroketResponse(
           `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} heeft de Kroket God beledigd: "${input}". ` +
-          `Spreek een officieel verbanningsvonnis uit. Bepaal de duur (1–14 dagen) op basis van de ernst van de belediging. ` +
+          `Spreek een officieel verbanningsvonnis uit. Bepaal de duur (1 of 2 dagen) op basis van de ernst van de belediging. ` +
           `Vertel plechtig dat ${bijnaam} dat aantal dagen in ballingschap zal leven om zijn zonden te overzien. ` +
           `Sluit AF met EXACT deze regel op een nieuwe regel: VERBANNING:[X] waarbij X het gekozen aantal dagen is. Geen inleidingszin.`,
           450, false
         );
         const dagenMatch = verdictRuw.match(/VERBANNING:\[?(\d+)\]?/i);
-        const dagen = dagenMatch ? Math.min(Math.max(parseInt(dagenMatch[1]), 1), 14) : 3;
+        const dagen = dagenMatch ? Math.min(Math.max(parseInt(dagenMatch[1]), 1), 2) : 1;
         const verdictTekst = verdictRuw.replace(/VERBANNING:\[?\d+\]?\.?/gi, '').trim();
 
         const verbanning = loadVerbanning();
