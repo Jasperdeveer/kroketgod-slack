@@ -814,7 +814,6 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
         ``,
         `*⚙️ Extra commando's*`,
         `\`zondebok\` — −1 punt willekeurig lid`,
-        `\`verban [naam] [reden]\` — verbanning (AI bepaalt duur, 1–30 dagen)`,
         `\`begenade [naam]\` — verbanning vroegtijdig opheffen`,
         `\`dossier [naam]\` — kroket-CV van een lid`,
         `\`stem [naam]\` — stem op Held van de Week`,
@@ -1252,57 +1251,6 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
       return;
     }
 
-    // ── Verban
-    if (input.startsWith('verban ') || input === 'verban') {
-      const rest = input.replace(/^verban\s*/i, '').trim();
-      if (!rest) {
-        await respond('_Gebruik: /kroketgod verban [naam] [reden]_');
-        return;
-      }
-      const { gevonden, reden } = parseerNaamEnReden(rest);
-      if (!gevonden) {
-        await respond(`De Kroket God kent geen volgeling met die naam.`);
-        return;
-      }
-      const [doelwitId, lid] = gevonden;
-      if (doelwitId === command.user_id) {
-        await respond('_De Kroket God lacht om uw poging tot zelfverbanning. Nee._');
-        return;
-      }
-      // Spreek het vonnis uit — de AI sluit af met een exacte dag-tag die we parsen
-      const verdictRuw = await kroketResponse(
-        `De Kroket God spreekt een officieel verbanningsvonnis uit over ${lid.bijnaam}` +
-        `${reden ? ` wegens: "${reden}"` : ' wegens herhaalde overtredingen van de snackleer'}. ` +
-        `Bepaal de ernst van de overtreding en de verbanningstermijn (1–30 dagen). ` +
-        `Beschrijf wat de verbanning inhoudt: de afvallige wordt door de Hoge Frituurraad genegeerd en als afvallige beschouwd tot hun terugkeer. ` +
-        `Sluit de tekst AF met EXACT deze regel op een nieuwe regel (verder niets): VERBANNING:[X] ` +
-        `waarbij X het aantal dagen is (alleen een getal, 1–30). Geen inleidingszin.`,
-        500, false
-      );
-      // Parseer de dag-tag
-      const dagenMatch = verdictRuw.match(/VERBANNING:\[?(\d+)\]?/i);
-      const dagen = dagenMatch ? Math.min(Math.max(parseInt(dagenMatch[1]), 1), 30) : 7;
-      const verdictTekst = verdictRuw.replace(/VERBANNING:\[?\d+\]?\.?/gi, '').trim();
-
-      // Sla verbanning op
-      const verbanning = loadVerbanning();
-      const tot = new Date();
-      tot.setDate(tot.getDate() + dagen);
-      verbanning[doelwitId] = {
-        tot: tot.toISOString(),
-        reden: reden || 'overtredingen van de snackleer',
-        dagen,
-        opgelegd: new Date().toISOString(),
-      };
-      saveVerbanning(verbanning);
-
-      const terugDatum = tot.toLocaleDateString('nl-NL', { timeZone: 'Europe/Amsterdam', day: 'numeric', month: 'long' });
-      await postToChannel(client, command.channel_id,
-        `${verdictTekst}\n\n_${lid.bijnaam} is verbannen voor ${dagen} dag(en). Terugkeer: ${terugDatum}._`
-      );
-      return;
-    }
-
     // ── Begenade (verbanning opheffen)
     if (input.startsWith('begenade ') || input === 'begenade') {
       const rest = input.replace(/^begenade\s*/i, '').trim();
@@ -1603,6 +1551,41 @@ app.event('app_mention', async ({ event, client }) => {
       // Forceer de intro-zin door de letterlijke start mee te geven — AI mag hem afmaken maar
       // mag de naam NIET veranderen. Dit voorkomt dat het model een andere bijnaam invult.
       const introStart = `_${bijnaam} `;
+
+      // 20% kans op autonome verbanning bij belediging
+      const banKans = sentiment === 'BELEDIGING' && members[userId] && Math.random() < 0.20;
+
+      if (banKans) {
+        const verdictRuw = await kroketResponse(
+          `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} heeft de Kroket God beledigd: "${input}". ` +
+          `Spreek een officieel verbanningsvonnis uit. Bepaal de duur (1–14 dagen) op basis van de ernst. ` +
+          `Beschrijf de verbanning in stijl — de afvallige wordt genegeerd en als afvallige beschouwd. ` +
+          `Sluit AF met EXACT deze regel op een nieuwe regel: VERBANNING:[X] waarbij X het aantal dagen is. Geen inleidingszin.`,
+          450, false
+        );
+        const dagenMatch = verdictRuw.match(/VERBANNING:\[?(\d+)\]?/i);
+        const dagen = dagenMatch ? Math.min(Math.max(parseInt(dagenMatch[1]), 1), 14) : 3;
+        const verdictTekst = verdictRuw.replace(/VERBANNING:\[?\d+\]?\.?/gi, '').trim();
+
+        const verbanning = loadVerbanning();
+        const tot = new Date();
+        tot.setDate(tot.getDate() + dagen);
+        verbanning[userId] = {
+          tot: tot.toISOString(),
+          reden: input,
+          dagen,
+          opgelegd: new Date().toISOString(),
+        };
+        saveVerbanning(verbanning);
+
+        const terugDatum = tot.toLocaleDateString('nl-NL', { timeZone: 'Europe/Amsterdam', day: 'numeric', month: 'long' });
+        const thread_ts = event.thread_ts || (event.parent_user_id ? event.ts : undefined);
+        await postToChannel(client, event.channel,
+          `${verdictTekst}\n\n_${bijnaam} is verbannen voor ${dagen} dag(en). Terugkeer: ${terugDatum}._`,
+          { thread_ts }
+        );
+        return;
+      }
 
       if (sentiment === 'BELEDIGING' && members[userId] && scoreKans) {
         pasScoreAan(userId, -1);
