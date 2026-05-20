@@ -163,8 +163,10 @@ function pasScoreAan(userId, delta) {
 
 // Score wijzigen + achievements checken (gebruik in plaats van pasScoreAan waar mogelijk)
 async function pasScoreAanMetCheck(client, userId, delta) {
+  const scores = loadScores();
+  const oude = scores[userId] || 0;
   const nieuwe = pasScoreAan(userId, delta);
-  if (delta > 0) await controleerAchievements(client, userId, nieuwe);
+  if (delta > 0) await controleerAchievements(client, userId, oude, nieuwe);
   return nieuwe;
 }
 
@@ -246,29 +248,66 @@ const ACHIEVEMENTS = [
   { id: 'diamanten_mosterdpot',drempel: 100, naam: '💎 Diamanten Mosterdpot',     tekst: 'Honderd kroketpunten. U behoort tot een zeer select gezelschap.' },
 ];
 
-async function controleerAchievements(client, userId, nieuweScore) {
+async function controleerAchievements(client, userId, oudeScore, nieuweScore) {
   const all = loadAchievements();
   const eigen = new Set(all[userId] || []);
   const members = loadMembers();
   const bijnaam = members[userId]?.bijnaam || 'Onbekende volgeling';
 
-  for (const a of ACHIEVEMENTS) {
-    if (nieuweScore >= a.drempel && !eigen.has(a.id)) {
-      eigen.add(a.id);
-      all[userId] = [...eigen];
-      saveAchievements(all);
+  let aangepast = false;
 
-      const bericht =
-        `🏆 *RELIKWIE ONTGRENDELD* 🏆\n\n` +
-        `> ${bijnaam} heeft *${a.naam}* verworven.\n` +
-        `> _${a.tekst}_\n\n` +
-        `— De Hoge Frituurraad`;
-      try {
-        await postToChannel(client, process.env.SLACK_CHANNEL_ID, bericht);
-      } catch (err) {
-        console.error('Achievement post fout:', err.message);
+  for (const a of ACHIEVEMENTS) {
+    if (eigen.has(a.id)) continue;
+
+    if (nieuweScore >= a.drempel) {
+      eigen.add(a.id);
+      aangepast = true;
+
+      // Alleen aankondigen als de drempel NU is gepasseerd (oude score lag eronder)
+      if (oudeScore < a.drempel) {
+        const bericht =
+          `🏆 *RELIKWIE ONTGRENDELD* 🏆\n\n` +
+          `> ${bijnaam} heeft *${a.naam}* verworven.\n` +
+          `> _${a.tekst}_\n\n` +
+          `— De Hoge Frituurraad`;
+        try {
+          await postToChannel(client, process.env.SLACK_CHANNEL_ID, bericht);
+        } catch (err) {
+          console.error('Achievement post fout:', err.message);
+        }
+      }
+      // Anders: stilletjes markeren als ontgrendeld (backfill)
+    }
+  }
+
+  if (aangepast) {
+    all[userId] = [...eigen];
+    saveAchievements(all);
+  }
+}
+
+// Backfill bij startup: markeer alle reeds-verdiende achievements als ontgrendeld
+// Zo voorkomen we dat oude leden bij hun volgende punt alsnog een lawine krijgen.
+function backfillAchievements() {
+  const scores = loadScores();
+  const all = loadAchievements();
+  let gewijzigd = false;
+
+  for (const [userId, score] of Object.entries(scores)) {
+    const eigen = new Set(all[userId] || []);
+    for (const a of ACHIEVEMENTS) {
+      if (score >= a.drempel && !eigen.has(a.id)) {
+        eigen.add(a.id);
+        gewijzigd = true;
       }
     }
+    if (eigen.size !== (all[userId]?.length || 0)) {
+      all[userId] = [...eigen];
+    }
+  }
+  if (gewijzigd) {
+    saveAchievements(all);
+    console.log('✓ Achievements ge-backfilled voor bestaande leden');
   }
 }
 
@@ -1600,6 +1639,7 @@ cron.schedule('0 9 1 * *', async () => {
 // ── Start ──────────────────────────────────────────────────────────────────────
 
 (async () => {
+  backfillAchievements();
   await app.start();
   console.log('⚜️ De Kroket God is wakker. Poort 3000 staat open.');
 })();
