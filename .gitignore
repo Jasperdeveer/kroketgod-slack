@@ -1,3 +1,11 @@
 node_modules/
 .env
 .DS_Store
+
+# Lokale state — per machine. Mag niet in git anders worden ze overschreven bij git reset.
+members.json
+scores.json
+geschiedenis.json
+stemmen.json
+streaks.json
+achievements.json
