@@ -241,6 +241,40 @@ function getMondayOfWeek(date = new Date()) {
 const loadStreaks = () => readJSON('streaks.json', {});
 const saveStreaks = (data) => writeJSON('streaks.json', data);
 
+// ── Verbanning ─────────────────────────────────────────────────────────────────
+
+const loadVerbanning = () => readJSON('verbanning.json', {});
+const saveVerbanning = (data) => writeJSON('verbanning.json', data);
+
+// Geeft het ban-object terug als de gebruiker nog verbannen is, anders null.
+// Verwijdert stilletjes verlopen bans — maar kondigt ze NIET aan (dat doet de cron).
+function isVerbannen(userId) {
+  const verbanning = loadVerbanning();
+  const v = verbanning[userId];
+  if (!v) return null;
+  if (Date.now() > new Date(v.tot).getTime()) return null; // verlopen maar nog niet opgeruimd
+  return v;
+}
+
+// Resterende dagen (afgerond naar boven, minimaal 1)
+function dagenTotEinde(tot) {
+  return Math.max(1, Math.ceil((new Date(tot) - Date.now()) / (1000 * 60 * 60 * 24)));
+}
+
+// Parseer naam + reden uit een string als "Sander voor ketterij" of "Mr. Te Lang Gefrituurde Kroket"
+// Probeert steeds kortere prefixen als naam, de rest wordt de reden.
+function parseerNaamEnReden(invoer) {
+  const tokens = invoer.split(' ');
+  for (let i = tokens.length; i >= 1; i--) {
+    const potentieleNaam = tokens.slice(0, i).join(' ');
+    const gevonden = getMemberByNaam(potentieleNaam);
+    if (gevonden) {
+      return { gevonden, reden: tokens.slice(i).join(' ').trim() };
+    }
+  }
+  return { gevonden: null, reden: invoer };
+}
+
 // ── Achievements / Heilige Relikwieën ─────────────────────────────────────────
 
 const loadAchievements = () => readJSON('achievements.json', {});
@@ -780,6 +814,8 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
         ``,
         `*⚙️ Extra commando's*`,
         `\`zondebok\` — −1 punt willekeurig lid`,
+        `\`verban [naam] [reden]\` — verbanning (AI bepaalt duur, 1–30 dagen)`,
+        `\`begenade [naam]\` — verbanning vroegtijdig opheffen`,
         `\`dossier [naam]\` — kroket-CV van een lid`,
         `\`stem [naam]\` — stem op Held van de Week`,
         `\`frituur [tekst]\` — AI-afbeelding`,
@@ -844,6 +880,19 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
 
     const members = loadMembers();
     const aanvrager = members[command.user_id]?.bijnaam || 'Ongepaneerde vreemdeling';
+
+    // ── Verbanning check — verbannen leden kunnen geen publieke commando's uitvoeren
+    //    Passieve commando's (ranglijst, dossier, help, prompts) zijn wel toegestaan
+    const PASSIEVE_COMMANDO_S = ['ranglijst', 'dossier', 'help', 'prompts'];
+    if (isVerbannen(command.user_id) && !PASSIEVE_COMMANDO_S.includes(eersteWoord)) {
+      const banData = loadVerbanning()[command.user_id];
+      const nogDagen = banData ? dagenTotEinde(banData.tot) : '?';
+      await respond({
+        text: `⚖️ _Uw verbanning loopt nog ${nogDagen} dag(en). De Kroket God negeert uw verzoek._`,
+        response_type: 'ephemeral',
+      });
+      return;
+    }
 
     // ── Geen input: spreek willekeurig lid aan
     if (!input) {
@@ -973,9 +1022,10 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
       const streak = streaks[id]?.huidig ?? 0;
       const lidSinds = lid.lidSinds ? new Date(lid.lidSinds).toLocaleDateString('nl-NL') : 'onbekend';
 
+      const banStatus = isVerbannen(id);
       const tekst =
         `📜 *DOSSIER — ${lid.bijnaam}* 📜\n` +
-        `\n*Status:* Volgeling der Kroket Illuminati` +
+        `\n*Status:* ${banStatus ? `⛔ VERBANNEN — nog ${dagenTotEinde(banStatus.tot)} dag(en) (wegens: ${banStatus.reden})` : 'Volgeling der Kroket Illuminati'}` +
         `\n*Lid sinds:* ${lidSinds}` +
         `\n*Kroketpunten:* ${punten}` +
         (streak ? `\n*Vrijdagstreak:* ${streak} week(en) onafgebroken` : '') +
@@ -1197,6 +1247,87 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
       const tekst = await kroketResponse(
         `${aanvrager} meldt "${naam}" aan bij de Hoge Frituurraad als vermoedelijke handlanger van ${factie}. Reageer dramatisch — onderzoek de zaak in stijl, citeer fictief bewijs, en spreek een voorlopig oordeel uit. Eindig met een waarschuwing aan "${naam}" of een geruststelling aan ${aanvrager}. Geen inleidingszin.`,
         500
+      );
+      await postToChannel(client, command.channel_id, tekst);
+      return;
+    }
+
+    // ── Verban
+    if (input.startsWith('verban ') || input === 'verban') {
+      const rest = input.replace(/^verban\s*/i, '').trim();
+      if (!rest) {
+        await respond('_Gebruik: /kroketgod verban [naam] [reden]_');
+        return;
+      }
+      const { gevonden, reden } = parseerNaamEnReden(rest);
+      if (!gevonden) {
+        await respond(`De Kroket God kent geen volgeling met die naam.`);
+        return;
+      }
+      const [doelwitId, lid] = gevonden;
+      if (doelwitId === command.user_id) {
+        await respond('_De Kroket God lacht om uw poging tot zelfverbanning. Nee._');
+        return;
+      }
+      // Spreek het vonnis uit — de AI sluit af met een exacte dag-tag die we parsen
+      const verdictRuw = await kroketResponse(
+        `De Kroket God spreekt een officieel verbanningsvonnis uit over ${lid.bijnaam}` +
+        `${reden ? ` wegens: "${reden}"` : ' wegens herhaalde overtredingen van de snackleer'}. ` +
+        `Bepaal de ernst van de overtreding en de verbanningstermijn (1–30 dagen). ` +
+        `Beschrijf wat de verbanning inhoudt: de afvallige wordt door de Hoge Frituurraad genegeerd en als afvallige beschouwd tot hun terugkeer. ` +
+        `Sluit de tekst AF met EXACT deze regel op een nieuwe regel (verder niets): VERBANNING:[X] ` +
+        `waarbij X het aantal dagen is (alleen een getal, 1–30). Geen inleidingszin.`,
+        500, false
+      );
+      // Parseer de dag-tag
+      const dagenMatch = verdictRuw.match(/VERBANNING:\[?(\d+)\]?/i);
+      const dagen = dagenMatch ? Math.min(Math.max(parseInt(dagenMatch[1]), 1), 30) : 7;
+      const verdictTekst = verdictRuw.replace(/VERBANNING:\[?\d+\]?\.?/gi, '').trim();
+
+      // Sla verbanning op
+      const verbanning = loadVerbanning();
+      const tot = new Date();
+      tot.setDate(tot.getDate() + dagen);
+      verbanning[doelwitId] = {
+        tot: tot.toISOString(),
+        reden: reden || 'overtredingen van de snackleer',
+        dagen,
+        opgelegd: new Date().toISOString(),
+      };
+      saveVerbanning(verbanning);
+
+      const terugDatum = tot.toLocaleDateString('nl-NL', { timeZone: 'Europe/Amsterdam', day: 'numeric', month: 'long' });
+      await postToChannel(client, command.channel_id,
+        `${verdictTekst}\n\n_${lid.bijnaam} is verbannen voor ${dagen} dag(en). Terugkeer: ${terugDatum}._`
+      );
+      return;
+    }
+
+    // ── Begenade (verbanning opheffen)
+    if (input.startsWith('begenade ') || input === 'begenade') {
+      const rest = input.replace(/^begenade\s*/i, '').trim();
+      if (!rest) {
+        await respond('_Gebruik: /kroketgod begenade [naam]_');
+        return;
+      }
+      const { gevonden } = parseerNaamEnReden(rest);
+      if (!gevonden) {
+        await respond(`De Kroket God kent geen volgeling met die naam.`);
+        return;
+      }
+      const [doelwitId, lid] = gevonden;
+      const verbanning = loadVerbanning();
+      if (!verbanning[doelwitId] || Date.now() > new Date(verbanning[doelwitId].tot).getTime()) {
+        await respond(`${lid.bijnaam} is niet verbannen. Genade is hier niet van toepassing.`);
+        return;
+      }
+      delete verbanning[doelwitId];
+      saveVerbanning(verbanning);
+      const tekst = await kroketResponse(
+        `De Kroket God verleent onverwachte genade aan ${lid.bijnaam} — de verbanning wordt per direct opgeheven. ` +
+        `Dit is uitzonderlijk en moet niet als vanzelfsprekend worden beschouwd. ` +
+        `Spreek plechtig maar met een ondertoon van waarschuwing. Geen inleidingszin.`,
+        350, false
       );
       await postToChannel(client, command.channel_id, tekst);
       return;
@@ -1450,6 +1581,20 @@ app.event('app_mention', async ({ event, client }) => {
     const bijnaam = members[userId]?.bijnaam || 'Ongepaneerde vreemdeling';
     const input   = vervangNamen(event.text.replace(/<@[^>]+>/g, '').trim());
 
+    // Verbannen gebruiker — bot reageert niet op hen maar spreekt over de afvallige
+    const banStatus = isVerbannen(userId);
+    if (banStatus) {
+      const nogDagen = dagenTotEinde(banStatus.tot);
+      const afvalligeTekst = await kroketResponse(
+        `De afvallige ${bijnaam} probeert de aandacht van de Kroket God te trekken maar is nog ${nogDagen} dag(en) verbannen. ` +
+        `Spreek in de derde persoon over de afvallige — minachtend maar waardig. Geen directe erkenning, geen reactie op hun boodschap. Geen inleidingszin.`,
+        200, false
+      );
+      const thread_ts = event.thread_ts || (event.parent_user_id ? event.ts : undefined);
+      await postToChannel(client, event.channel, afvalligeTekst, { thread_ts });
+      return;
+    }
+
     let prompt;
     if (input) {
       const sentiment = await analyseerEnGenereer(input);
@@ -1545,6 +1690,24 @@ cron.schedule('0 12 * * *', async () => {
 
     if (dag !== 5 && Math.random() > 0.30) return;
 
+    // Verlopen verbanningen opruimen en terugkeer aankondigen
+    const verbanning = loadVerbanning();
+    const allMembersForBan = loadMembers();
+    let verbanningSave = false;
+    for (const [userId, v] of Object.entries(verbanning)) {
+      if (Date.now() > new Date(v.tot).getTime()) {
+        const bijnaam = allMembersForBan[userId]?.bijnaam || 'de afvallige';
+        const terugTekst = await kroketResponse(
+          `De verbanning van ${bijnaam} is verlopen. De Kroket God kondigt plechtig aan dat ${bijnaam} terug is in de gelederen — maar met een ondertoon van waarschuwing: de Hoge Frituurraad vergeet niet. Geen inleidingszin.`,
+          300, false
+        );
+        await postToChannel(app.client, process.env.SLACK_CHANNEL_ID, terugTekst);
+        delete verbanning[userId];
+        verbanningSave = true;
+      }
+    }
+    if (verbanningSave) saveVerbanning(verbanning);
+
     if (dag === 5) {
       const positief = Math.random() < 0.5;
       const uitverkorene = Math.random() < 0.5 ? getUitverkorene(positief) : null;
@@ -1632,6 +1795,20 @@ cron.schedule('0 16 * * 5', async () => {
 async function maybeSpontaan() {
   if (Math.random() > 0.5) return;
   try {
+    // 20% kans: refereer aan een actief verbannen lid als afvallige
+    const actiefVerbannen = Object.entries(loadVerbanning())
+      .filter(([, v]) => Date.now() < new Date(v.tot).getTime());
+    if (actiefVerbannen.length > 0 && Math.random() < 0.20) {
+      const [userId, v] = actiefVerbannen[Math.floor(Math.random() * actiefVerbannen.length)];
+      const bijnaam = loadMembers()[userId]?.bijnaam || 'de afvallige';
+      const nogDagen = dagenTotEinde(v.tot);
+      const thema = `Refereer terloops aan de afvallige ${bijnaam} die momenteel verbannen is (nog ${nogDagen} dag(en)). ` +
+        `Spreek over hen in de derde persoon — minachtend maar waardig, met een vleugje medelijden. ` +
+        `Hint naar mogelijke terugkeer als zij berouw tonen. Geen inleidingszin.`;
+      await postToChannel(app.client, process.env.SLACK_CHANNEL_ID, await kroketResponse(thema, 300, false));
+      return;
+    }
+
     if (Math.random() < 0.65) {
       const positief = Math.random() < 0.5;
       const uitverkorene = getUitverkorene(positief);
