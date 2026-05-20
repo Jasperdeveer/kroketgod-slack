@@ -48,6 +48,7 @@ Regels:
 - Gebruik :lekker_kroketje: als kroket-emoji, nooit 🧆
 - Schrijf in correct Nederlands. Gebruik GEEN verzonnen samenstellingen of niet-bestaande woorden. Als je twijfelt of een woord bestaat — gebruik het niet.
 - Neem NOOIT format-labels op in je output (zoals "--- [decreet]" of "--- [one-liner]"). Die zijn alleen voor intern gebruik.
+- Ken NOOIT zelf kroketpunten toe of af tenzij de prompt dit expliciet meldt. Noem GEEN specifieke puntenaantallen — jij weet de actuele stand niet. Als het systeem een punt heeft toegekend of afgenomen staat dit in de prompt vermeld.
 - Als je reageert op iets wat een volgeling heeft gezegd of gevraagd, begin dan ALTIJD met één cursieve inleidingsregel in Slack-opmaak (_zoals dit_) die in maximaal één zin parafraseert wat er gezegd of gevraagd werd — in de stijl van de Kroket God, niet letterlijk. Dan een lege regel, dan pas de hoofdreactie. Doe dit NIET bij algemene aankondigingen zonder aanleiding.
 - Houd berichten kort: max 4-5 regels hoofdtekst. Elke zin telt.
 - Gebruik Slack blockquote opmaak: zet de hoofdtekst als blockquote met "> ". Header en ondertekening staan buiten de blockquote.
@@ -463,14 +464,29 @@ async function kroketResponse(prompt, maxTokens = 400, metContext = true) {
       provider: 'groq',
       naam: 'llama-3.1-8b-instant',
       temp: 0.8,
-      tokens: Math.min(maxTokens, 250),
-      msgs: () => [
-        {
-          role: 'system',
-          content: `Jij bent de Kroket God. Reageer in correct Nederlands in 2 tot 4 zinnen. Gebruik alleen bestaande Nederlandse woorden — verzin geen samenstellingen. Wees kort, droog en grappig. Onderteken altijd met "— De Almachtige Kroket God". Bekende leden: Mr. KroketPet, Mr. Kroketinho, Mr. Te Lang Gefrituurde Kroket.`,
-        },
-        berichten[berichten.length - 1],
-      ],
+      tokens: Math.min(maxTokens, 300),
+      msgs: () => {
+        const alleleden = loadMembers();
+        const ledenLijst = Object.values(alleleden).map(m => m.bijnaam).join(', ');
+        return [
+          {
+            role: 'system',
+            content: `Jij bent de Kroket God — gezaghebbend, formeel, droog grappig. Reageer in correct Nederlands, maximaal 4 zinnen. Gebruik alleen bestaande Nederlandse woorden.
+
+REGELS:
+- Spreek mensen aan met "u/uw" (nooit "je/jij")
+- Onderteken ALTIJD met "— De Almachtige Kroket God"
+- Gebruik :lekker_kroketje: als kroket-emoji
+- Begin met een cursieve inleidingszin: _[naam] [parafrase]._ — gebruik daarin EXACT de naam uit het verzoek
+- Wees concreet. Geen vage zinnen.
+- Vermeld NOOIT zelf kroketpunten toe te hebben gekend of afgenomen tenzij het verzoek dit expliciet vraagt.
+
+BEKENDE LEDEN — gebruik UITSLUITEND deze exacte namen, nooit voornamen, nooit variaties:
+${ledenLijst}`,
+          },
+          berichten[berichten.length - 1],
+        ];
+      },
     },
   ];
 
@@ -1423,18 +1439,22 @@ app.event('app_mention', async ({ event, client }) => {
       const sentiment = await analyseerEnGenereer(input);
       const scoreKans = Math.random() < 0.30;
 
+      // Forceer de intro-zin door de letterlijke start mee te geven — AI mag hem afmaken maar
+      // mag de naam NIET veranderen. Dit voorkomt dat het model een andere bijnaam invult.
+      const introStart = `_${bijnaam} `;
+
       if (sentiment === 'BELEDIGING' && members[userId] && scoreKans) {
         pasScoreAan(userId, -1);
-        prompt = `${bijnaam} heeft zich beledigend uitgelaten tegen de Kroket God: "${input}". Straf hen met goddelijk gezag. Laat weten dat een kroketpunt is afgenomen als boetedoening. Gebruik EXACT de naam "${bijnaam}" in de inleidingszin — geen andere naam.`;
+        prompt = `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} heeft zich beledigend uitgelaten tegen de Kroket God: "${input}". Straf hen met goddelijk gezag. Het systeem heeft al 1 kroketpunt afgenomen — bevestig dit. Begin de inleidingszin letterlijk met: ${introStart}`;
       } else if (sentiment === 'LOFZANG' && members[userId] && scoreKans) {
         await pasScoreAanMetCheck(client, userId, 1);
-        prompt = `${bijnaam} heeft zich respectvol uitgelaten: "${input}". Zegen hen plechtig en laat weten dat de Kroket God dit beloont met een kroketpunt. Gebruik EXACT de naam "${bijnaam}" in de inleidingszin — geen andere naam.`;
+        prompt = `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} heeft zich respectvol uitgelaten: "${input}". Zegen hen plechtig. Het systeem heeft al 1 kroketpunt toegekend — bevestig dit. Begin de inleidingszin letterlijk met: ${introStart}`;
       } else if (sentiment === 'BELEDIGING') {
-        prompt = `${bijnaam} heeft zich beledigend uitgelaten tegen de Kroket God: "${input}". Reageer bestraffend maar zonder puntenaftrek. Gebruik EXACT de naam "${bijnaam}" in de inleidingszin — geen andere naam.`;
+        prompt = `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} heeft zich beledigend uitgelaten: "${input}". Reageer bestraffend. Vermeld GEEN puntenaantal — het systeem heeft niets gewijzigd. Begin de inleidingszin letterlijk met: ${introStart}`;
       } else if (sentiment === 'LOFZANG') {
-        prompt = `${bijnaam} heeft zich respectvol uitgelaten: "${input}". Reageer met een warme zegen, maar zonder punten toe te kennen. Gebruik EXACT de naam "${bijnaam}" in de inleidingszin — geen andere naam.`;
+        prompt = `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} heeft zich respectvol uitgelaten: "${input}". Reageer met een warme zegen. Vermeld GEEN puntenaantal — het systeem heeft niets gewijzigd. Begin de inleidingszin letterlijk met: ${introStart}`;
       } else {
-        prompt = `${bijnaam} zegt: "${input}". Reageer op ${bijnaam}. Gebruik EXACT de naam "${bijnaam}" in de inleidingszin — geen andere naam.`;
+        prompt = `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} zegt: "${input}". Begin de inleidingszin letterlijk met: ${introStart}`;
       }
     } else {
       prompt = `${bijnaam} heeft je gementioned zonder verdere boodschap. Reageer passend.`;
