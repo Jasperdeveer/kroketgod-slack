@@ -223,11 +223,17 @@ const loadStemmen = () => readJSON('stemmen.json', { weekStart: null, stemmen: {
 const saveStemmen = (data) => writeJSON('stemmen.json', data);
 
 function getMondayOfWeek(date = new Date()) {
-  const d = new Date(date);
-  const day = d.getDay();
-  const diff = d.getDate() - day + (day === 0 ? -6 : 1);
-  d.setDate(diff);
-  return d.toISOString().split('T')[0];
+  // Gebruik Amsterdam-tijd voor dag-bepaling zodat dit rond middernacht correct blijft.
+  // toLocaleString met timeZone geeft een string die we als lokale tijd parsen —
+  // zo krijgen we de juiste weekdag voor Amsterdam zonder timezone-drift.
+  const amsDate = new Date(date.toLocaleString('en-US', { timeZone: 'Europe/Amsterdam' }));
+  const day = amsDate.getDay(); // 0=zondag, 1=maandag, ...
+  const diff = amsDate.getDate() - day + (day === 0 ? -6 : 1);
+  amsDate.setDate(diff);
+  const y = amsDate.getFullYear();
+  const m = String(amsDate.getMonth() + 1).padStart(2, '0');
+  const d = String(amsDate.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
 }
 
 // ── Streaks (vrijdagdeelname) ─────────────────────────────────────────────────
@@ -853,7 +859,7 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
 
     // ── Quote
     if (input === 'quote') {
-      const tekst = await kroketResponse('Geef één korte kroket-wijsheid of quote. Maximaal twee zinnen. Geen header, gewoon de quote in stijl.');
+      const tekst = await kroketResponse('Geef één korte kroket-wijsheid of quote. Maximaal twee zinnen. Geen header, gewoon de quote in stijl. Geen inleidingszin.', 250, false);
       await postToChannel(client, command.channel_id, tekst);
       return;
     }
@@ -876,7 +882,7 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
       } else {
         prompt = `Er zijn nog ${dagenTot} dag(en) tot het heilige vrijdagmoment van 12:00. Maak er een dramatische aftelling van.`;
       }
-      const tekst = await kroketResponse(prompt);
+      const tekst = await kroketResponse(prompt, 400, false);
       await postToChannel(client, command.channel_id, tekst);
       return;
     }
@@ -885,9 +891,9 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
     if (input.startsWith('biecht')) {
       const zonde = input.replace(/^biecht\s*/, '').trim();
       const prompt = zonde
-        ? `${aanvrager} biecht de volgende zonde op: "${zonde}". ${isDM ? 'Dit is een privé-biecht — reageer warm, met absolute geheimhouding en kans op verlossing.' : 'Reageer als de Kroket God — oordeel, maar geef kans op verlossing.'}`
-        : `${aanvrager} biedt een lege biecht aan. Reageer verontwaardigd.`;
-      const tekst = await kroketResponse(prompt);
+        ? `${aanvrager} biecht de volgende zonde op: "${zonde}". ${isDM ? 'Dit is een privé-biecht — reageer warm, met absolute geheimhouding en kans op verlossing.' : 'Reageer als de Kroket God — oordeel, maar geef kans op verlossing.'} Geen inleidingszin.`
+        : `${aanvrager} biedt een lege biecht aan. Reageer verontwaardigd. Geen inleidingszin.`;
+      const tekst = await kroketResponse(prompt, 400, false);
       if (isDM) {
         await client.chat.postMessage({ channel: command.channel_id, text: schoonOutput(tekst) });
       } else {
@@ -901,7 +907,7 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
       const invoer = input.replace('straf ', '').trim();
       const gevonden = getMemberByNaam(invoer);
       const doelwit = gevonden ? gevonden[1].bijnaam : `Ongepaneerde vreemdeling genaamd "${invoer}"`;
-      const tekst = await kroketResponse(`Leg een creatieve en passende straf op aan ${doelwit}. Spreek hen uitsluitend aan als "${doelwit}". Dramatisch en specifiek.`);
+      const tekst = await kroketResponse(`Leg een creatieve en passende straf op aan ${doelwit}. Spreek hen uitsluitend aan als "${doelwit}". Dramatisch en specifiek. Geen inleidingszin.`, 400, false);
       await postToChannel(client, command.channel_id, tekst);
       return;
     }
@@ -911,7 +917,7 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
       const nummer = parseInt(input.replace(/^gebod\s*/, '').trim());
       if (nummer >= 1 && nummer <= 10) {
         const gebod = GEBODEN_LIJST[nummer - 1];
-        const tekst = await kroketResponse(`Leg Gebod ${nummer} uit: "${gebod}". Geef een korte, dramatische toelichting met een concrete toepassing.`);
+        const tekst = await kroketResponse(`Leg Gebod ${nummer} uit: "${gebod}". Geef een korte, dramatische toelichting met een concrete toepassing. Geen inleidingszin.`, 400, false);
         await postToChannel(client, command.channel_id, tekst);
       } else {
         await respond('Er zijn slechts Tien Geboden. Kies een getal tussen 1 en 10.');
@@ -926,7 +932,7 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
       if (gevonden) {
         await respond(`${gevonden[1].bijnaam} behoort reeds tot de Geordende Kring. Bekering is niet nodig.`);
       } else {
-        const tekst = await kroketResponse(`Er wordt gevraagd om "${naam}" toe te laten tot de Kroket Illuminati. Oordeel dramatisch of deze buitenstaander waardig is. De uitkomst mag twijfelachtig zijn.`);
+        const tekst = await kroketResponse(`Er wordt gevraagd om "${naam}" toe te laten tot de Kroket Illuminati. Oordeel dramatisch of deze buitenstaander waardig is. De uitkomst mag twijfelachtig zijn. Geen inleidingszin.`, 400, false);
         await postToChannel(client, command.channel_id, tekst);
       }
       return;
@@ -1039,7 +1045,8 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
     // ── Nieuws
     if (input === 'nieuws') {
       const tekst = await kroketResponse(
-        'Genereer een dramatisch breaking news bericht vanuit het Grote Vetbad. Gebruik een ⚜️ SPOEDMELDING header. Verzin een absurd maar geloofwaardig kroket-gerelateerd nieuwtje als officieel persbericht.'
+        'Genereer een dramatisch breaking news bericht vanuit het Grote Vetbad. Gebruik een ⚜️ SPOEDMELDING header. Verzin een absurd maar geloofwaardig kroket-gerelateerd nieuwtje als officieel persbericht. Geen inleidingszin.',
+        400, false
       );
       await postToChannel(client, command.channel_id, tekst);
       return;
@@ -1053,7 +1060,8 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
         return;
       }
       const tekst = await kroketResponse(
-        `Het Kroket-Orakel beantwoordt de vraag: "${vraag}". Geef een cryptisch maar definitief antwoord in 2-3 zinnen. Het antwoord moet dubbelzinnig maar overtuigend zijn — alsof er een verborgen waarheid in zit. Eindig met een orakelachtige nazin.`
+        `Het Kroket-Orakel beantwoordt de vraag: "${vraag}". Geef een cryptisch maar definitief antwoord in 2-3 zinnen. Het antwoord moet dubbelzinnig maar overtuigend zijn — alsof er een verborgen waarheid in zit. Eindig met een orakelachtige nazin. Geen inleidingszin.`,
+        350, false
       );
       if (isDM) {
         await client.chat.postMessage({ channel: command.channel_id, text: schoonOutput(tekst) });
@@ -1074,7 +1082,8 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
         doelwit = aanvrager;
       }
       const tekst = await kroketResponse(
-        `Geef een kroket-horoscoop voor ${doelwit}. Spreek hen uitsluitend aan als "${doelwit}". Wat staat de sterren (en de frituurmand) hen te wachten deze week? Concreet, met kroket-symboliek, met één voorspelling die specifiek genoeg is om te kunnen kloppen.`
+        `Geef een kroket-horoscoop voor ${doelwit}. Spreek hen uitsluitend aan als "${doelwit}". Wat staat de sterren (en de frituurmand) hen te wachten deze week? Concreet, met kroket-symboliek, met één voorspelling die specifiek genoeg is om te kunnen kloppen. Geen inleidingszin.`,
+        400, false
       );
       await postToChannel(client, command.channel_id, tekst);
       return;
@@ -1084,8 +1093,8 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
     if (input.startsWith('rap ')) {
       const onderwerp = input.replace('rap ', '').trim();
       const tekst = await kroketResponse(
-        `Schrijf een korte rap (4-8 regels) in de stijl van de Kroket God over: "${onderwerp}". De rap heeft rijm, ritme en kroket-metaforen. Eindig met een drooppin'-lijn over de snackleer.`,
-        500
+        `Schrijf een korte rap (4-8 regels) in de stijl van de Kroket God over: "${onderwerp}". De rap heeft rijm, ritme en kroket-metaforen. Eindig met een drooppin'-lijn over de snackleer. Geen inleidingszin.`,
+        500, false
       );
       await postToChannel(client, command.channel_id, tekst);
       return;
@@ -1095,8 +1104,8 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
     if (input.startsWith('debat ')) {
       const stelling = input.replace('debat ', '').trim();
       const tekst = await kroketResponse(
-        `De Kroket God debatteert de stelling: "${stelling}". Geef kort een VOOR-argument en een TEGEN-argument, beide in Kroket God stijl. Sluit af met een definitief oordeel.`,
-        500
+        `De Kroket God debatteert de stelling: "${stelling}". Geef kort een VOOR-argument en een TEGEN-argument, beide in Kroket God stijl. Sluit af met een definitief oordeel. Geen inleidingszin.`,
+        500, false
       );
       await postToChannel(client, command.channel_id, tekst);
       return;
@@ -1116,8 +1125,8 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
       const partij1 = g1 ? g1[1].bijnaam : `Buitenstaander "${naam1.trim()}"`;
       const partij2 = g2 ? g2[1].bijnaam : `Buitenstaander "${naam2.trim()}"`;
       const tekst = await kroketResponse(
-        `Leid een rechtbankzaak tussen ${partij1} en ${partij2}. Spreek hen uitsluitend aan als respectievelijk "${partij1}" en "${partij2}". De Kroket God is rechter én aanklager. Presenteer de aanklacht, hoor beide partijen kort en spreek een dramatisch vonnis uit. Verwijs naar de Geboden.`,
-        600
+        `Leid een rechtbankzaak tussen ${partij1} en ${partij2}. Spreek hen uitsluitend aan als respectievelijk "${partij1}" en "${partij2}". De Kroket God is rechter én aanklager. Presenteer de aanklacht, hoor beide partijen kort en spreek een dramatisch vonnis uit. Verwijs naar de Geboden. Geen inleidingszin.`,
+        600, false
       );
       await postToChannel(client, command.channel_id, tekst);
       return;
@@ -1152,7 +1161,8 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
 
       const aantalStemmen = Object.values(stemData.stemmen).filter(id => id === voteeId).length;
       const tekst = await kroketResponse(
-        `${aanvrager} heeft gestemd op ${voteeLid.bijnaam} als kroket-held van de week. ${voteeLid.bijnaam} heeft nu ${aantalStemmen} stem(men). Reageer plechtig op deze democratische daad.`
+        `${aanvrager} heeft gestemd op ${voteeLid.bijnaam} als kroket-held van de week. ${voteeLid.bijnaam} heeft nu ${aantalStemmen} stem(men). Reageer plechtig op deze democratische daad. Geen inleidingszin.`,
+        350, false
       );
       await postToChannel(client, command.channel_id, tekst);
       return;
@@ -1405,22 +1415,27 @@ app.view('intake_modal', async ({ ack, view, body, client }) => {
 // ── Sentiment + reactie in één AI call ─────────────────────────────────────────
 
 async function analyseerEnGenereer(prompt) {
-  const result = await groq.chat.completions.create({
-    model: 'llama-3.1-8b-instant',
-    max_tokens: 10,
-    temperature: 0.2,
-    messages: [
-      {
-        role: 'system',
-        content: 'Classify the sentiment of this Dutch message toward a godly authority figure. Reply with EXACTLY one word: BELEDIGING, LOFZANG, or NEUTRAAL.',
-      },
-      { role: 'user', content: prompt },
-    ],
-  });
-  const uitkomst = result.choices[0].message.content.trim().toUpperCase();
-  if (uitkomst.includes('BELEDIGING')) return 'BELEDIGING';
-  if (uitkomst.includes('LOFZANG')) return 'LOFZANG';
-  return 'NEUTRAAL';
+  try {
+    const result = await groq.chat.completions.create({
+      model: 'llama-3.1-8b-instant',
+      max_tokens: 10,
+      temperature: 0.2,
+      messages: [
+        {
+          role: 'system',
+          content: 'Classify the sentiment of this Dutch message toward a godly authority figure. Reply with EXACTLY one word: BELEDIGING, LOFZANG, or NEUTRAAL.',
+        },
+        { role: 'user', content: prompt },
+      ],
+    });
+    const uitkomst = result.choices[0].message.content.trim().toUpperCase();
+    if (uitkomst.includes('BELEDIGING')) return 'BELEDIGING';
+    if (uitkomst.includes('LOFZANG')) return 'LOFZANG';
+    return 'NEUTRAAL';
+  } catch {
+    // Groq rate-limit of netwerkfout — behandel als neutraal zodat de mention niet stilvalt
+    return 'NEUTRAAL';
+  }
 }
 
 // ── @-mention ──────────────────────────────────────────────────────────────────
@@ -1495,8 +1510,10 @@ app.event('reaction_added', async ({ event, client }) => {
     if (event.reaction !== 'lekker_kroketje') return;
     if (event.item.channel !== process.env.SLACK_CHANNEL_ID) return;
     if (event.user === event.item_user) return;
-
+    // Skip als de ontvanger niet in members staat (bijv. reactie op een bot-bericht)
     const members = loadMembers();
+    if (!members[event.item_user]) return;
+
     const gever     = members[event.user]?.bijnaam      || 'Ongepaneerde vreemdeling';
     const ontvanger = members[event.item_user]?.bijnaam || 'Ongepaneerde vreemdeling';
 
