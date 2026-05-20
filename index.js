@@ -338,32 +338,18 @@ function getTijdContext() {
 // ── Help & Commando's ──────────────────────────────────────────────────────────
 
 const COMMANDO_LIJST = [
-  { gebruik: '/kroketgod',                 voorbeeld: '',                                            verwacht: 'een willekeurige uitspraak, zegen of waarschuwing aan een lid' },
-  { gebruik: '/kroketgod [tekst]',         voorbeeld: '/kroketgod Jorg heeft de geboden verbroken',  verwacht: 'een decreet, oordeel of reactie op wat je typt — werkt ook voor rap, biecht, horoscoop, debat, rechtbank…' },
-  { gebruik: '/kroketgod aanmelden',       voorbeeld: '',                                            verwacht: 'een intake-formulier om lid te worden van de Kroket Illuminati' },
-  { gebruik: '/kroketgod eer [naam]',      voorbeeld: '/kroketgod eer Jasper',                       verwacht: '+1 kroketpunt en een plechtige zegen in het kanaal' },
-  { gebruik: '/kroketgod zondebok',        voorbeeld: '',                                            verwacht: '−1 kroketpunt voor een willekeurig lid, met bijbehorend vonnis' },
-  { gebruik: '/kroketgod ranglijst',       voorbeeld: '',                                            verwacht: 'de heilige ranglijst met kroketpunten per lid' },
-  { gebruik: '/kroketgod dossier [naam]',  voorbeeld: '/kroketgod dossier Sander',                   verwacht: 'het officiële kroket-CV van een lid: stats, eer, zonden, motto' },
-  { gebruik: '/kroketgod stem [naam]',     voorbeeld: '/kroketgod stem Jasper',                      verwacht: 'jouw stem op de held van de week (1× per week)' },
-  { gebruik: '/kroketgod orakel [vraag]',  voorbeeld: '/kroketgod orakel moet ik salade lunchen?',   verwacht: 'een cryptisch maar definitief antwoord uit het Grote Vetbad' },
-  { gebruik: '/kroketgod frituur [tekst]', voorbeeld: '/kroketgod frituur Sander is jarig',          verwacht: 'een AI-gegenereerde kroket-afbeelding (duurt even)' },
-  { gebruik: '/kroketgod verhaal [thema]', voorbeeld: '/kroketgod verhaal val van het Koud-Beleg Front', verwacht: 'een visioen in 4 scenes — beeldverhaal in 4 plaatjes' },
-  { gebruik: '/kroketgod meld [naam]',     voorbeeld: '/kroketgod meld Kevin van Sales',             verwacht: 'rapporteer een tegenstander van de snackleer — de Kroket God reageert' },
-  { gebruik: '/kroketgod help',            voorbeeld: '',                                            verwacht: 'dit overzicht, alleen zichtbaar voor jou' },
+  { gebruik: '/kroketgod [tekst]',    verwacht: 'vrije vraag, oordeel of opdracht' },
+  { gebruik: '/kroketgod aanmelden',  verwacht: 'word lid van de Illuminati' },
+  { gebruik: '/kroketgod eer [naam]', verwacht: '+1 kroketpunt voor een lid' },
+  { gebruik: '/kroketgod ranglijst',  verwacht: 'wie staat waar in de hiërarchie' },
+  { gebruik: '/kroketgod prompts',    verwacht: 'alle andere mogelijkheden' },
 ];
 
 function buildHelpText() {
   const regels = COMMANDO_LIJST
-    .filter(c => c.gebruik !== '/kroketgod help')
-    .map(c => {
-      const commando = c.gebruik.padEnd(32);
-      const voorbeeld = c.voorbeeld ? `  _bijv. ${c.voorbeeld}_` : '';
-      const verwacht = c.verwacht ? `\n          _→ ${c.verwacht}_` : '';
-      return `*${commando}*${voorbeeld}${verwacht}`;
-    })
-    .join('\n\n');
-  return `⚜️ *DE GEBODEN DER COMMANDO'S* ⚜️\n\n${regels}\n\n_Alles wat niet in de lijst staat werkt ook — typ gewoon wat je wil._`;
+    .map(c => `\`${c.gebruik}\` — _${c.verwacht}_`)
+    .join('\n');
+  return `⚜️ *KROKET GOD* ⚜️\n\n${regels}`;
 }
 
 // ── System prompt ──────────────────────────────────────────────────────────────
@@ -687,96 +673,6 @@ OUTPUT: Return ONLY the image prompt as plain text. No quotes, no explanation. 2
   });
 }
 
-// ── Multi-image storyboard (verhaal in 4 scenes) ──────────────────────────────
-
-async function genereerStoryboard(client, channelId, userId, thema) {
-  // Vraag het grote model om 4 sceneschetsen
-  const scenesResponse = await groq.chat.completions.create({
-    model: 'llama-3.3-70b-versatile',
-    max_tokens: 600,
-    temperature: 1.0,
-    messages: [
-      {
-        role: 'system',
-        content: `Je bent een verhalenverteller voor de Kroket God. Een gebruiker geeft een thema. Beschrijf het verhaal in exact 4 visuele scenes — begin, opbouw, climax, ontknoping. Iedere scene als één korte zin in het Nederlands die een concreet, filmisch beeld oproept met de kroket als hoofdrol. Geef in dit exacte formaat (geen extra tekst):
-
-SCENE1: [beschrijving]
-SCENE2: [beschrijving]
-SCENE3: [beschrijving]
-SCENE4: [beschrijving]
-ONDERSCHRIFT: [één dramatische zin als slot]`,
-      },
-      { role: 'user', content: `Thema: ${thema}` },
-    ],
-  });
-
-  const tekst = scenesResponse.choices[0].message.content;
-  const scenes = [];
-  let onderschrift = '';
-  for (const lijn of tekst.split('\n')) {
-    const sceneMatch = lijn.match(/^SCENE\d:\s*(.+)/i);
-    const onderMatch = lijn.match(/^ONDERSCHRIFT:\s*(.+)/i);
-    if (sceneMatch) scenes.push(sceneMatch[1].trim());
-    else if (onderMatch) onderschrift = onderMatch[1].trim();
-  }
-
-  if (scenes.length < 4) {
-    await client.chat.postEphemeral({ channel: channelId, user: userId, text: '⚜️ _Het verhaal kon niet uit het Vetbad worden opgehaald. Probeer opnieuw._' });
-    return;
-  }
-
-  const stijl = kiesBeeldStijl(); // alle scenes dezelfde stijl voor consistentie
-  const buffers = [];
-
-  for (let i = 0; i < 4; i++) {
-    const sceneEN = await groq.chat.completions.create({
-      model: 'llama-3.3-70b-versatile',
-      max_tokens: 200,
-      temperature: 0.7,
-      messages: [
-        {
-          role: 'system',
-          content: `Convert this Dutch scene description into a vivid English image prompt. Start with "${stijl.intro}". End with "${stijl.suffix}". Keep a real golden-brown Dutch croquette as the hero. 2 sentences max. No quotes.`,
-        },
-        { role: 'user', content: scenes[i] },
-      ],
-    });
-    const beeldPrompt = sceneEN.choices[0].message.content.trim().replace(/^["']|["']$/g, '');
-    const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(beeldPrompt)}?width=1024&height=1024&model=flux&enhance=true&nologo=true&seed=${Math.floor(Math.random() * 99999)}`;
-    try {
-      const response = await fetch(url, { timeout: 90000 });
-      if ((response.headers.get('content-type') || '').includes('image')) {
-        buffers.push({ buffer: await response.buffer(), beschrijving: scenes[i] });
-      }
-    } catch (err) {
-      console.warn(`Storyboard scene ${i+1} faalde:`, err.message);
-    }
-  }
-
-  if (buffers.length === 0) {
-    await client.chat.postEphemeral({ channel: channelId, user: userId, text: '⚜️ _Het Grote Vetbad weigerde te leveren._' });
-    return;
-  }
-
-  // Eerst de header sturen, dan elke scene afzonderlijk uploaden
-  await postToChannel(client, channelId,
-    `⚜️ *EEN VISIOEN IN VIER DELEN* ⚜️\n_Thema: "${thema}"_`
-  );
-
-  for (let i = 0; i < buffers.length; i++) {
-    await client.files.uploadV2({
-      channel_id: channelId,
-      file: buffers[i].buffer,
-      filename: `verhaal-${i+1}.png`,
-      initial_comment: `*Scene ${i+1}:* ${buffers[i].beschrijving}`,
-    });
-  }
-
-  if (onderschrift) {
-    await postToChannel(client, channelId, `_${onderschrift}_\n\n— De Almachtige Kroket God`);
-  }
-}
-
 // ── Voice / TTS via Pollinations ──────────────────────────────────────────────
 
 async function genereerStem(tekst) {
@@ -856,27 +752,57 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
 
     // Geheime prompts — niet in de help
     if (input === 'prompts') {
-      const prompts = [
-        '🕵️ *Geheime Kroket Prompts* — alleen voor de ingewijden\n',
-        '`/kroketgod schrijf een kroket-testament voor [naam]`\n_→ laatste wil en kroket-erfenis, plechtig opgesteld door de Hoge Frituurraad_\n',
-        '`/kroketgod geef [naam] een kroket-therapiesessie`\n_→ de Kroket God als therapeut — confronterend, warm, met mosterd_\n',
-        '`/kroketgod rechtbank kroket vs frikandel`\n_→ rechtbankdrama tussen twee snacks, met vonnis_\n',
-        '`/kroketgod schrijf een necrologie voor een mislukte kroket`\n_→ rouwbrief voor een kroket die het niet heeft gehaald_\n',
-        '`/kroketgod geef een kroket-weersverwachting voor deze week`\n_→ weerbericht maar volledig in frituur-metaforen_\n',
-        '`/kroketgod schrijf een kroket-sollicitatiebrief voor [naam]`\n_→ formele brief met kroket-kwalificaties_\n',
-        '`/kroketgod houd een TED talk over [onderwerp] maar dan in kroket`\n_→ inspirerende lezing door de lens van de snackleer_\n',
-        '`/kroketgod schrijf een kroket-huwelijksaanzoek`\n_→ romantisch maar plechtig, mosterd speelt een rol_\n',
-        '`/kroketgod wat zou Aristoteles zeggen over de kroket`\n_→ filosofisch debat tussen klassieke wijsheid en frituurcultuur_\n',
-        '`/kroketgod stel een kroket-grondwet op`\n_→ officieel wetsdocument met artikelen en frituurrecht_\n',
-        '`/kroketgod schrijf een kroket-horrorscenario`\n_→ spannend verhaal waarin de kroket centraal staat_\n',
-        '`/kroketgod schrijf een kroket-lied op de melodie van [liedje]`\n_→ volledige songtekst met alle coupletten_\n',
-        '`/kroketgod oordeel over mijn leven: [beschrijving]`\n_→ goddelijk vonnis over jouw levensstijl en kroket-toekomst_\n',
-        '`/kroketgod kroket vs bitterbal — finaal debat`\n_→ beide kanten verdedigd, dramatisch slotakkoord_\n',
-        '`/kroketgod schrijf een encycliek over [thema]`\n_→ pauselijke brief van de Kroket God, in hoofdstukken_\n',
-        '`/kroketgod canoniseer [naam] als heilige van de snackleer`\n_→ officiële heiligverklaring met deugden en wonderen_\n',
-        '`/kroketgod onthul de naam van mijn spirit-kroket`\n_→ welke kroket past het beste bij jouw ziel_',
-      ];
-      await respond({ text: prompts.join('\n'), response_type: 'ephemeral' });
+      const tekst = [
+        `🕵️ *GEHEIME KROKET PROMPTS*`,
+        `_Typ achter \`/kroketgod\`_`,
+        ``,
+        `*⚙️ Extra commando's*`,
+        `\`zondebok\` — −1 punt willekeurig lid`,
+        `\`dossier [naam]\` — kroket-CV van een lid`,
+        `\`stem [naam]\` — stem op Held van de Week`,
+        `\`frituur [tekst]\` — AI-afbeelding`,
+        `\`orakel [vraag]\` — cryptisch antwoord uit het Vetbad`,
+        `\`meld [naam]\` — rapporteer een vermoedelijke tegenstander`,
+        ``,
+        `*🎭 Klassiek*`,
+        `\`biecht [zonde]\` — bv. _biecht ik heb ketchup gebruikt_`,
+        `\`straf [naam]\` — leg een creatieve straf op`,
+        `\`gebod [1-10]\` — toelichting op een Gebod`,
+        `\`horoscoop [naam]\` — kroket-horoscoop voor de week`,
+        `\`quote\` — willekeurige kroket-wijsheid`,
+        `\`nieuws\` — breaking news uit het Vetbad`,
+        `\`vrijdag\` — countdown of viering`,
+        `\`bekeer [naam]\` — buitenstaander toelaten of weigeren`,
+        `\`slachtoffer\` — onthul de uitverkorene van dit moment`,
+        ``,
+        `*⚖️ Rechtbank & debat*`,
+        `\`rechtbank [naam] vs [naam]\` — bv. _rechtbank Jorg vs Sander_`,
+        `\`debat [stelling]\` — bv. _debat ketchup bij kroket_`,
+        `\`kroket vs bitterbal — finaal debat\``,
+        `\`oordeel over mijn leven: [beschrijving]\``,
+        ``,
+        `*🎵 Creatief*`,
+        `\`rap [onderwerp]\` — rap met rijm en kroket-metaforen`,
+        `\`schrijf een kroket-lied op de melodie van [liedje]\``,
+        `\`schrijf een kroket-testament voor [naam]\``,
+        `\`schrijf een necrologie voor een mislukte kroket\``,
+        `\`schrijf een kroket-sollicitatiebrief voor [naam]\``,
+        `\`schrijf een kroket-huwelijksaanzoek\``,
+        `\`schrijf een kroket-horrorscenario\``,
+        `\`schrijf een encycliek over [thema]\``,
+        ``,
+        `*🧠 Filosofisch*`,
+        `\`wat zou Aristoteles zeggen over de kroket\``,
+        `\`houd een TED talk over [onderwerp] in kroket\``,
+        `\`geef een kroket-weersverwachting\``,
+        `\`stel een kroket-grondwet op\``,
+        `\`canoniseer [naam] als heilige van de snackleer\``,
+        ``,
+        `*🔮 Persoonlijk*`,
+        `\`geef [naam] een kroket-therapiesessie\``,
+        `\`onthul de naam van mijn spirit-kroket\``,
+      ].join('\n');
+      await respond({ text: tekst, response_type: 'ephemeral' });
       return;
     }
 
@@ -1246,14 +1172,6 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
         500
       );
       await postToChannel(client, command.channel_id, tekst);
-      return;
-    }
-
-    // ── Verhaal: 4-scene storyboard
-    if (input.startsWith('verhaal ') || input === 'verhaal') {
-      const thema = input.replace(/^verhaal\s*/, '').trim() || 'de strijd tussen de Kroket en het Koud-Beleg Front';
-      await respond({ text: '⚜️ _Het Vetbad ontvouwt een visioen in vier delen — dit kan even duren..._', response_type: 'ephemeral' });
-      await genereerStoryboard(client, command.channel_id, command.user_id, thema);
       return;
     }
 
