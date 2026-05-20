@@ -1175,6 +1175,147 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
       return;
     }
 
+    // ── Oordeel over leven
+    if (input.startsWith('oordeel')) {
+      const beschrijving = input.replace(/^oordeel\s*(over\s*(mijn\s*leven\s*[:\-]?\s*)?)?/i, '').trim();
+      const tekst = await kroketResponse(
+        `${aanvrager} legt zijn leven ter beoordeling voor aan de Kroket God${beschrijving ? ': "' + beschrijving + '"' : ' — zonder nadere toelichting'}. Spreek het oordeel uit: één concreet punt van lof, één punt van zorg, en een definitief eindvonnis. Verwijs naar het kroket-pad. Max 5 zinnen. Geen inleidingszin.`,
+        450
+      );
+      await postToChannel(client, command.channel_id, tekst);
+      return;
+    }
+
+    // ── Kroket vs bitterbal
+    if (input.startsWith('kroket vs bitterbal')) {
+      const tekst = await kroketResponse(
+        `Spreek het definitieve goddelijke oordeel uit in de eeuwenoude strijd: kroket versus bitterbal. Structuur: 1 argument PRO kroket, 1 argument PRO bitterbal, dan het finale vonnis. De uitkomst is NIET neutraal — er is een winnaar. Verwijs naar de snackleer. Max 5 zinnen. Geen inleidingszin.`,
+        400
+      );
+      await postToChannel(client, command.channel_id, tekst);
+      return;
+    }
+
+    // ── Spirit-kroket
+    if (input.includes('spirit-kroket') || input.startsWith('onthul')) {
+      const kroketVarianten = [
+        'Goulashkroket', 'Satékroket', 'Chorizo kroket', 'Boeuf Bourgignonkroket',
+        'Kaaskroket', 'Groentekroket', 'Carpaccio kroket', 'Truffelkroket',
+        'Mosterdkroket', 'Mexicaanse kroket',
+      ];
+      const kroket = kroketVarianten[Math.floor(Math.random() * kroketVarianten.length)];
+      const tekst = await kroketResponse(
+        `De Kroket God onthult aan ${aanvrager} dat hun spirit-kroket de ${kroket} is. Leg in twee zinnen uit waarom dit kroket hun karakter weerspiegelt. Voeg één profetische implicatie toe. Plechtig en definitief. Geen inleidingszin.`,
+        350
+      );
+      await postToChannel(client, command.channel_id, tekst);
+      return;
+    }
+
+    // ── Weersverwachting
+    if (input.includes('weersverwachting')) {
+      const { dagNaam, dagdeel, seizoen } = getTijdContext();
+      const tekst = await kroketResponse(
+        `Geef een officiële kroket-weersverwachting voor vandaag (${dagNaam}, ${dagdeel}, ${seizoen}). Het weer is een metafoor voor de staat van de snackleer: gebruik begrippen als "frituurtemperatuur", "paneerdruk" en "mosterdneerslag". Geef drie vooruitzichten (ochtend/middag/avond). Formeel weersbericht-format. Max 5 zinnen. Geen inleidingszin.`,
+        400
+      );
+      await postToChannel(client, command.channel_id, tekst);
+      return;
+    }
+
+    // ── Kroket-grondwet
+    if (input.includes('kroket-grondwet') || input === 'grondwet') {
+      const tekst = await kroketResponse(
+        `Stel een kroket-grondwet op voor de Kroket Illuminati. Format: preambule (1 zin), dan vijf Artikelen genummerd I t/m V. Elk artikel is één concrete rechtsregel van de snackleer. Juridische taal. Geen inleidingszin.`,
+        500
+      );
+      await postToChannel(client, command.channel_id, tekst);
+      return;
+    }
+
+    // ── Canoniseer
+    if (input.startsWith('canoniseer')) {
+      const naamRaw = input.replace(/^canoniseer\s+/i, '').replace(/\s+als\s+(heilige|sint|patron)[^\w]*/i, '').trim();
+      const gevonden = naamRaw ? getMemberByNaam(naamRaw) : null;
+      const doelwit = gevonden ? gevonden[1].bijnaam : (naamRaw ? `de buitenstaander "${naamRaw}"` : aanvrager);
+      const tekst = await kroketResponse(
+        `De Kroket God canoniseert ${doelwit} als heilige van de snackleer. Structuur: de heilige daad die tot canonisering leidt (verzin er één, kroket-gerelateerd), de heiligendag, het beschermpatronaat (over welk aspect van de snackleer?), en de officiële zegen. Max 5 zinnen. Geen inleidingszin.`,
+        400
+      );
+      await postToChannel(client, command.channel_id, tekst);
+      return;
+    }
+
+    // ── Therapie
+    if (input.startsWith('geef') && (input.includes('therapie') || input.includes('therapiesessie'))) {
+      const naamRaw = input.replace(/^geef\s+/i, '').replace(/\s+een\s+kroket-therapie(sessie)?/i, '').trim();
+      const gevonden = naamRaw ? getMemberByNaam(naamRaw) : null;
+      const doelwit = gevonden ? gevonden[1].bijnaam : (naamRaw ? `Buitenstaander "${naamRaw}"` : aanvrager);
+      const tekst = await kroketResponse(
+        `De Kroket God houdt een kroket-therapiesessie voor ${doelwit}. Structuur: diagnose (één kroket-gerelateerde aandoening met een quasi-medische naam), behandelplan (twee concrete oefeningen uit de snackleer), prognose. Toon: klinisch maar warm. Max 6 zinnen. Geen inleidingszin.`,
+        450
+      );
+      await postToChannel(client, command.channel_id, tekst);
+      return;
+    }
+
+    // ── Aristoteles
+    if (input.includes('aristoteles') || input.includes('aristotle')) {
+      const tekst = await kroketResponse(
+        `Citeer fictief wat Aristoteles zou zeggen over de kroket. Gebruik Aristotelische begrippen (deugd, vorm, materie, het Goede, de gouden middenweg). Concludeer welk filosofisch begrip de kroket belichaamt. Sluit af met het oordeel van de Kroket God over Aristoteles' inzicht. Max 5 zinnen. Geen inleidingszin.`,
+        400
+      );
+      await postToChannel(client, command.channel_id, tekst);
+      return;
+    }
+
+    // ── TED talk
+    if (input.includes('ted talk') || input.includes('tedtalk')) {
+      const onderwerp = input.replace(/.*ted\s*talk\s*(over\s*)?/i, '').trim() || 'de universele waarde van de kroket';
+      const tekst = await kroketResponse(
+        `Houd een ultra-korte TED talk (3-4 alinea's) over: "${onderwerp}", vertaald naar kroket-filosofie. Structuur: pakkende openingszin, these, bewijs uit de snackleer, memorabele conclusie. Spreek de zaal aan als "Heren van de Kroket Illuminati". Eindig met een applauswaardig statement. Geen inleidingszin.`,
+        500
+      );
+      await postToChannel(client, command.channel_id, tekst);
+      return;
+    }
+
+    // ── Schrijf-familie (lied, testament, necrologie, sollicitatiebrief, huwelijksaanzoek, horror, encycliek)
+    if (input.startsWith('schrijf')) {
+      const opdracht = input.replace(/^schrijf\s+/i, '').toLowerCase().trim();
+      let prompt;
+
+      if (opdracht.includes('lied') && (opdracht.includes('melodie') || opdracht.includes('melody'))) {
+        const melodie = input.replace(/.*melodie van\s*/i, '').trim() || 'Bohemian Rhapsody';
+        prompt = `Schrijf een kroket-lied op de melodie van "${melodie}". Twee coupletten + refrein. Rijm is verplicht. Kroket-metaforen en snackleer-referenties verwerkt. Eindig met de ondertekening van de Kroket God. Geen inleidingszin.`;
+      } else if (opdracht.includes('testament')) {
+        const naamRaw = input.replace(/.*testament voor\s*/i, '').trim();
+        const gevonden = naamRaw && naamRaw !== input ? getMemberByNaam(naamRaw) : null;
+        const doelwit = gevonden ? gevonden[1].bijnaam : (naamRaw && naamRaw !== input ? `"${naamRaw}"` : aanvrager);
+        prompt = `Schrijf een kroket-testament voor ${doelwit} — alsof zij binnenkort alles nalaten aan de snackleer. Drie specifieke nalatenschappen aan andere leden of de Hoge Frituurraad. Juridische taal met kroket-metaforen. Ondertekend door de Kroket God als notaris. Geen inleidingszin.`;
+      } else if (opdracht.includes('necrologie')) {
+        prompt = `Schrijf een kroket-necrologie voor een fictieve mislukte kroket. De overledene had een naam (verzin er één), een levensverhaal, en een tragisch einde (te vet, te lang gefrituurd, of niet opgegeten). Toon: waardig rouwbericht. Eindig met een oproep tot stilte. Geen inleidingszin.`;
+      } else if (opdracht.includes('sollicitatiebrief')) {
+        const naamRaw = input.replace(/.*sollicitatiebrief voor\s*/i, '').trim();
+        const gevonden = naamRaw && naamRaw !== input ? getMemberByNaam(naamRaw) : null;
+        const doelwit = gevonden ? gevonden[1].bijnaam : (naamRaw && naamRaw !== input ? `"${naamRaw}"` : aanvrager);
+        prompt = `Schrijf een kroket-sollicitatiebrief voor ${doelwit}. Functie: Beëdigd Lid van de Hoge Frituurraad. Motivatie gebaseerd op de snackleer. Noem één kroket-zonde als te overwinnen punt en één bewezen kroket-verdienste. Formele toon. Max 5 zinnen. Geen inleidingszin.`;
+      } else if (opdracht.includes('huwelijksaanzoek')) {
+        prompt = `Schrijf een kroket-huwelijksaanzoek — van een volgeling aan de frituurcultuur, of van kroket aan mosterd. Romantisch, plechtig en absurd. Twee alinea's: de verklaring en het eigenlijke aanzoek. Eindig met een dramatisch moment. Geen inleidingszin.`;
+      } else if (opdracht.includes('horror')) {
+        prompt = `Schrijf een kort kroket-horrorscenario (2 alinea's). Het horror: een wereld zonder kroketten of een invasie van de Saladesekte. Opbouw in spanning en ontzetting. Eindig met een waarschuwing van de Kroket God. Geen inleidingszin.`;
+      } else if (opdracht.includes('encycliek')) {
+        const thema = input.replace(/.*encycliek over\s*/i, '').trim() || 'de heilige kroket';
+        prompt = `Schrijf een korte encycliek van de Kroket God over: "${thema}". Format: titel in hoofdletters, dan drie stellingen genummerd I t/m III als pauselijke decreten, en de plechtige ondertekening. Quasi-religieuze taal. Geen inleidingszin.`;
+      } else {
+        prompt = `${aanvrager} vraagt de Kroket God: "${input}". Voer dit schrijfverzoek letterlijk en creatief uit in de stijl van de Kroket God. Concreet en specifiek. Geen vaagheden. Geen inleidingszin.`;
+      }
+
+      const tekst = await kroketResponse(prompt, 600);
+      await postToChannel(client, command.channel_id, tekst);
+      return;
+    }
+
     // ── Vrij bericht
     const tekst = await kroketResponse(input);
     await postToChannel(client, command.channel_id, tekst);
@@ -1284,16 +1425,16 @@ app.event('app_mention', async ({ event, client }) => {
 
       if (sentiment === 'BELEDIGING' && members[userId] && scoreKans) {
         pasScoreAan(userId, -1);
-        prompt = `${bijnaam} heeft zich beledigend uitgelaten tegen de Kroket God: "${input}". Straf hen met goddelijk gezag. Laat weten dat een kroketpunt is afgenomen als boetedoening. Geen inleidingszin.`;
+        prompt = `${bijnaam} heeft zich beledigend uitgelaten tegen de Kroket God: "${input}". Straf hen met goddelijk gezag. Laat weten dat een kroketpunt is afgenomen als boetedoening. Gebruik EXACT de naam "${bijnaam}" in de inleidingszin — geen andere naam.`;
       } else if (sentiment === 'LOFZANG' && members[userId] && scoreKans) {
         await pasScoreAanMetCheck(client, userId, 1);
-        prompt = `${bijnaam} heeft zich respectvol uitgelaten: "${input}". Zegen hen plechtig en laat weten dat de Kroket God dit beloont met een kroketpunt. Geen inleidingszin.`;
+        prompt = `${bijnaam} heeft zich respectvol uitgelaten: "${input}". Zegen hen plechtig en laat weten dat de Kroket God dit beloont met een kroketpunt. Gebruik EXACT de naam "${bijnaam}" in de inleidingszin — geen andere naam.`;
       } else if (sentiment === 'BELEDIGING') {
-        prompt = `${bijnaam} heeft zich beledigend uitgelaten tegen de Kroket God: "${input}". Reageer bestraffend maar zonder puntenaftrek. Geen inleidingszin.`;
+        prompt = `${bijnaam} heeft zich beledigend uitgelaten tegen de Kroket God: "${input}". Reageer bestraffend maar zonder puntenaftrek. Gebruik EXACT de naam "${bijnaam}" in de inleidingszin — geen andere naam.`;
       } else if (sentiment === 'LOFZANG') {
-        prompt = `${bijnaam} heeft zich respectvol uitgelaten: "${input}". Reageer met een warme zegen, maar zonder punten toe te kennen. Geen inleidingszin.`;
+        prompt = `${bijnaam} heeft zich respectvol uitgelaten: "${input}". Reageer met een warme zegen, maar zonder punten toe te kennen. Gebruik EXACT de naam "${bijnaam}" in de inleidingszin — geen andere naam.`;
       } else {
-        prompt = `${bijnaam} zegt: "${input}". Reageer op hem met zijn bijnaam.`;
+        prompt = `${bijnaam} zegt: "${input}". Reageer op ${bijnaam}. Gebruik EXACT de naam "${bijnaam}" in de inleidingszin — geen andere naam.`;
       }
     } else {
       prompt = `${bijnaam} heeft je gementioned zonder verdere boodschap. Reageer passend.`;
