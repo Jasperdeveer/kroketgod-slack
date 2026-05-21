@@ -1912,9 +1912,17 @@ function planWillekeurigKroketEvent(client) {
   console.log(`⚡ Kroket-event "${event.naam}" gepland voor ${Object.keys(members).length} leden.`);
 }
 
-// Weekdagen 09:30 — 40% kans op een willekeurig kroket-event die dag
-cron.schedule('30 9 * * 1-5', () => {
-  if (Math.random() < 0.40) planWillekeurigKroketEvent(app.client);
+// Maandag 09:30 — plan event op willekeurig moment ergens deze week (ma–vr 10:00–17:00)
+cron.schedule('30 9 * * 1', () => {
+  const extraDagen = Math.floor(Math.random() * 5);         // 0=ma … 4=vr
+  const doelUur   = 10 + Math.floor(Math.random() * 7);    // 10–16
+  const doelMin   = Math.floor(Math.random() * 60);
+  const delayMs   = extraDagen * 24 * 60 * 60_000
+                  + (doelUur - 9) * 60 * 60_000
+                  + (doelMin - 30) * 60_000;
+  const dagNamen  = ['maandag', 'dinsdag', 'woensdag', 'donderdag', 'vrijdag'];
+  console.log(`⚡ Kroket-event gepland op ${dagNamen[extraDagen]} ~${doelUur}:${String(doelMin).padStart(2, '0')} AMS`);
+  setTimeout(() => planWillekeurigKroketEvent(app.client), delayMs);
 }, { timezone: 'Europe/Amsterdam' });
 
 // ── Cron: dagelijks 08:30 — verjaardagscheck ──────────────────────────────────
