@@ -1720,19 +1720,68 @@ app.event('app_mention', async ({ event, client }) => {
 
 // ── Kanaalberichten loggen (geheugen) ─────────────────────────────────────────
 
+// Cooldown voor spontane reacties: max 1x per 20 minuten
+let spontaanCooldownTot = 0;
+
+async function verdientSpontaanReactie(tekst) {
+  try {
+    const result = await groq.chat.completions.create({
+      model: 'llama-3.3-70b-versatile',
+      max_tokens: 5,
+      temperature: 0,
+      messages: [
+        {
+          role: 'system',
+          content: 'Antwoord ALLEEN met JA of NEE. Geen uitleg.',
+        },
+        {
+          role: 'user',
+          content:
+            `Zou een almachtige, gezaghebbende kroket-godheid spontaan willen reageren op dit bericht? ` +
+            `Antwoord JA als het bericht een overtreding, provocatie, kroket- of eetgerelateerde uitspraak, ` +
+            `boastful claim, conflict, biecht, grappige stelling of iets controversieels bevat. ` +
+            `Antwoord NEE bij gewone mededelingen, vragen, planningen of neutrale berichten. ` +
+            `Bericht: "${tekst}"`,
+        },
+      ],
+    });
+    return result.choices[0].message.content.trim().toUpperCase().startsWith('JA');
+  } catch {
+    return false;
+  }
+}
+
 app.event('message', async ({ event }) => {
   try {
     if (event.channel !== process.env.SLACK_CHANNEL_ID) return;
     if (event.bot_id) return;
-    // Sta sommige subtypes toe (gewone berichten en file_share met tekst)
     if (event.subtype && !['file_share', 'thread_broadcast'].includes(event.subtype)) return;
     if (!event.user || !event.text?.trim()) return;
 
     const members = loadMembers();
     const bijnaam = members[event.user]?.bijnaam || 'Onbekende volgeling';
     logBericht(bijnaam, event.text);
+
+    // Spontane reactie — alleen voor bekende leden, niet in threads, niet tijdens cooldown
+    if (!members[event.user]) return;
+    if (event.thread_ts) return;
+    if (isVerbannen(event.user)) return;
+    if (Date.now() < spontaanCooldownTot) return;
+    if (event.text.trim().split(/\s+/).length < 3) return;
+
+    const reageert = await verdientSpontaanReactie(event.text);
+    if (!reageert) return;
+
+    spontaanCooldownTot = Date.now() + 20 * 60 * 1000;
+
+    const tekst = await kroketResponse(
+      `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} zei zojuist in het kanaal: "${event.text}". ` +
+      `Reageer ongeroepen als de Kroket God — kort, scherp, passend. Geen inleidingszin.`,
+      300
+    );
+    await postToChannel(app.client, event.channel, tekst);
   } catch (error) {
-    console.error('Fout bij loggen bericht:', error);
+    console.error('Fout bij loggen of spontane reactie:', error);
   }
 });
 
