@@ -1006,6 +1006,13 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
       return;
     }
 
+    // ── Verborgen command: vrijdag-countdown op aanvraag (niet in help/prompts)
+    if (input === 'hoelang') {
+      const countdown = await maakVrijdagCountdownZin();
+      if (countdown) await postToChannel(client, command.channel_id, countdown);
+      return;
+    }
+
     // ── Biecht (in DM = privé, in kanaal = openbaar)
     if (input.startsWith('biecht')) {
       const zonde = input.replace(/^biecht\s*/, '').trim();
@@ -1678,7 +1685,7 @@ app.event('app_mention', async ({ event, client }) => {
 
     let tekst = await kroketResponse(prompt);
     // 25% kans: voeg een wiskundig correcte vrijdag-countdown toe
-    if (Math.random() < 0.05) {
+    if (Math.random() < 0.02) {
       const countdown = await maakVrijdagCountdownZin();
       if (countdown) tekst += `\n\n${countdown}`;
     }
