@@ -1660,7 +1660,8 @@ app.event('app_mention', async ({ event, client }) => {
         tot.setDate(tot.getDate() + dagen);
         verbanning[userId] = {
           tot: tot.toISOString(),
-          reden: input,
+          reden: 'beledigend uitgelaten tegenover de Kroket God',
+          citaat: input,
           dagen,
           opgelegd: new Date().toISOString(),
         };
@@ -1777,14 +1778,17 @@ cron.schedule('0 12 * * *', async () => {
       if (Date.now() > new Date(v.tot).getTime()) {
         const bijnaam = allMembersForBan[userId]?.bijnaam || 'de afvallige';
         const redenZin = v.reden
-          ? `De oorspronkelijke zonde waarvoor ${bijnaam} verbannen werd: "${v.reden}". Verwijs hier kort maar concreet naar.`
+          ? `De zonde waarvoor ${bijnaam} verbannen werd: "${v.reden}".`
           : `De reden van de verbanning is niet overgeleverd — spreek dit mysterieus uit.`;
+        const citaatZin = v.citaat
+          ? `De exacte woorden die het vonnis besegelden: "${v.citaat}". Citeer dit letterlijk in het bericht.`
+          : '';
         const terugTekst = await kroketResponse(
           `${bijnaam} keert terug uit het ballingschap — de verbanning is verlopen. ` +
-          `${redenZin} ` +
+          `${redenZin} ${citaatZin} ` +
           `Kondig de terugkeer plechtig aan met een ondertoon van waarschuwing: de Hoge Frituurraad vergeet niet. ` +
           `Gebruik het lange decreet-formaat. Geen inleidingszin.`,
-          400, false
+          450, false
         );
         await postToChannel(app.client, process.env.SLACK_CHANNEL_ID,
           `<@${userId}>\n\n${terugTekst}`
@@ -2203,17 +2207,22 @@ async function herstelScoresEenmalig() {
 // ── Retroactief: voeg reden toe aan bestaande verbanningen zonder reden ────────
 
 function patchVerbanningReden() {
-  const redenen = {
-    'U08ALFNQB1V': 'beledigend uitgelaten tegenover de Kroket God',
-    'U0A4XPQF3CM': 'beledigend uitgelaten tegenover de Kroket God',
+  const patches = {
+    'U08ALFNQB1V': {
+      reden: 'beledigend uitgelaten tegenover de Kroket God',
+      citaat: 'mijn laatste kroket? is dat soms een dreigement??? @Kroket God',
+    },
+    'U0A4XPQF3CM': {
+      reden: 'beledigend uitgelaten tegenover de Kroket God',
+      citaat: '@Kroket God De ongepaneerde?!',
+    },
   };
   const verbanning = loadVerbanning();
   let gewijzigd = false;
-  for (const [userId, reden] of Object.entries(redenen)) {
-    if (verbanning[userId] && !verbanning[userId].reden) {
-      verbanning[userId].reden = reden;
-      gewijzigd = true;
-    }
+  for (const [userId, patch] of Object.entries(patches)) {
+    if (!verbanning[userId]) continue;
+    if (!verbanning[userId].reden)  { verbanning[userId].reden  = patch.reden;  gewijzigd = true; }
+    if (!verbanning[userId].citaat) { verbanning[userId].citaat = patch.citaat; gewijzigd = true; }
   }
   if (gewijzigd) saveVerbanning(verbanning);
 }
