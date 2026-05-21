@@ -461,7 +461,6 @@ const COMMANDO_LIJST = [
   { gebruik: '/kroketgod aanmelden',  verwacht: 'word lid van de Illuminati' },
   { gebruik: '/kroketgod eer [naam]', verwacht: '+1 kroketpunt voor een lid' },
   { gebruik: '/kroketgod ranglijst',  verwacht: 'wie staat waar in de hiërarchie' },
-  { gebruik: '/kroketgod prompts',    verwacht: 'alle andere mogelijkheden' },
 ];
 
 function buildHelpText() {
