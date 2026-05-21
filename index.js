@@ -2163,28 +2163,42 @@ function planZonnestralenEvent(client) {
   }
 }
 
-// ── Eenmalige scorecorrectie 2026-05-21 ──────────────────────────────────────
+// ── Eenmalige intrekking 2026-05-21: scorecorrectie + zonnestralen terugdraaien ─
 
-async function scoreCorrctie20260521(client) {
+async function intrekkenVandaag(client) {
   const DATUM = '2026-05-21';
   const vandaag = new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/Amsterdam' });
   if (vandaag !== DATUM) return;
 
-  const correcties = [
-    { id: 'U08ALFNQB1V', bijnaam: 'Mr. KroketPet',                   delta: 2 },
-    { id: 'U0A4XPQF3CM', bijnaam: 'Mr. Kroketinho',                   delta: 2 },
-    { id: 'U09L37GRASZ', bijnaam: 'Mr. Te Lang Gefrituurde Kroket',   delta: 1 },
+  // Draai scorecorrectie terug (KroketPet −2, Kroketinho −2, Te Lang −1)
+  // Draai zonnestralen terug (KroketPet −2, Te Lang −1, Kroketinho +1, Groene Kroket +1)
+  // Netto: KroketPet −4, Kroketinho −1, Te Lang −2, Groene Kroket +1
+  const terugdraaien = [
+    { id: 'U08ALFNQB1V', delta: -4 },  // KroketPet
+    { id: 'U0A4XPQF3CM', delta: -1 },  // Kroketinho
+    { id: 'U09L37GRASZ', delta: -2 },  // Te Lang Gefrituurde Kroket
+    { id: 'U08PWNK9V7H', delta:  1 },  // Groene Kroket (zonnestralen was -1)
   ];
+  for (const { id, delta } of terugdraaien) pasScoreAan(id, delta);
 
-  for (const { id, delta } of correcties) pasScoreAan(id, delta);
-
-  const overzicht = correcties.map(c => `${c.bijnaam} +${c.delta}`).join(', ');
-  const tekst = await kroketResponse(
-    `De Kroket God heeft de puntentelling handmatig bijgesteld: ${overzicht}. ` +
-    `Spreek dit uit als een officieel decreet. Noem elke naam en zijn puntenmutatie. Geen inleidingszin.`,
-    400, false
-  );
-  await postToChannel(client, process.env.SLACK_CHANNEL_ID, tekst);
+  // Verwijder het laatste bericht van de bot in het kanaal
+  try {
+    const history = await client.conversations.history({
+      channel: process.env.SLACK_CHANNEL_ID,
+      limit: 20,
+    });
+    const botInfo = await client.auth.test();
+    const laatsteBotBericht = history.messages?.find(m => m.bot_id || m.user === botInfo.user_id);
+    if (laatsteBotBericht?.ts) {
+      await client.chat.delete({
+        channel: process.env.SLACK_CHANNEL_ID,
+        ts: laatsteBotBericht.ts,
+      });
+      console.log('🗑️ Laatste bericht verwijderd:', laatsteBotBericht.ts);
+    }
+  } catch (err) {
+    console.error('Kon laatste bericht niet verwijderen:', err.message);
+  }
 }
 
 // ── Start ──────────────────────────────────────────────────────────────────────
@@ -2194,6 +2208,5 @@ async function scoreCorrctie20260521(client) {
   await app.start();
   console.log('⚜️ De Kroket God is wakker. Poort 3000 staat open.');
   await migreerVerbanningKroketPet(app.client);
-  await scoreCorrctie20260521(app.client);
-  planZonnestralenEvent(app.client);
+  await intrekkenVandaag(app.client);
 })();
