@@ -2082,6 +2082,30 @@ function planZonnestralenEvent(client) {
   }
 }
 
+// ── Eenmalige scorecorrectie 2026-05-21 ──────────────────────────────────────
+
+async function scoreCorrctie20260521(client) {
+  const DATUM = '2026-05-21';
+  const vandaag = new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/Amsterdam' });
+  if (vandaag !== DATUM) return;
+
+  const correcties = [
+    { id: 'U08ALFNQB1V', bijnaam: 'Mr. KroketPet',                   delta: 2 },
+    { id: 'U0A4XPQF3CM', bijnaam: 'Mr. Kroketinho',                   delta: 2 },
+    { id: 'U09L37GRASZ', bijnaam: 'Mr. Te Lang Gefrituurde Kroket',   delta: 1 },
+  ];
+
+  for (const { id, delta } of correcties) pasScoreAan(id, delta);
+
+  const overzicht = correcties.map(c => `${c.bijnaam} +${c.delta}`).join(', ');
+  const tekst = await kroketResponse(
+    `De Kroket God heeft de puntentelling handmatig bijgesteld: ${overzicht}. ` +
+    `Spreek dit uit als een officieel decreet. Noem elke naam en zijn puntenmutatie. Geen inleidingszin.`,
+    400, false
+  );
+  await postToChannel(client, process.env.SLACK_CHANNEL_ID, tekst);
+}
+
 // ── Start ──────────────────────────────────────────────────────────────────────
 
 (async () => {
@@ -2089,5 +2113,6 @@ function planZonnestralenEvent(client) {
   await app.start();
   console.log('⚜️ De Kroket God is wakker. Poort 3000 staat open.');
   await migreerVerbanningKroketPet(app.client);
+  await scoreCorrctie20260521(app.client);
   planZonnestralenEvent(app.client);
 })();
