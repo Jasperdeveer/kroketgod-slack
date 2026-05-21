@@ -1965,7 +1965,13 @@ function planZonnestralenEvent(client) {
   // Plan per lid een apart willekeurig moment
   for (const [userId, lid] of Object.entries(members)) {
     const isJasper = userId === JASPER_ID;
-    const delta = isJasper ? 2 : (Math.random() < 0.5 ? 1 : -1);
+    const deltaMap = {
+      'U08ALFNQB1V': 2,   // Mr. KroketPet
+      'U09L37GRASZ': 1,   // Mr. Te Lang Gefrituurde Kroket
+      'U0A4XPQF3CM': -1,  // Mr. Kroketinho
+      'U08PWNK9V7H': -1,  // De Groene Kroket
+    };
+    const delta = deltaMap[userId] ?? (Math.random() < 0.5 ? 1 : -1);
 
     const doelMinuten = vanafMinuten + Math.floor(Math.random() * (LATEST - vanafMinuten));
     const delayMs = (doelMinuten - nuMinuten) * 60_000
