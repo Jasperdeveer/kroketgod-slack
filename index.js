@@ -2227,6 +2227,88 @@ function patchVerbanningReden() {
   if (gewijzigd) saveVerbanning(verbanning);
 }
 
+// ── Eenmalige vergevingsgezinde genade: 22-05-2026 11:00 AMS ─────────────────
+
+function planGenade20260522(client) {
+  const FLAG = path.join(__dirname, 'genade_20260522.done');
+  if (fs.existsSync(FLAG)) return;
+
+  // Bereken ms tot 2026-05-22 11:00 AMS
+  const nu = new Date();
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Europe/Amsterdam',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: 'numeric', minute: 'numeric', second: 'numeric',
+    hour12: false,
+  }).formatToParts(nu);
+  const get = (t) => parseInt(parts.find(p => p.type === t)?.value);
+  const amsJaar = get('year'), amsMaand = get('month'), amsdag = get('day');
+  const amsUur = get('hour'), amsMin = get('minute'), amsSec = get('second');
+
+  // Alleen plannen als het nog vóór 22-05-2026 11:00 is
+  const isVoorbij = (amsJaar > 2026) ||
+    (amsJaar === 2026 && amsMaand > 5) ||
+    (amsJaar === 2026 && amsMaand === 5 && amsdag > 22) ||
+    (amsJaar === 2026 && amsMaand === 5 && amsdag === 22 && amsUur >= 11);
+  if (isVoorbij) return;
+
+  const secondenVandaag = amsUur * 3600 + amsMin * 60 + amsSec;
+  const dagenTotDoeldag = (amsdag < 22) ? (22 - amsdag) : 0;
+  const delayMs = dagenTotDoeldag * 86_400_000
+    + (11 * 3600 - secondenVandaag) * 1000;
+
+  console.log(`🕊️ Genade gepland voor 22-05-2026 11:00 AMS (${Math.round(delayMs / 60_000)} min.)`);
+
+  setTimeout(async () => {
+    try {
+      if (fs.existsSync(FLAG)) return;
+      fs.writeFileSync(FLAG, new Date().toISOString());
+
+      const verbanning = loadVerbanning();
+      const members   = loadMembers();
+      const actieven  = Object.entries(verbanning)
+        .filter(([, v]) => Date.now() < new Date(v.tot).getTime());
+
+      if (actieven.length === 0) return;
+
+      // Verwijder alle actieve verbanningen
+      for (const [userId] of actieven) delete verbanning[userId];
+      saveVerbanning(verbanning);
+
+      // Één gezamenlijk genade-decreet
+      const namen = actieven
+        .map(([id]) => members[id]?.bijnaam || id)
+        .join(' en ');
+      const genadeGroep = await kroketResponse(
+        `De Kroket God spreekt bij uitzondering een daad van collectieve genade uit. ` +
+        `${namen} worden per direct bevrijd uit het ballingschap — niet omdat zij het verdienen, ` +
+        `maar omdat de Kroket God vandaag vergevingsgezind is. Dit is een uitzondering. ` +
+        `Spreek dit plechtig uit. Waarschuw dat dit niet opnieuw zal gebeuren. Geen inleidingszin.`,
+        400, false
+      );
+      await postToChannel(client, process.env.SLACK_CHANNEL_ID, genadeGroep);
+
+      // Individuele @mention per persoon met citaat
+      for (const [userId, v] of actieven) {
+        const bijnaam   = members[userId]?.bijnaam || 'de afvallige';
+        const citaatZin = v.citaat
+          ? `De woorden die het vonnis besegelden: "${v.citaat}". Verwijs er kort naar.`
+          : '';
+        const individueel = await kroketResponse(
+          `${bijnaam} is bevrijd uit het ballingschap door goddelijke genade. ${citaatZin} ` +
+          `Spreek hen persoonlijk aan — warm maar met een duidelijke ondertoon: dit is geen vrijbrief. Geen inleidingszin.`,
+          300, false
+        );
+        await postToChannel(client, process.env.SLACK_CHANNEL_ID,
+          `<@${userId}>\n\n${individueel}`
+        );
+      }
+    } catch (err) {
+      console.error('Fout bij genade-event:', err);
+    }
+  }, delayMs);
+}
+
 // ── Start ──────────────────────────────────────────────────────────────────────
 
 (async () => {
@@ -2236,4 +2318,5 @@ function patchVerbanningReden() {
   console.log('⚜️ De Kroket God is wakker. Poort 3000 staat open.');
   await migreerVerbanningKroketPet(app.client);
   await herstelScoresEenmalig();
+  planGenade20260522(app.client);
 })();
