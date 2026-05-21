@@ -1678,7 +1678,7 @@ app.event('app_mention', async ({ event, client }) => {
 
     let tekst = await kroketResponse(prompt);
     // 25% kans: voeg een wiskundig correcte vrijdag-countdown toe
-    if (Math.random() < 0.25) {
+    if (Math.random() < 0.05) {
       const countdown = await maakVrijdagCountdownZin();
       if (countdown) tekst += `\n\n${countdown}`;
     }
