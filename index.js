@@ -2309,6 +2309,62 @@ function planGenade20260522(client) {
   }, delayMs);
 }
 
+// ── Eenmalige lunchwens 21-05-2026 11:45 AMS ─────────────────────────────────
+
+function planLunchwens20260521(client) {
+  const FLAG = path.join(__dirname, 'lunchwens_20260521.done');
+  if (fs.existsSync(FLAG)) return;
+
+  const nu = new Date();
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Europe/Amsterdam',
+    hour: 'numeric', minute: 'numeric', second: 'numeric', hour12: false,
+  }).formatToParts(nu);
+  const get = (t) => parseInt(parts.find(p => p.type === t)?.value);
+  const amsUur = get('hour'), amsMin = get('minute'), amsSec = get('second');
+
+  const DOEL = 11 * 3600 + 45 * 60; // 11:45:00
+  const nuSec = amsUur * 3600 + amsMin * 60 + amsSec;
+  const delayMs = (DOEL - nuSec) * 1000;
+  if (delayMs <= 0) return; // al voorbij
+
+  console.log(`🥪 Lunchwens gepland voor 11:45 AMS (${Math.round(delayMs / 60_000)} min.)`);
+
+  setTimeout(async () => {
+    try {
+      if (fs.existsSync(FLAG)) return;
+      fs.writeFileSync(FLAG, new Date().toISOString());
+
+      const members  = loadMembers();
+      const verbanning = loadVerbanning();
+
+      for (const [userId, lid] of Object.entries(members)) {
+        const verbannen = isVerbannen(userId);
+        let tekst;
+        if (verbannen) {
+          tekst = await kroketResponse(
+            `${lid.bijnaam} zit nog in het ballingschap. ` +
+            `Wens hem spottend een koude, kroketloze lunch toe — zonder medelijden, maar zonder overdrijving. ` +
+            `Kort en droog. Geen inleidingszin.`,
+            200, false
+          );
+        } else {
+          tekst = await kroketResponse(
+            `Wens ${lid.bijnaam} een heerlijke lunch toe in de stijl van de Kroket God — plechtig, warm, met een kroketreferentie. ` +
+            `Kort en oprecht. Geen inleidingszin.`,
+            200, false
+          );
+        }
+        await postToChannel(client, process.env.SLACK_CHANNEL_ID,
+          `<@${userId}>\n\n${tekst}`
+        );
+      }
+    } catch (err) {
+      console.error('Fout bij lunchwens:', err);
+    }
+  }, delayMs);
+}
+
 // ── Start ──────────────────────────────────────────────────────────────────────
 
 (async () => {
@@ -2319,4 +2375,5 @@ function planGenade20260522(client) {
   await migreerVerbanningKroketPet(app.client);
   await herstelScoresEenmalig();
   planGenade20260522(app.client);
+  planLunchwens20260521(app.client);
 })();
