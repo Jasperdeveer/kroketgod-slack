@@ -2215,10 +2215,27 @@ async function intrekkenVandaag(client) {
 
 // ── Start ──────────────────────────────────────────────────────────────────────
 
+// ── Eenmalige scoreherstelling 2026-05-21 ─────────────────────────────────────
+
+async function herstelScores20260521() {
+  const DATUM = '2026-05-21';
+  const vandaag = new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/Amsterdam' });
+  if (vandaag !== DATUM) return;
+
+  const scores = loadScores();
+  scores['U08ALFNQB1V'] = 7;  // Mr. KroketPet
+  scores['U09L37GRASZ'] = 7;  // Mr. Te Lang Gefrituurde Kroket
+  scores['U0A4XPQF3CM'] = 6;  // Mr. Kroketinho
+  scores['U08PWNK9V7H'] = 5;  // De Groene Kroket
+  saveScores(scores);
+  console.log('✅ Scores hersteld naar 7/7/6/5.');
+}
+
 (async () => {
   backfillAchievements();
   await app.start();
   console.log('⚜️ De Kroket God is wakker. Poort 3000 staat open.');
   await migreerVerbanningKroketPet(app.client);
   await intrekkenVandaag(app.client);
+  await herstelScores20260521();
 })();
