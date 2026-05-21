@@ -2431,6 +2431,46 @@ function planLunchwens20260521(client) {
   console.log('⚜️ De Kroket God is wakker. Poort 3000 staat open.');
   await migreerVerbanningKroketPet(app.client);
   await herstelScoresEenmalig();
+  await banSanderEenmalig(app.client);
   planGenade20260522(app.client);
   planLunchwens20260521(app.client);
 })();
+
+async function banSanderEenmalig(client) {
+  const FLAG = path.join(__dirname, 'ban_sander_20260521.done');
+  if (fs.existsSync(FLAG)) return;
+  fs.writeFileSync(FLAG, new Date().toISOString());
+
+  const SANDER_ID = 'U09L37GRASZ';
+  const citaat = 'U bent een vieze koude natte kroket, slapeling';
+
+  // −1 punt
+  pasScoreAan(SANDER_ID, -1);
+
+  // 1 dag verbanning
+  const verbanning = loadVerbanning();
+  const tot = new Date();
+  tot.setDate(tot.getDate() + 1);
+  verbanning[SANDER_ID] = {
+    tot: tot.toISOString(),
+    reden: 'beledigend uitgelaten tegenover de Kroket God',
+    citaat,
+    dagen: 1,
+    opgelegd: new Date().toISOString(),
+  };
+  saveVerbanning(verbanning);
+
+  const terugDatum = tot.toLocaleDateString('nl-NL', { timeZone: 'Europe/Amsterdam', day: 'numeric', month: 'long' });
+
+  const tekst = await kroketResponse(
+    `De Kroket God heeft teruggelezen in het gesprek en is gestuit op een passage die hij niet ongestraft voorbij kan laten gaan. ` +
+    `Mr. Te Lang Gefrituurde Kroket heeft geschreven: "${citaat}". ` +
+    `Spreek een officieel vonnis uit: 1 dag ballingschap en −1 kroketpunt. ` +
+    `Gebruik het decreet-formaat. Geen inleidingszin.`,
+    450, false
+  );
+
+  await postToChannel(client, process.env.SLACK_CHANNEL_ID,
+    `<@${SANDER_ID}>\n\n${tekst}\n\n_Mr. Te Lang Gefrituurde Kroket is verbannen voor 1 dag. Terugkeer: ${terugDatum}._`
+  );
+}
