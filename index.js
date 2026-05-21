@@ -885,58 +885,67 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
 
     // Geheime prompts — niet in de help
     if (input === 'prompts') {
-      const tekst = [
-        `🕵️ *GEHEIME KROKET PROMPTS*`,
-        `_Typ achter \`/kroketgod\`_`,
-        ``,
-        `*⚙️ Extra commando's*`,
-        `\`zondebok\` — −1 punt willekeurig lid`,
-        `\`begenade [naam]\` — verbanning vroegtijdig opheffen`,
-        `\`dossier [naam]\` — kroket-CV van een lid`,
-        `\`stem [naam]\` — stem op Held van de Week`,
-        `\`frituur [tekst]\` — AI-afbeelding`,
-        `\`orakel [vraag]\` — cryptisch antwoord uit het Vetbad`,
-        `\`meld [naam]\` — rapporteer een vermoedelijke tegenstander`,
-        ``,
-        `*🎭 Klassiek*`,
-        `\`biecht [zonde]\` — bv. _biecht ik heb ketchup gebruikt_`,
-        `\`straf [naam]\` — leg een creatieve straf op`,
-        `\`gebod [1-10]\` — toelichting op een Gebod`,
-        `\`horoscoop [naam]\` — kroket-horoscoop voor de week`,
-        `\`quote\` — willekeurige kroket-wijsheid`,
-        `\`nieuws\` — breaking news uit het Vetbad`,
-        `\`vrijdag\` — countdown of viering`,
-        `\`bekeer [naam]\` — buitenstaander toelaten of weigeren`,
-        `\`slachtoffer\` — onthul de uitverkorene van dit moment`,
-        ``,
-        `*⚖️ Rechtbank & debat*`,
-        `\`rechtbank [naam] vs [naam]\` — bv. _rechtbank Jorg vs Sander_`,
-        `\`debat [stelling]\` — bv. _debat ketchup bij kroket_`,
-        `\`kroket vs bitterbal — finaal debat\``,
-        `\`oordeel over mijn leven: [beschrijving]\``,
-        ``,
-        `*🎵 Creatief*`,
-        `\`rap [onderwerp]\` — rap met rijm en kroket-metaforen`,
-        `\`schrijf een kroket-lied op de melodie van [liedje]\``,
-        `\`schrijf een kroket-testament voor [naam]\``,
-        `\`schrijf een necrologie voor een mislukte kroket\``,
-        `\`schrijf een kroket-sollicitatiebrief voor [naam]\``,
-        `\`schrijf een kroket-huwelijksaanzoek\``,
-        `\`schrijf een kroket-horrorscenario\``,
-        `\`schrijf een encycliek over [thema]\``,
-        ``,
-        `*🧠 Filosofisch*`,
-        `\`wat zou Aristoteles zeggen over de kroket\``,
-        `\`houd een TED talk over [onderwerp] in kroket\``,
-        `\`geef een kroket-weersverwachting\``,
-        `\`stel een kroket-grondwet op\``,
-        `\`canoniseer [naam] als heilige van de snackleer\``,
-        ``,
-        `*🔮 Persoonlijk*`,
-        `\`geef [naam] een kroket-therapiesessie\``,
-        `\`onthul de naam van mijn spirit-kroket\``,
-      ].join('\n');
-      await respond({ text: tekst, response_type: 'ephemeral' });
+      // ── REGISTER VAN GEHEIME COMMANDO'S ──────────────────────────────────────
+      // Voeg nieuwe commando's hier toe — prompts-lijst wordt automatisch opgebouwd
+      const GEHEIME_COMMANDO_S = [
+        { categorie: '⚙️ Extra commando\'s' },
+        { cmd: 'zondebok',              uitleg: '−1 punt willekeurig lid' },
+        { cmd: 'begenade [naam]',       uitleg: 'verbanning vroegtijdig opheffen' },
+        { cmd: 'dossier [naam]',        uitleg: 'kroket-CV van een lid' },
+        { cmd: 'stem [naam]',           uitleg: 'stem op Held van de Week' },
+        { cmd: 'hoelang',               uitleg: 'hoe lang nog tot vrijdag 12:00' },
+        { cmd: 'frituur [tekst]',       uitleg: 'AI-afbeelding' },
+        { cmd: 'orakel [vraag]',        uitleg: 'cryptisch antwoord uit het Vetbad' },
+        { cmd: 'meld [naam]',           uitleg: 'rapporteer een vermoedelijke tegenstander' },
+
+        { categorie: '🎭 Klassiek' },
+        { cmd: 'biecht [zonde]',        uitleg: 'bv. _biecht ik heb ketchup gebruikt_' },
+        { cmd: 'straf [naam]',          uitleg: 'leg een creatieve straf op' },
+        { cmd: 'gebod [1-10]',          uitleg: 'toelichting op een Gebod' },
+        { cmd: 'horoscoop [naam]',      uitleg: 'kroket-horoscoop voor de week' },
+        { cmd: 'quote',                 uitleg: 'willekeurige kroket-wijsheid' },
+        { cmd: 'nieuws',                uitleg: 'breaking news uit het Vetbad' },
+        { cmd: 'vrijdag',               uitleg: 'countdown of viering' },
+        { cmd: 'bekeer [naam]',         uitleg: 'buitenstaander toelaten of weigeren' },
+        { cmd: 'slachtoffer',           uitleg: 'onthul de uitverkorene van dit moment' },
+
+        { categorie: '⚖️ Rechtbank & debat' },
+        { cmd: 'rechtbank [naam] vs [naam]', uitleg: 'bv. _rechtbank Jorg vs Sander_' },
+        { cmd: 'debat [stelling]',      uitleg: 'bv. _debat ketchup bij kroket_' },
+        { cmd: 'kroket vs bitterbal',   uitleg: 'finaal debat' },
+        { cmd: 'oordeel over mijn leven: [beschrijving]', uitleg: 'goddelijk oordeel' },
+
+        { categorie: '🎵 Creatief' },
+        { cmd: 'rap [onderwerp]',       uitleg: 'rap met rijm en kroket-metaforen' },
+        { cmd: 'schrijf een kroket-lied op de melodie van [liedje]', uitleg: '' },
+        { cmd: 'schrijf een kroket-testament voor [naam]',           uitleg: '' },
+        { cmd: 'schrijf een necrologie voor een mislukte kroket',    uitleg: '' },
+        { cmd: 'schrijf een kroket-sollicitatiebrief voor [naam]',   uitleg: '' },
+        { cmd: 'schrijf een kroket-huwelijksaanzoek',                uitleg: '' },
+        { cmd: 'schrijf een kroket-horrorscenario',                  uitleg: '' },
+        { cmd: 'schrijf een encycliek over [thema]',                 uitleg: '' },
+
+        { categorie: '🧠 Filosofisch' },
+        { cmd: 'wat zou Aristoteles zeggen over de kroket',          uitleg: '' },
+        { cmd: 'houd een TED talk over [onderwerp] in kroket',       uitleg: '' },
+        { cmd: 'geef een kroket-weersverwachting',                   uitleg: '' },
+        { cmd: 'stel een kroket-grondwet op',                        uitleg: '' },
+        { cmd: 'canoniseer [naam] als heilige van de snackleer',     uitleg: '' },
+
+        { categorie: '🔮 Persoonlijk' },
+        { cmd: 'geef [naam] een kroket-therapiesessie',              uitleg: '' },
+        { cmd: 'onthul de naam van mijn spirit-kroket',              uitleg: '' },
+      ];
+
+      const regels = ['🕵️ *GEHEIME KROKET PROMPTS*', '_Typ achter `/kroketgod`_', ''];
+      for (const item of GEHEIME_COMMANDO_S) {
+        if (item.categorie) {
+          regels.push(``, `*${item.categorie}*`);
+        } else {
+          regels.push(`\`${item.cmd}\`${item.uitleg ? ` — ${item.uitleg}` : ''}`);
+        }
+      }
+      await respond({ text: regels.join('\n'), response_type: 'ephemeral' });
       return;
     }
 
