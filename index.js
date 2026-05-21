@@ -2175,52 +2175,11 @@ function planZonnestralenEvent(client) {
   }
 }
 
-// ── Eenmalige intrekking 2026-05-21: scorecorrectie + zonnestralen terugdraaien ─
+// ── Eenmalige scoreherstelling (vlagbestand voorkomt dubbele uitvoering) ───────
 
-async function intrekkenVandaag(client) {
-  const DATUM = '2026-05-21';
-  const vandaag = new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/Amsterdam' });
-  if (vandaag !== DATUM) return;
-
-  // Draai scorecorrectie terug (KroketPet −2, Kroketinho −2, Te Lang −1)
-  // Draai zonnestralen terug (KroketPet −2, Te Lang −1, Kroketinho +1, Groene Kroket +1)
-  // Netto: KroketPet −4, Kroketinho −1, Te Lang −2, Groene Kroket +1
-  const terugdraaien = [
-    { id: 'U08ALFNQB1V', delta: -4 },  // KroketPet
-    { id: 'U0A4XPQF3CM', delta: -1 },  // Kroketinho
-    { id: 'U09L37GRASZ', delta: -2 },  // Te Lang Gefrituurde Kroket
-    { id: 'U08PWNK9V7H', delta:  1 },  // Groene Kroket (zonnestralen was -1)
-  ];
-  for (const { id, delta } of terugdraaien) pasScoreAan(id, delta);
-
-  // Verwijder het laatste bericht van de bot in het kanaal
-  try {
-    const history = await client.conversations.history({
-      channel: process.env.SLACK_CHANNEL_ID,
-      limit: 20,
-    });
-    const botInfo = await client.auth.test();
-    const laatsteBotBericht = history.messages?.find(m => m.bot_id || m.user === botInfo.user_id);
-    if (laatsteBotBericht?.ts) {
-      await client.chat.delete({
-        channel: process.env.SLACK_CHANNEL_ID,
-        ts: laatsteBotBericht.ts,
-      });
-      console.log('🗑️ Laatste bericht verwijderd:', laatsteBotBericht.ts);
-    }
-  } catch (err) {
-    console.error('Kon laatste bericht niet verwijderen:', err.message);
-  }
-}
-
-// ── Start ──────────────────────────────────────────────────────────────────────
-
-// ── Eenmalige scoreherstelling 2026-05-21 ─────────────────────────────────────
-
-async function herstelScores20260521() {
-  const DATUM = '2026-05-21';
-  const vandaag = new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/Amsterdam' });
-  if (vandaag !== DATUM) return;
+async function herstelScoresEenmalig() {
+  const FLAG = path.join(__dirname, 'score_herstel_20260521.done');
+  if (fs.existsSync(FLAG)) return;
 
   const scores = loadScores();
   scores['U08ALFNQB1V'] = 7;  // Mr. KroketPet
@@ -2228,14 +2187,17 @@ async function herstelScores20260521() {
   scores['U0A4XPQF3CM'] = 6;  // Mr. Kroketinho
   scores['U08PWNK9V7H'] = 5;  // De Groene Kroket
   saveScores(scores);
-  console.log('✅ Scores hersteld naar 7/7/6/5.');
+
+  fs.writeFileSync(FLAG, new Date().toISOString());
+  console.log('✅ Scores hersteld naar 7/7/6/5 (eenmalig, vlag gezet).');
 }
+
+// ── Start ──────────────────────────────────────────────────────────────────────
 
 (async () => {
   backfillAchievements();
   await app.start();
   console.log('⚜️ De Kroket God is wakker. Poort 3000 staat open.');
   await migreerVerbanningKroketPet(app.client);
-  await intrekkenVandaag(app.client);
-  await herstelScores20260521();
+  await herstelScoresEenmalig();
 })();
