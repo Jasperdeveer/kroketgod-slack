@@ -1852,6 +1852,71 @@ async function maybeSpontaan() {
 cron.schedule('0 10 * * 2,4', maybeSpontaan, { timezone: 'Europe/Amsterdam' });
 cron.schedule('0 14 * * 2,4', maybeSpontaan, { timezone: 'Europe/Amsterdam' });
 
+// ── Willekeurige kroketevents ─────────────────────────────────────────────────
+
+const KROKET_EVENTS = [
+  { naam: 'Zonnestralen',     context: 'De zonnestralen hebben het vetbad bereikt — een kosmisch verschijnsel dat de puntentelling verstoort.' },
+  { naam: 'Mosterdregen',     context: 'Het mosterd regent vandaag neer vanuit de kosmische smaakwolken boven de Hoge Frituurraad.' },
+  { naam: 'Ragoutprofetie',   context: 'De ragout heeft gesproken. De Hoge Frituurraad interpreteert de tekens en past de standen aan.' },
+  { naam: 'Vetbadtrillingen', context: 'Mysterieuze trillingen in het heilige vetbad hebben de kroketbalans verstoord.' },
+  { naam: 'Korstcrisis',      context: 'Een plotselinge korstcrisis heeft de Hoge Frituurraad gedwongen corrigerende maatregelen te nemen.' },
+  { naam: 'Maanstand',        context: 'De maanstand is ongunstig voor sommigen en gunstig voor anderen — de snackleer dicteert aanpassingen.' },
+  { naam: 'Frituurolieprijs', context: 'De frituurolieprijs bereikte een historisch hoogtepunt. De Hoge Frituurraad trekt consequenties.' },
+  { naam: 'Paneerlaagstoring',context: 'Een kosmische verstoring in de paneerlaag heeft de kroketbalans tijdelijk ontwricht.' },
+];
+
+function planWillekeurigKroketEvent(client) {
+  const now = new Date();
+  const fmt = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Europe/Amsterdam', hour: 'numeric', minute: 'numeric', hour12: false,
+  });
+  const parts = fmt.formatToParts(now);
+  const amsUur = parseInt(parts.find(p => p.type === 'hour').value);
+  const amsMin = parseInt(parts.find(p => p.type === 'minute').value);
+  const nuMinuten = amsUur * 60 + amsMin;
+
+  const VROEGST = 10 * 60;
+  const LATEST  = 17 * 60;
+  const vanafMinuten = Math.max(nuMinuten + 5, VROEGST);
+  if (vanafMinuten >= LATEST) return;
+
+  const event = KROKET_EVENTS[Math.floor(Math.random() * KROKET_EVENTS.length)];
+  const members = loadMembers();
+
+  for (const [userId, lid] of Object.entries(members)) {
+    const delta = Math.random() < 0.5 ? 1 : -1;
+    const doelMinuten = vanafMinuten + Math.floor(Math.random() * (LATEST - vanafMinuten));
+    const delayMs = (doelMinuten - nuMinuten) * 60_000
+      - (now.getSeconds() * 1000 + now.getMilliseconds());
+
+    const dUur = Math.floor(doelMinuten / 60);
+    const dMin = String(doelMinuten % 60).padStart(2, '0');
+    console.log(`⚡ ${event.naam} — ${lid.bijnaam}: ~${dUur}:${dMin} AMS (${delta > 0 ? '+' : ''}${delta} pt)`);
+
+    setTimeout(async () => {
+      try {
+        pasScoreAan(userId, delta);
+        const richting = delta > 0
+          ? `Dit werkt in het voordeel van ${lid.bijnaam}: +1 kroketpunt.`
+          : `Dit treft ${lid.bijnaam} ongunstig: −1 kroketpunt.`;
+        const tekst = await kroketResponse(
+          `${event.context} ${richting} Spreek dit kort en plechtig uit als decreet van de Kroket God. Noem de naam en het puntenaantal. Geen inleidingszin.`,
+          280, false
+        );
+        await postToChannel(client, process.env.SLACK_CHANNEL_ID, tekst);
+      } catch (err) {
+        console.error(`Fout bij kroket-event (${lid.bijnaam}):`, err);
+      }
+    }, delayMs);
+  }
+  console.log(`⚡ Kroket-event "${event.naam}" gepland voor ${Object.keys(members).length} leden.`);
+}
+
+// Weekdagen 09:30 — 40% kans op een willekeurig kroket-event die dag
+cron.schedule('30 9 * * 1-5', () => {
+  if (Math.random() < 0.40) planWillekeurigKroketEvent(app.client);
+}, { timezone: 'Europe/Amsterdam' });
+
 // ── Cron: dagelijks 08:30 — verjaardagscheck ──────────────────────────────────
 
 cron.schedule('30 8 * * *', async () => {
