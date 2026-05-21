@@ -236,6 +236,75 @@ function getMondayOfWeek(date = new Date()) {
   return `${y}-${m}-${d}`;
 }
 
+// ── Vrijdag-countdown (wiskundige berekening — AI mag getallen NIET aanpassen) ─
+
+function secondenTotVrijdagMiddag() {
+  const nu = new Date();
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Europe/Amsterdam',
+    weekday: 'short', hour: 'numeric', minute: 'numeric', second: 'numeric',
+    hour12: false,
+  }).formatToParts(nu);
+  const get = (type) => parts.find(p => p.type === type)?.value;
+  const weekdagMap = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  const weekdag  = weekdagMap[get('weekday')] ?? 0;
+  const uur      = parseInt(get('hour'));
+  const minuut   = parseInt(get('minute'));
+  const seconde  = parseInt(get('second'));
+
+  const secondenVandaag = uur * 3600 + minuut * 60 + seconde;
+  const DOEL = 12 * 3600; // vrijdag 12:00:00
+  let dagenTot = (5 - weekdag + 7) % 7;
+  if (dagenTot === 0 && secondenVandaag >= DOEL) dagenTot = 7;
+  return Math.max(0, dagenTot * 86400 + DOEL - secondenVandaag);
+}
+
+const VRIJDAG_EENHEDEN = [
+  { label: 'seconden',                                                          duur: 1 },
+  { label: 'minuten',                                                           duur: 60 },
+  { label: 'uur',                                                               duur: 3600 },
+  { label: 'voetbalwedstrijden zonder blessuretijd (90 min)',                   duur: 5400 },
+  { label: 'keer Pulp Fiction (154 min)',                                        duur: 9240 },
+  { label: 'keer Bohemian Rhapsody (5 min 55 sec)',                             duur: 355 },
+  { label: 'keer American Pie van Don McLean (8 min 33 sec)',                   duur: 513 },
+  { label: 'volledige slaaprondes van 90 minuten',                              duur: 5400 },
+  { label: 'Breaking Bad-afleveringen (gem. 47 min)',                           duur: 2820 },
+  { label: 'marathons op gemiddelde finishtijd (4 uur 29 min)',                 duur: 16140 },
+  { label: 'keer de Negende van Beethoven (66 min)',                            duur: 3960 },
+  { label: 'kroketkoeltijden (18 min)',                                          duur: 1080 },
+  { label: 'keer Never Gonna Give You Up van Rick Astley (3 min 33 sec)',       duur: 213 },
+  { label: 'vergaderingen die eigenlijk een mail hadden kunnen zijn (45 min)',  duur: 2700 },
+  { label: 'IKEA-bezoeken (gemiddeld 2 uur)',                                   duur: 7200 },
+  { label: 'TED Talks van precies 18 minuten',                                  duur: 1080 },
+  { label: 'gemiddelde douches (8 minuten)',                                     duur: 480 },
+  { label: 'afleveringen Friends (22 min)',                                      duur: 1320 },
+  { label: 'potjes Monopoly (gemiddeld 90 minuten)',                             duur: 5400 },
+  { label: 'kroketbereidingen in de frituur (4 minuten)',                        duur: 240 },
+  { label: 'halve marathons op gemiddelde finishtijd (2 uur 15 min)',           duur: 8100 },
+  { label: 'keer de Grand Prix van Monaco (gemiddeld 1 uur 50 min)',            duur: 6600 },
+  { label: 'keer de volledige LOTR extended trilogy (681 min)',                  duur: 40860 },
+  { label: 'keer Killing Me Softly van The Fugees (4 min 58 sec)',              duur: 298 },
+  { label: 'keer de gemiddelde Nederlandse treinvertraging (6 minuten)',        duur: 360 },
+  { label: 'gemiddelde wachttijden bij de huisarts in Nederland (19 min)',      duur: 1140 },
+  { label: 'schooldagen van 6 uur',                                             duur: 21600 },
+  { label: 'keer dat een gemiddeld mens in slaap valt (14 minuten)',            duur: 840 },
+  { label: 'keer de gemiddelde kroketkeuze aan de FEBO-muur (30 seconden)',     duur: 30 },
+  { label: 'afleveringen The Office US (22 min)',                                duur: 1320 },
+];
+
+async function maakVrijdagCountdownZin() {
+  const sec = secondenTotVrijdagMiddag();
+  if (sec <= 0) return null;
+  const gekozen = [...VRIJDAG_EENHEDEN].sort(() => Math.random() - 0.5).slice(0, 3);
+  const getallen = gekozen.map(e => `${(sec / e.duur).toFixed(1)} × ${e.label}`).join(' | ');
+  return kroketResponse(
+    `Verwerk de volgende wiskundig exacte getallen in één grappige zin over hoelang het nog duurt tot vrijdagmiddag 12:00. ` +
+    `De getallen zijn berekend door een wiskundige functie — verander ze ABSOLUUT NIET, gebruik ze letterlijk zoals gegeven. ` +
+    `Schrijf in de stijl van de Kroket God. Max 2 zinnen. Geen inleidingszin. Gegevens: ${getallen}.`,
+    200, false
+  );
+}
+
 // ── Streaks (vrijdagdeelname) ─────────────────────────────────────────────────
 
 const loadStreaks = () => readJSON('streaks.json', {});
@@ -1607,7 +1676,12 @@ app.event('app_mention', async ({ event, client }) => {
       prompt = `${bijnaam} heeft je gementioned zonder verdere boodschap. Reageer passend.`;
     }
 
-    const tekst = await kroketResponse(prompt);
+    let tekst = await kroketResponse(prompt);
+    // 25% kans: voeg een wiskundig correcte vrijdag-countdown toe
+    if (Math.random() < 0.25) {
+      const countdown = await maakVrijdagCountdownZin();
+      if (countdown) tekst += `\n\n${countdown}`;
+    }
     // Reageer in thread als de mention zelf in een thread plaatsvond
     const thread_ts = event.thread_ts || (event.parent_user_id ? event.ts : undefined);
     await postToChannel(client, event.channel, tekst, { thread_ts });
