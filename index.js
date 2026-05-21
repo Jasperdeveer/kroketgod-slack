@@ -1959,46 +1959,48 @@ function planZonnestralenEvent(client) {
   const vanafMinuten = Math.max(nuMinuten + 5, VROEGST);
   if (vanafMinuten >= LATEST) return;
 
-  const doelMinuten = vanafMinuten + Math.floor(Math.random() * (LATEST - vanafMinuten));
-  const delayMs = (doelMinuten - nuMinuten) * 60_000
-    - (now.getSeconds() * 1000 + now.getMilliseconds());
+  const JASPER_ID = 'U08ALFNQB1V';
+  const members = loadMembers();
 
-  const dUur = Math.floor(doelMinuten / 60);
-  const dMin = String(doelMinuten % 60).padStart(2, '0');
-  console.log(`☀️ Zonnestralen-event gepland voor ~${dUur}:${dMin} AMS (${Math.round(delayMs / 60_000)} min.)`);
+  // Plan per lid een apart willekeurig moment
+  for (const [userId, lid] of Object.entries(members)) {
+    const isJasper = userId === JASPER_ID;
+    const delta = isJasper ? 2 : (Math.random() < 0.5 ? 1 : -1);
 
-  setTimeout(async () => {
-    try {
-      const JASPER_ID = 'U08ALFNQB1V';
-      const members = loadMembers();
+    const doelMinuten = vanafMinuten + Math.floor(Math.random() * (LATEST - vanafMinuten));
+    const delayMs = (doelMinuten - nuMinuten) * 60_000
+      - (now.getSeconds() * 1000 + now.getMilliseconds());
 
-      // Jasper +2, rest willekeurig +1 of -1
-      pasScoreAan(JASPER_ID, 2);
-      const mutaties = [];
-      for (const [userId, lid] of Object.entries(members)) {
-        if (userId === JASPER_ID) continue;
-        const delta = Math.random() < 0.5 ? 1 : -1;
+    const dUur = Math.floor(doelMinuten / 60);
+    const dMin = String(doelMinuten % 60).padStart(2, '0');
+    console.log(`☀️ Zonnestralen-event ${lid.bijnaam}: ~${dUur}:${dMin} AMS (${delta > 0 ? '+' : ''}${delta} pt)`);
+
+    setTimeout(async () => {
+      try {
         pasScoreAan(userId, delta);
-        mutaties.push({ bijnaam: lid.bijnaam, delta });
+        const teken = delta > 0 ? `+${delta}` : `${delta}`;
+        let promptTekst;
+        if (isJasper) {
+          promptTekst =
+            `De zonnestralen hebben het vetbad bereikt en troffen de pan van ${lid.bijnaam} het hardst. ` +
+            `De Kroket God kent hem ${teken} kroketpunten toe als kosmische beloning. ` +
+            `Spreek dit plechtig uit. Noem de naam en het aantal punten. Geen inleidingszin.`;
+        } else if (delta > 0) {
+          promptTekst =
+            `De zonnestralen hebben het vetbad bereikt. Een straal viel gunstig op ${lid.bijnaam}. ` +
+            `De Kroket God kent hem ${teken} kroketpunt toe. Spreek dit plechtig maar kort uit. Geen inleidingszin.`;
+        } else {
+          promptTekst =
+            `De zonnestralen hebben het vetbad bereikt — maar de straal die ${lid.bijnaam} trof was koud en scheef. ` +
+            `De Kroket God trekt hem 1 kroketpunt af als kosmische correctie. Spreek dit kort en droog uit. Geen inleidingszin.`;
+        }
+        const tekst = await kroketResponse(promptTekst, 300, false);
+        await postToChannel(client, process.env.SLACK_CHANNEL_ID, tekst);
+      } catch (err) {
+        console.error(`Fout bij zonnestralen-event (${lid.bijnaam}):`, err);
       }
-
-      const jasperBijnaam = members[JASPER_ID]?.bijnaam || 'Mr. KroketPet';
-      const mutatiesZin = mutaties
-        .map(m => `${m.bijnaam} ${m.delta > 0 ? '+1' : '−1'}`)
-        .join(', ');
-
-      const tekst = await kroketResponse(
-        `De zonnestralen hebben vandaag het vetbad bereikt — een kosmisch verschijnsel dat de Hoge Frituurraad niet negeert. ` +
-        `De Kroket God past de puntentelling aan: ${jasperBijnaam} ontvangt +2 kroketpunten (de zon trof zijn pan het sterkst). ` +
-        `De overige volgelingen ondergaan een kosmische correctie: ${mutatiesZin}. ` +
-        `Spreek dit uit als een kosmisch decreet. Noem elke volgeling bij naam met zijn puntenmutatie. Geen inleidingszin.`,
-        500, false
-      );
-      await postToChannel(client, process.env.SLACK_CHANNEL_ID, tekst);
-    } catch (err) {
-      console.error('Fout bij zonnestralen-event:', err);
-    }
-  }, delayMs);
+    }, delayMs);
+  }
 }
 
 // ── Start ──────────────────────────────────────────────────────────────────────
