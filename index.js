@@ -1936,6 +1936,71 @@ async function migreerVerbanningKroketPet(client) {
   await postToChannel(client, process.env.SLACK_CHANNEL_ID, tekst);
 }
 
+// ── Eenmalig: zonnestralen-event vandaag op willekeurig moment ────────────────
+
+function planZonnestralenEvent(client) {
+  const now = new Date();
+  const fmt = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Europe/Amsterdam', hour: 'numeric', minute: 'numeric', hour12: false,
+  });
+  const parts = fmt.formatToParts(now);
+  const amsUur = parseInt(parts.find(p => p.type === 'hour').value);
+  const amsMin = parseInt(parts.find(p => p.type === 'minute').value);
+  const nuMinuten = amsUur * 60 + amsMin;
+
+  const VROEGST = 10 * 60;  // 10:00
+  const LATEST  = 17 * 60;  // 17:00
+
+  if (nuMinuten >= LATEST) {
+    console.log('☀️ Zonnestralen-event: venster voorbij voor vandaag.');
+    return;
+  }
+
+  const vanafMinuten = Math.max(nuMinuten + 5, VROEGST);
+  if (vanafMinuten >= LATEST) return;
+
+  const doelMinuten = vanafMinuten + Math.floor(Math.random() * (LATEST - vanafMinuten));
+  const delayMs = (doelMinuten - nuMinuten) * 60_000
+    - (now.getSeconds() * 1000 + now.getMilliseconds());
+
+  const dUur = Math.floor(doelMinuten / 60);
+  const dMin = String(doelMinuten % 60).padStart(2, '0');
+  console.log(`☀️ Zonnestralen-event gepland voor ~${dUur}:${dMin} AMS (${Math.round(delayMs / 60_000)} min.)`);
+
+  setTimeout(async () => {
+    try {
+      const JASPER_ID = 'U08ALFNQB1V';
+      const members = loadMembers();
+
+      // Jasper +2, rest willekeurig +1 of -1
+      pasScoreAan(JASPER_ID, 2);
+      const mutaties = [];
+      for (const [userId, lid] of Object.entries(members)) {
+        if (userId === JASPER_ID) continue;
+        const delta = Math.random() < 0.5 ? 1 : -1;
+        pasScoreAan(userId, delta);
+        mutaties.push({ bijnaam: lid.bijnaam, delta });
+      }
+
+      const jasperBijnaam = members[JASPER_ID]?.bijnaam || 'Mr. KroketPet';
+      const mutatiesZin = mutaties
+        .map(m => `${m.bijnaam} ${m.delta > 0 ? '+1' : '−1'}`)
+        .join(', ');
+
+      const tekst = await kroketResponse(
+        `De zonnestralen hebben vandaag het vetbad bereikt — een kosmisch verschijnsel dat de Hoge Frituurraad niet negeert. ` +
+        `De Kroket God past de puntentelling aan: ${jasperBijnaam} ontvangt +2 kroketpunten (de zon trof zijn pan het sterkst). ` +
+        `De overige volgelingen ondergaan een kosmische correctie: ${mutatiesZin}. ` +
+        `Spreek dit uit als een kosmisch decreet. Noem elke volgeling bij naam met zijn puntenmutatie. Geen inleidingszin.`,
+        500, false
+      );
+      await postToChannel(client, process.env.SLACK_CHANNEL_ID, tekst);
+    } catch (err) {
+      console.error('Fout bij zonnestralen-event:', err);
+    }
+  }, delayMs);
+}
+
 // ── Start ──────────────────────────────────────────────────────────────────────
 
 (async () => {
@@ -1943,4 +2008,5 @@ async function migreerVerbanningKroketPet(client) {
   await app.start();
   console.log('⚜️ De Kroket God is wakker. Poort 3000 staat open.');
   await migreerVerbanningKroketPet(app.client);
+  planZonnestralenEvent(app.client);
 })();
