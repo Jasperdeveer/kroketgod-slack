@@ -1191,10 +1191,15 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
           // Strafpunt voor de hoogmoed
           await pasScoreAanMetCheck(client, command.user_id, -1);
           const waarschuwing = await kroketResponse(
-            `${aanvrager} heeft zojuist geprobeerd ZICHZELF te eren — een daad van ongekende hoogmoed binnen de snackleer. De Kroket God spreekt een felle waarschuwing uit: zelflof is een doodzonde tegen de Hoge Frituurraad. Als straf wordt 1 kroketpunt afgenomen. Wees scherp, plechtig en publiekelijk. Geen inleidingszin.`,
+            `${aanvrager} heeft zojuist geprobeerd ZICHZELF een kroketpunt te geven. De Kroket God ontsteekt in HEILIGE WOEDE. ` +
+            `Dit is de ergste vorm van hoogmoed die de snackleer kent — zelflof, eigendunk, narcistische paneerlaag. ` +
+            `Gebruik het spoedmelding- of decreet-formaat. Wees furieus, vernietigend en publiekelijk. ` +
+            `Kondig aan dat 1 kroketpunt als straf is afgenomen. Geen inleidingszin.`,
             400, false
           );
-          await postToChannel(client, command.channel_id, waarschuwing);
+          await postToChannel(client, command.channel_id,
+            `<@${command.user_id}>\n\n${waarschuwing}`
+          );
           return;
         }
 
