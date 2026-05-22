@@ -894,6 +894,7 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
         { cmd: 'dossier [naam]',        uitleg: 'kroket-CV van een lid' },
         { cmd: 'stem [naam]',           uitleg: 'stem op Held van de Week' },
         { cmd: 'hoelang',               uitleg: 'hoe lang nog tot vrijdag 12:00' },
+        { cmd: 'feitje',               uitleg: 'kroketfeitje, mop of historisch weetje' },
         { cmd: 'frituur [tekst]',       uitleg: 'AI-afbeelding' },
         { cmd: 'orakel [vraag]',        uitleg: 'cryptisch antwoord uit het Vetbad' },
         { cmd: 'meld [naam]',           uitleg: 'rapporteer een vermoedelijke tegenstander' },
@@ -1029,7 +1030,12 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
       return;
     }
 
-    // ── Verborgen command: vrijdag-countdown op aanvraag (niet in help/prompts)
+    // ── Verborgen commands (niet in help, wel in prompts)
+    if (input === 'feitje') {
+      await stuurKroketFeitje(client);
+      return;
+    }
+
     if (input === 'hoelang') {
       const countdown = await maakVrijdagCountdownZin();
       if (countdown) await postToChannel(client, command.channel_id, countdown);
@@ -2025,6 +2031,55 @@ async function maybeSpontaan() {
 
 cron.schedule('0 10 * * 2,4', maybeSpontaan, { timezone: 'Europe/Amsterdam' });
 cron.schedule('0 14 * * 2,4', maybeSpontaan, { timezone: 'Europe/Amsterdam' });
+
+// ── Kroketfeitjes / mopjes / historische weetjes ──────────────────────────────
+
+const FEITJE_TYPES = [
+  'een verrassend, feitelijk correct weetje over de Nederlandse kroket (herkomst, ingrediënten, frituurgeschiedenis of populaire varianten)',
+  'een feitelijk correct historisch feitje over frituurcultuur in Nederland of België',
+  'een droge, originele mop over kroketten of frituurcultuur — de grap moet kloppen en grappig zijn',
+  'een feitelijk correct weetje over ragout, paneerlaag of frituurvet',
+  'een verrassend feitje over de FEBO of de Nederlandse snackcultuur',
+  'een historisch feitje over het ontstaan van de bitterbal, kroket of gehaktbal',
+];
+
+async function stuurKroketFeitje(client) {
+  const type = FEITJE_TYPES[Math.floor(Math.random() * FEITJE_TYPES.length)];
+  const tekst = await kroketResponse(
+    `Deel ${type}. Presenteer dit als een goddelijk inzicht of decreet van de Kroket God. ` +
+    `Kort en concreet — max 3 zinnen. Geen inleidingszin.`,
+    300, false
+  );
+  await postToChannel(client, process.env.SLACK_CHANNEL_ID, tekst);
+}
+
+function planKroketFeitje(client) {
+  const nu = new Date();
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Europe/Amsterdam', hour: 'numeric', minute: 'numeric', second: 'numeric', hour12: false,
+  }).formatToParts(nu);
+  const get = (t) => parseInt(parts.find(p => p.type === t)?.value);
+  const amsUur = get('hour'), amsMin = get('minute'), amsSec = get('second');
+  const nuSec = amsUur * 3600 + amsMin * 60 + amsSec;
+
+  const VROEGST = 7 * 3600 + 30 * 60;  // 07:30
+  const LATEST  = 15 * 3600;            // 15:00
+  const vanafSec = Math.max(nuSec + 60, VROEGST);
+  if (vanafSec >= LATEST) return;
+
+  const doelSec = vanafSec + Math.floor(Math.random() * (LATEST - vanafSec));
+  const delayMs = (doelSec - nuSec) * 1000;
+
+  const dUur = Math.floor(doelSec / 3600);
+  const dMin = String(Math.floor((doelSec % 3600) / 60)).padStart(2, '0');
+  console.log(`🧆 Kroketfeitje gepland voor ~${dUur}:${dMin} AMS`);
+  setTimeout(() => stuurKroketFeitje(client), delayMs);
+}
+
+// Weekdagen 07:30 — 60% kans op een kroketfeitje die dag
+cron.schedule('30 7 * * 1-5', () => {
+  if (Math.random() < 0.60) planKroketFeitje(app.client);
+}, { timezone: 'Europe/Amsterdam' });
 
 // ── Willekeurige kroketevents ─────────────────────────────────────────────────
 
