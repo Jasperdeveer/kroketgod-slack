@@ -16,6 +16,8 @@ const app = new App({
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 const ALLOWED_CHANNELS = (process.env.ALLOWED_CHANNELS || 'kroket-illuminati').split(',');
+// Testkanalen: verbanning wordt hier genegeerd zodat testen altijd werkt
+const TEST_KANALEN = ['bruin-schaap'];
 
 // ── Statische bestanden — eenmalig ingeladen bij opstarten ────────────────────
 const TONE_OF_VOICE = fs.readFileSync(path.join(__dirname, 'tone_of_voice.txt'), 'utf8');
@@ -955,7 +957,7 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
     const DM_TOEGESTAAN = ['biecht', 'orakel', 'dossier', 'ranglijst', 'prompts'];
     const eersteWoord = input.split(' ')[0];
 
-    if (!ALLOWED_CHANNELS.includes(command.channel_name) && !isDM) {
+    if (!ALLOWED_CHANNELS.includes(command.channel_name) && !TEST_KANALEN.includes(command.channel_name) && !isDM) {
       await respond('De Kroket God spreekt alleen in de gewijde kanalen. Begeef u daarheen.');
       return;
     }
@@ -970,7 +972,7 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
     // ── Verbanning check — verbannen leden kunnen geen publieke commando's uitvoeren
     //    Passieve commando's (ranglijst, dossier, help, prompts) zijn wel toegestaan
     const PASSIEVE_COMMANDO_S = ['ranglijst', 'dossier', 'help', 'prompts'];
-    if (isVerbannen(command.user_id) && !PASSIEVE_COMMANDO_S.includes(eersteWoord)) {
+    if (isVerbannen(command.user_id) && !PASSIEVE_COMMANDO_S.includes(eersteWoord) && !TEST_KANALEN.includes(command.channel_name)) {
       const banData = loadVerbanning()[command.user_id];
       const terugTijd = banData ? new Date(banData.tot).toLocaleString('nl-NL', {
         timeZone: 'Europe/Amsterdam', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit'
@@ -1629,16 +1631,18 @@ async function analyseerEnGenereer(prompt) {
 app.event('app_mention', async ({ event, client }) => {
   try {
     if (event.channel !== process.env.SLACK_CHANNEL_ID &&
-        !ALLOWED_CHANNELS.includes(event.channel_name)) return;
+        !ALLOWED_CHANNELS.includes(event.channel_name) &&
+        !TEST_KANALEN.includes(event.channel_name)) return;
 
     const members = loadMembers();
     const userId  = event.user;
     const bijnaam = members[userId]?.bijnaam || 'Ongepaneerde vreemdeling';
     const input   = vervangNamen(event.text.replace(/<@[^>]+>/g, '').trim());
+    const isTestKanaal = TEST_KANALEN.includes(event.channel_name);
 
-    // Verbannen gebruiker — cryptisch bericht vanuit het ballingschap
+    // Verbannen gebruiker — cryptisch bericht vanuit het ballingschap (niet in testkanaal)
     const banStatus = isVerbannen(userId);
-    if (banStatus) {
+    if (banStatus && !isTestKanaal) {
       const terugTijd = new Date(banStatus.tot).toLocaleString('nl-NL', {
         timeZone: 'Europe/Amsterdam', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit'
       });
