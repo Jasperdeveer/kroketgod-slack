@@ -1102,7 +1102,7 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
         await client.chat.postMessage({ channel: command.channel_id, text: schoonOutput(tekst) });
       } else {
         await postToChannel(client, command.channel_id, tekst);
-        if (zonde) logGebeurtenis('biecht', command.user_id, `${aanvrager} deed openbare biecht`, zonde);
+        if (zonde) logGebeurtenis('biecht', null, `Een anonieme volgeling deed openbare biecht`, zonde);
       }
       return;
     }
@@ -2230,8 +2230,9 @@ async function stuurWeekSamenvatting(client) {
   // Bouw een leesbare gebeurtenissenlijst voor de AI.
   // @mentions als <@USERID> zodat Slack ze correct rendert — AI mag deze NIET aanpassen.
   const eventLijst = data.events.map(e => {
-    const bijnaam = members[e.userId]?.bijnaam || 'Onbekend';
-    const mention = `<@${e.userId}>`;
+    const isAnoniem = !e.userId;
+    const bijnaam = isAnoniem ? 'Anonieme volgeling' : (members[e.userId]?.bijnaam || 'Onbekend');
+    const naamDeel = isAnoniem ? 'Anoniem' : `${bijnaam} (<@${e.userId}>)`;
     const datum = new Date(e.ts).toLocaleDateString('nl-NL', {
       weekday: 'long', day: 'numeric', month: 'long', timeZone: 'Europe/Amsterdam',
     });
@@ -2240,10 +2241,10 @@ async function stuurWeekSamenvatting(client) {
       belediging:  '😤 BELEDIGING',
       lofzang:     '🙏 LOFZANG',
       zelflof:     '🪞 ZELFLOF',
-      biecht:      '🕯️ BIECHT',
+      biecht:      '🕯️ BIECHT (anoniem — noem GEEN namen)',
       achievement: '🏆 PRESTATIE',
     }[e.type] || e.type.toUpperCase();
-    let regel = `${datum} | ${typeLabel} | ${bijnaam} (${mention}): ${e.beschrijving}`;
+    let regel = `${datum} | ${typeLabel} | ${naamDeel}: ${e.beschrijving}`;
     if (e.citaat) regel += `\n   → citaat: "${e.citaat}"`;
     return regel;
   }).join('\n\n');
