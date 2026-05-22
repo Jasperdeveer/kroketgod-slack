@@ -2694,6 +2694,60 @@ function planLunchwens20260521(client) {
   }, delayMs);
 }
 
+// ── Eenmalig verzonnen weekoverzicht op vrijdag 22-05-2026 om 15:50 ──────────
+
+function planVerzonnenWeekSamenvatting20260522(client) {
+  const FLAG = path.join(__dirname, 'verzonnen_weekoverzicht_20260522.done');
+  if (fs.existsSync(FLAG)) return;
+
+  const nu = new Date();
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Europe/Amsterdam',
+    hour: 'numeric', minute: 'numeric', second: 'numeric', hour12: false,
+  }).formatToParts(nu);
+  const get = (t) => parseInt(parts.find(p => p.type === t)?.value);
+  const amsUur = get('hour'), amsMin = get('minute'), amsSec = get('second');
+
+  const DOEL = 15 * 3600 + 50 * 60; // 15:50:00
+  const nuSec = amsUur * 3600 + amsMin * 60 + amsSec;
+  const delayMs = (DOEL - nuSec) * 1000;
+  if (delayMs <= 0) {
+    console.log('📋 Verzonnen weekoverzicht: tijd al voorbij, sla over.');
+    return;
+  }
+
+  console.log(`📋 Verzonnen weekoverzicht gepland voor 15:50 AMS (${Math.round(delayMs / 60_000)} min.)`);
+
+  setTimeout(async () => {
+    try {
+      if (fs.existsSync(FLAG)) return;
+      fs.writeFileSync(FLAG, new Date().toISOString());
+
+      const tekst = await kroketResponse(
+        `De Kroket God sluit een memorabele week af met zijn plechtige weekoverzicht voor de Kroket Illuminati. ` +
+        `Gebruik de onderstaande verzonnen (maar volledig aannemelijke) gebeurtenissen als basis:\n\n` +
+        `Maandag | 🙏 LOFZANG | Mr. Kroketinho (<@U0A4XPQF3CM>): riep hardop "LEKKER KROKETJEEE" midden in een serieuze Teams-vergadering terwijl hij een lauw kroketje uit zijn jaszak haalde.\n\n` +
+        `Dinsdag | 🪞 ZELFLOF | Mr. Te Lang Gefrituurde Kroket (<@U09L37GRASZ>): probeerde zichzelf een kroketpunt toe te kennen omdat hij — naar eigen zeggen — "de meest goudbruine kroket van zijn generatie" had gefrituurd.\n\n` +
+        `Woensdag | 🕯️ BIECHT (anoniem — noem ABSOLUUT GEEN namen of hints): Een anonieme volgeling biechtte op dat hij jarenlang zijn kroketten heeft besprenkeld met — men huivere — ketjap.\n\n` +
+        `Donderdag | 🏆 PRESTATIE | Mr. KroketPet (<@U08ALFNQB1V>): hield een kroket exact op de perfecte kerntemperatuur van 72°C gedurende drie aaneengesloten uren. De Hoge Frituurraad verklaarde dit officieel een wonder.\n\n` +
+        `Vrijdag | 😤 BELEDIGING | De Groene Kroket (<@U08PWNK9V7H>): beweerde in het openbaar dat een groentekroket "misschien wel lekkerder is dan een rundvleeskroket". De frituurlucht sidderde.\n\n` +
+        `Regels:\n` +
+        `- Verwerk de @mentions LETTERLIJK zoals gegeven (formaat <@USERID>) — verander ze ABSOLUUT NIET.\n` +
+        `- Toon: dramatisch, grappig, plechtig — alsof het een historische jaarbeurt is van de Hoge Frituurraad.\n` +
+        `- Structuur: plechtige aanhef → behandel 3–5 highlights → sluit groots af.\n` +
+        `- Afsluiting: een uitgebreide, warme en plechtige weekendwens voor alle volgelingen. Het is een lang weekend. Wens iedereen uitdrukkelijk een prettig lang weekend toe. Waarschuw hen met klem dat zij zichzelf NIET te krokant mogen laten worden in de zon — dat is het exclusieve domein van de frituur, niet van het hemellichaam.\n` +
+        `- Geen inleidingszin. Begin direct met de aanhef.`,
+        1100, false
+      );
+
+      await postToChannel(client, process.env.SLACK_CHANNEL_ID, tekst);
+      console.log('📋 Verzonnen weekoverzicht gepost.');
+    } catch (err) {
+      console.error('Fout bij verzonnen weekoverzicht:', err);
+    }
+  }, delayMs);
+}
+
 // ── Startup: los testkanaal-namen op naar channel IDs ─────────────────────────
 // Socket Mode events bevatten alleen een channel ID, geen channel_name.
 // Door de IDs eenmalig op te zoeken werkt isTestKanaalCheck() direct na opstarten.
@@ -2790,6 +2844,7 @@ async function amnestie20260522(client) {
   await amnestie20260522(app.client);
   planGenade20260522(app.client);
   planLunchwens20260521(app.client);
+  planVerzonnenWeekSamenvatting20260522(app.client);
 })();
 
 async function banSanderEenmalig(client) {
