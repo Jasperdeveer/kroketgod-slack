@@ -1645,14 +1645,24 @@ async function analyseerEnGenereer(prompt) {
 
 app.event('app_mention', async ({ event, client }) => {
   try {
-    // channel_name is niet beschikbaar in Socket Mode mention-events — gebruik isTestKanaalCheck
-    const isTestKanaal = isTestKanaalCheck(event.channel, event.channel_name);
+    // channel_name is niet beschikbaar in Socket Mode mention-events — gebruik isTestKanaalCheck.
+    // Als het kanaal onbekend is, doe eenmalig een lookup en sla het op.
+    let isTestKanaal = isTestKanaalCheck(event.channel, event.channel_name);
+    if (!isTestKanaal && event.channel !== process.env.SLACK_CHANNEL_ID
+        && !ALLOWED_CHANNELS.includes(event.channel_name)) {
+      try {
+        const info = await client.conversations.info({ channel: event.channel });
+        const naam = info.channel?.name;
+        if (naam && TEST_KANALEN.includes(naam)) {
+          TEST_KANAAL_IDS.add(event.channel);
+          console.log(`🧪 Testkanaal ontdekt via mention: #${naam} → ${event.channel}`);
+          isTestKanaal = true;
+        }
+      } catch (_) {}
+    }
     if (event.channel !== process.env.SLACK_CHANNEL_ID &&
         !ALLOWED_CHANNELS.includes(event.channel_name) &&
         !isTestKanaal) return;
-
-    // Leer testkanaal ID ook via mentions
-    if (isTestKanaal && event.channel) TEST_KANAAL_IDS.add(event.channel);
 
     const members = loadMembers();
     const userId  = event.user;
@@ -1792,11 +1802,23 @@ async function verdientSpontaanReactie(tekst) {
   }
 }
 
-app.event('message', async ({ event }) => {
+app.event('message', async ({ event, client }) => {
   try {
-    // channel_name is NIET aanwezig in Socket Mode message-events — gebruik isTestKanaalCheck
-    // zodat we testkanalen herkennen via hun geleerde channel ID.
-    const isTestKanaalMsg = isTestKanaalCheck(event.channel, event.channel_name);
+    // channel_name is NIET aanwezig in Socket Mode message-events — gebruik isTestKanaalCheck.
+    // Als het kanaal nog onbekend is, doe eenmalig een lookup en sla het ID op.
+    let isTestKanaalMsg = isTestKanaalCheck(event.channel, event.channel_name);
+
+    if (!isTestKanaalMsg && event.channel !== process.env.SLACK_CHANNEL_ID) {
+      try {
+        const info = await client.conversations.info({ channel: event.channel });
+        const naam = info.channel?.name;
+        if (naam && TEST_KANALEN.includes(naam)) {
+          TEST_KANAAL_IDS.add(event.channel);
+          console.log(`🧪 Testkanaal ontdekt via bericht: #${naam} → ${event.channel}`);
+          isTestKanaalMsg = true;
+        }
+      } catch (_) {}
+    }
 
     if (event.channel !== process.env.SLACK_CHANNEL_ID && !isTestKanaalMsg) return;
     if (event.bot_id) return;
