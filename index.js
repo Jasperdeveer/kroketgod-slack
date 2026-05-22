@@ -169,6 +169,31 @@ function getUitverkorene(positief = true) {
   return entries[Math.floor(Math.random() * entries.length)];
 }
 
+// ── Weekgebeurtenissen ────────────────────────────────────────────────────────
+// Bijzondere momenten worden bijgehouden en op vrijdag samengevat.
+
+const loadWeekgebeurtenissen = () => readJSON('weekgebeurtenissen.json', { weekStart: null, events: [] });
+const saveWeekgebeurtenissen = (data) => writeJSON('weekgebeurtenissen.json', data);
+
+function logGebeurtenis(type, userId, beschrijving, citaat = null) {
+  try {
+    const data = loadWeekgebeurtenissen();
+    const weekStart = getMondayOfWeek();
+    if (data.weekStart !== weekStart) {
+      data.weekStart = weekStart;
+      data.events = [];
+    }
+    data.events.push({
+      ts: Date.now(),
+      type,
+      userId,
+      beschrijving,
+      ...(citaat ? { citaat } : {}),
+    });
+    saveWeekgebeurtenissen(data);
+  } catch (_) {}
+}
+
 // ── Scores ─────────────────────────────────────────────────────────────────────
 
 const loadScores = () => readJSON('scores.json', {});
@@ -404,6 +429,7 @@ async function controleerAchievements(client, userId, oudeScore, nieuweScore) {
         } catch (err) {
           console.error('Achievement post fout:', err.message);
         }
+        logGebeurtenis('achievement', userId, `${bijnaam} verdiende het relikwie "${a.naam}"`);
       }
       // Anders: stilletjes markeren als ontgrendeld (backfill)
     }
@@ -905,6 +931,7 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
       const GEHEIME_COMMANDO_S = [
         { categorie: '⚙️ Extra commando\'s' },
         { cmd: 'zondebok',              uitleg: '−1 punt willekeurig lid' },
+        { cmd: 'weekoverzicht',         uitleg: 'humoristisch overzicht van de week' },
         { cmd: 'begenade [naam]',       uitleg: 'verbanning vroegtijdig opheffen' },
         { cmd: 'dossier [naam]',        uitleg: 'kroket-CV van een lid' },
         { cmd: 'stem [naam]',           uitleg: 'stem op Held van de Week' },
@@ -1053,6 +1080,11 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
       return;
     }
 
+    if (input === 'weekoverzicht') {
+      await stuurWeekSamenvatting(client);
+      return;
+    }
+
     if (input === 'hoelang') {
       const countdown = await maakVrijdagCountdownZin();
       if (countdown) await postToChannel(client, command.channel_id, countdown);
@@ -1070,6 +1102,7 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
         await client.chat.postMessage({ channel: command.channel_id, text: schoonOutput(tekst) });
       } else {
         await postToChannel(client, command.channel_id, tekst);
+        if (zonde) logGebeurtenis('biecht', command.user_id, `${aanvrager} deed openbare biecht`, zonde);
       }
       return;
     }
@@ -1190,6 +1223,7 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
         if (eerId === command.user_id) {
           // Strafpunt voor de hoogmoed
           await pasScoreAanMetCheck(client, command.user_id, -1);
+          logGebeurtenis('zelflof', command.user_id, `${aanvrager} probeerde zichzelf een kroketpunt te geven en verloor er één als straf`);
           const waarschuwing = await kroketResponse(
             `${aanvrager} heeft zojuist geprobeerd ZICHZELF een kroketpunt te geven. De Kroket God ontsteekt in HEILIGE WOEDE. ` +
             `Dit is de ergste vorm van hoogmoed die de snackleer kent — zelflof, eigendunk, narcistische paneerlaag. ` +
@@ -1761,6 +1795,7 @@ app.event('app_mention', async ({ event, client }) => {
           opgelegd: new Date().toISOString(),
         };
         saveVerbanning(verbanning);
+        logGebeurtenis('verbanning', userId, `${bijnaam} werd verbannen voor ${dagen} dag(en)`, input);
 
         const terugDatum = tot.toLocaleDateString('nl-NL', { timeZone: 'Europe/Amsterdam', day: 'numeric', month: 'long' });
         const thread_ts = event.thread_ts || (event.parent_user_id ? event.ts : undefined);
@@ -1773,11 +1808,14 @@ app.event('app_mention', async ({ event, client }) => {
 
       if (sentiment === 'BELEDIGING' && members[userId] && scoreKans) {
         pasScoreAan(userId, -1);
+        logGebeurtenis('belediging', userId, `${bijnaam} beledigd de Kroket God en verloor een punt`, input);
         prompt = `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} heeft zich beledigend uitgelaten tegen de Kroket God: "${input}". Straf hen met goddelijk gezag. Het systeem heeft al 1 kroketpunt afgenomen — bevestig dit. Begin de inleidingszin letterlijk met: ${introStart}`;
       } else if (sentiment === 'LOFZANG' && members[userId] && scoreKans) {
         await pasScoreAanMetCheck(client, userId, 1);
+        logGebeurtenis('lofzang', userId, `${bijnaam} prees de Kroket God en verdiende een punt`, input);
         prompt = `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} heeft zich respectvol uitgelaten: "${input}". Zegen hen plechtig. Het systeem heeft al 1 kroketpunt toegekend — bevestig dit. Begin de inleidingszin letterlijk met: ${introStart}`;
       } else if (sentiment === 'BELEDIGING') {
+        logGebeurtenis('belediging', userId, `${bijnaam} liet zich beledigend uit`, input);
         prompt = `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} heeft zich beledigend uitgelaten: "${input}". Reageer bestraffend. Vermeld GEEN puntenaantal — het systeem heeft niets gewijzigd. Begin de inleidingszin letterlijk met: ${introStart}`;
       } else if (sentiment === 'LOFZANG') {
         prompt = `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} heeft zich respectvol uitgelaten: "${input}". Reageer met een warme zegen. Vermeld GEEN puntenaantal — het systeem heeft niets gewijzigd. Begin de inleidingszin letterlijk met: ${introStart}`;
@@ -2176,6 +2214,65 @@ function planKroketFeitje(client) {
 // Weekdagen 07:30 — 60% kans op een kroketfeitje die dag
 cron.schedule('30 7 * * 1-5', () => {
   if (Math.random() < 0.60) planKroketFeitje(app.client);
+}, { timezone: 'Europe/Amsterdam' });
+
+// ── Weekoverzicht: vrijdag 16:30 ──────────────────────────────────────────────
+
+async function stuurWeekSamenvatting(client) {
+  const data = loadWeekgebeurtenissen();
+  if (!data.events || data.events.length === 0) {
+    console.log('📋 Weekoverzicht: geen gebeurtenissen deze week.');
+    return;
+  }
+
+  const members = loadMembers();
+
+  // Bouw een leesbare gebeurtenissenlijst voor de AI.
+  // @mentions als <@USERID> zodat Slack ze correct rendert — AI mag deze NIET aanpassen.
+  const eventLijst = data.events.map(e => {
+    const bijnaam = members[e.userId]?.bijnaam || 'Onbekend';
+    const mention = `<@${e.userId}>`;
+    const datum = new Date(e.ts).toLocaleDateString('nl-NL', {
+      weekday: 'long', day: 'numeric', month: 'long', timeZone: 'Europe/Amsterdam',
+    });
+    const typeLabel = {
+      verbanning:  '⛔ VERBANNING',
+      belediging:  '😤 BELEDIGING',
+      lofzang:     '🙏 LOFZANG',
+      zelflof:     '🪞 ZELFLOF',
+      biecht:      '🕯️ BIECHT',
+      achievement: '🏆 PRESTATIE',
+    }[e.type] || e.type.toUpperCase();
+    let regel = `${datum} | ${typeLabel} | ${bijnaam} (${mention}): ${e.beschrijving}`;
+    if (e.citaat) regel += `\n   → citaat: "${e.citaat}"`;
+    return regel;
+  }).join('\n\n');
+
+  const tekst = await kroketResponse(
+    `De Kroket God sluit de week af met een humoristisch weekoverzicht voor de Heren van de Kroket Illuminati. ` +
+    `Gebruik de onderstaande gebeurtenissen als basis. Regels:\n` +
+    `- Verwerk de @mentions LETTERLIJK zoals gegeven (formaat <@USERID>) — verander ze ABSOLUUT NIET.\n` +
+    `- Citeer de exacte citaten waar vermeld.\n` +
+    `- Toon: dramatisch, grappig, in de stijl van de Kroket God — alsof het een jaarrede is.\n` +
+    `- Structuur: plechtige aanhef → 3-5 highlights → afsluiting met oordeel over de week.\n` +
+    `- Geen inleidingszin.\n\n` +
+    `Gebeurtenissen deze week:\n\n${eventLijst}`,
+    900, false
+  );
+
+  await postToChannel(client, process.env.SLACK_CHANNEL_ID, tekst);
+
+  // Reset voor volgende week
+  saveWeekgebeurtenissen({ weekStart: getMondayOfWeek(), events: [] });
+  console.log('📋 Weekoverzicht gepost en log gereset.');
+}
+
+cron.schedule('30 16 * * 5', async () => {
+  try {
+    await stuurWeekSamenvatting(app.client);
+  } catch (err) {
+    console.error('Fout bij weekoverzicht:', err);
+  }
 }, { timezone: 'Europe/Amsterdam' });
 
 // ── Willekeurige kroketevents ─────────────────────────────────────────────────
