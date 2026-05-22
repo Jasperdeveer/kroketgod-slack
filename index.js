@@ -1000,7 +1000,7 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
         150, false
       );
       await postToChannel(client, command.channel_id,
-        `${ballingTekst}\n\n_Terugkeer toegestaan vanaf: ${terugTijd}._`
+        `${ballingTekst}\n\n_De poorten heropenen zich op ${terugTijd}._`
       );
       return;
     }
@@ -1674,7 +1674,7 @@ app.event('app_mention', async ({ event, client }) => {
       );
       const thread_ts = event.thread_ts || (event.parent_user_id ? event.ts : undefined);
       await postToChannel(client, event.channel,
-        `${afvalligeTekst}\n\n_Terugkeer toegestaan vanaf: ${terugTijd}._`,
+        `${afvalligeTekst}\n\n_De poorten heropenen zich op ${terugTijd}._`,
         { thread_ts }
       );
       return;
