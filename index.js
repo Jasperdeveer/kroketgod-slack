@@ -1775,14 +1775,28 @@ async function verdientSpontaanReactie(tekst) {
 
 app.event('message', async ({ event }) => {
   try {
-    if (event.channel !== process.env.SLACK_CHANNEL_ID) return;
+    const isTestKanaalMsg = TEST_KANALEN.includes(event.channel_name);
+
+    if (event.channel !== process.env.SLACK_CHANNEL_ID && !isTestKanaalMsg) return;
     if (event.bot_id) return;
     if (event.subtype && !['file_share', 'thread_broadcast'].includes(event.subtype)) return;
     if (!event.user || !event.text?.trim()) return;
 
     const members = loadMembers();
     const bijnaam = members[event.user]?.bijnaam || 'Onbekende volgeling';
-    logBericht(bijnaam, event.text);
+    if (!isTestKanaalMsg) logBericht(bijnaam, event.text);
+
+    // Testkanaal: altijd reageren, geen gatekeeper, geen cooldown
+    if (isTestKanaalMsg) {
+      if (event.thread_ts) return;
+      const tekst = await kroketResponse(
+        `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} zei: "${event.text}". ` +
+        `Reageer als de Kroket God. Geen inleidingszin.`,
+        300
+      );
+      await postToChannel(app.client, event.channel, tekst);
+      return;
+    }
 
     // Spontane reactie — alleen voor bekende leden, niet in threads, niet tijdens cooldown
     if (!members[event.user]) return;
