@@ -1620,6 +1620,34 @@ app.view('intake_modal', async ({ ack, view, body, client }) => {
   }
 });
 
+// ── Banwaardig-check: is dit écht beledigend genoeg voor ballingschap? ────────
+// Tweede filter na sentimentanalyse — voorkomt dat grappige opmerkingen of
+// lichte kritiek tot een verbanning leiden.
+
+async function isBanwaardig(tekst) {
+  try {
+    const result = await groq.chat.completions.create({
+      model: 'llama-3.1-8b-instant',
+      max_tokens: 5,
+      temperature: 0,
+      messages: [
+        { role: 'system', content: 'Antwoord ALLEEN met JA of NEE. Geen uitleg.' },
+        {
+          role: 'user',
+          content:
+            `Is dit bericht écht beledigend, scheldend of openlijk aanvallend genoeg om ` +
+            `iemand te verbannen? Antwoord JA alleen bij echte scheldwoorden, persoonlijke ` +
+            `aanvallen of bewuste provocaties. Antwoord NEE bij grappen, milde kritiek, ` +
+            `sarcasme of overdrijving die duidelijk als grap bedoeld is. Bericht: "${tekst}"`,
+        },
+      ],
+    });
+    return result.choices[0].message.content.trim().toUpperCase().startsWith('JA');
+  } catch {
+    return false; // bij twijfel: niet verbannen
+  }
+}
+
 // ── Sentiment + reactie in één AI call ─────────────────────────────────────────
 
 async function analyseerEnGenereer(prompt) {
@@ -1704,8 +1732,11 @@ app.event('app_mention', async ({ event, client }) => {
       // mag de naam NIET veranderen. Dit voorkomt dat het model een andere bijnaam invult.
       const introStart = `_${bijnaam} `;
 
-      // 20% kans op autonome verbanning bij belediging
-      const banKans = sentiment === 'BELEDIGING' && members[userId] && Math.random() < 0.20;
+      // Verbanning alleen bij échte belediging of uitschelding — extra check voorkomt
+      // dat grappige opmerkingen of mild sarcasme tot een ban leiden.
+      // Eerst de snelle sentimentcheck (BELEDIGING), dan een gerichte banwaardig-check.
+      const banKans = sentiment === 'BELEDIGING' && members[userId] && Math.random() < 0.20
+        && await isBanwaardig(input);
 
       if (banKans) {
         const verdictRuw = await kroketResponse(
@@ -2609,6 +2640,43 @@ async function correctieTeLang20260522() {
   fs.writeFileSync(FLAG, new Date().toISOString());
 }
 
+// ── Eenmalige amnestie: hef alle bans op, het was een grapje ─────────────────
+
+async function amnestie20260522(client) {
+  const FLAG = path.join(__dirname, 'amnestie_20260522.done');
+  if (fs.existsSync(FLAG)) return;
+  fs.writeFileSync(FLAG, new Date().toISOString());
+
+  const verbanning = loadVerbanning();
+  const members   = loadMembers();
+  const actieven  = Object.entries(verbanning)
+    .filter(([, v]) => Date.now() < new Date(v.tot).getTime());
+
+  // Verwijder alle bans
+  for (const [userId] of actieven) delete verbanning[userId];
+  saveVerbanning(verbanning);
+
+  if (actieven.length === 0) return;
+
+  const namen = actieven.map(([id]) => members[id]?.bijnaam || id).join(', ');
+  const tekst = await kroketResponse(
+    `De Kroket God trekt alle lopende verbanningen per direct in. ` +
+    `${namen} mogen terugkeren. De reden: het was slechts een test van de Hoge Frituurraad — ` +
+    `een proeve van karakter. Sommigen zijn gezakt, maar de frituur is genadig vandaag. ` +
+    `Spreek dit luchtig maar plechtig uit, met een vleugje zelfspot van de Kroket God. Geen inleidingszin.`,
+    400, false
+  );
+  await postToChannel(client, process.env.SLACK_CHANNEL_ID, tekst);
+
+  for (const [userId] of actieven) {
+    const bijnaam = members[userId]?.bijnaam || 'volgeling';
+    await postToChannel(client, process.env.SLACK_CHANNEL_ID,
+      `<@${userId}> — _de poorten staan weer open, ${bijnaam}._`
+    );
+  }
+  console.log(`🕊️ Amnestie uitgevoerd voor: ${namen}`);
+}
+
 // ── Start ──────────────────────────────────────────────────────────────────────
 
 (async () => {
@@ -2621,6 +2689,7 @@ async function correctieTeLang20260522() {
   await herstelScoresEenmalig();
   await banSanderEenmalig(app.client);
   await correctieTeLang20260522();
+  await amnestie20260522(app.client);
   planGenade20260522(app.client);
   planLunchwens20260521(app.client);
 })();
