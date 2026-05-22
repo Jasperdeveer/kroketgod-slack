@@ -18,6 +18,14 @@ const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 const ALLOWED_CHANNELS = (process.env.ALLOWED_CHANNELS || 'kroket-illuminati').split(',');
 // Testkanalen: verbanning wordt hier genegeerd zodat testen altijd werkt
 const TEST_KANALEN = ['bruin-schaap'];
+// Runtime-cache van testkanaal IDs — geleerd bij startup en via slash commands.
+// Nodig omdat message/app_mention events in Socket Mode géén channel_name bevatten,
+// alleen een channel ID. Slash commands bevatten wél channel_name én channel_id.
+const TEST_KANAAL_IDS = new Set();
+
+function isTestKanaalCheck(channelId, channelName) {
+  return TEST_KANALEN.includes(channelName) || TEST_KANAAL_IDS.has(channelId);
+}
 
 // ── Statische bestanden — eenmalig ingeladen bij opstarten ────────────────────
 const TONE_OF_VOICE = fs.readFileSync(path.join(__dirname, 'tone_of_voice.txt'), 'utf8');
@@ -870,6 +878,11 @@ function buildIntakeModal(triggerId) {
 app.command('/kroketgod', async ({ command, ack, respond, client }) => {
   await ack();
 
+  // Leer testkanaal IDs dynamisch zodat message/mention events ze ook herkennen
+  if (TEST_KANALEN.includes(command.channel_name) && command.channel_id) {
+    TEST_KANAAL_IDS.add(command.channel_id);
+  }
+
   const input = vervangNamen(command.text.trim());
 
   try {
@@ -957,7 +970,9 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
     const DM_TOEGESTAAN = ['biecht', 'orakel', 'dossier', 'ranglijst', 'prompts'];
     const eersteWoord = input.split(' ')[0];
 
-    if (!ALLOWED_CHANNELS.includes(command.channel_name) && !TEST_KANALEN.includes(command.channel_name) && !isDM) {
+    const isTestKanaalCmd = isTestKanaalCheck(command.channel_id, command.channel_name);
+
+    if (!ALLOWED_CHANNELS.includes(command.channel_name) && !isTestKanaalCmd && !isDM) {
       await respond('De Kroket God spreekt alleen in de gewijde kanalen. Begeef u daarheen.');
       return;
     }
@@ -972,7 +987,7 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
     // ── Verbanning check — verbannen leden kunnen geen publieke commando's uitvoeren
     //    Passieve commando's (ranglijst, dossier, help, prompts) zijn wel toegestaan
     const PASSIEVE_COMMANDO_S = ['ranglijst', 'dossier', 'help', 'prompts'];
-    if (isVerbannen(command.user_id) && !PASSIEVE_COMMANDO_S.includes(eersteWoord) && !TEST_KANALEN.includes(command.channel_name)) {
+    if (isVerbannen(command.user_id) && !PASSIEVE_COMMANDO_S.includes(eersteWoord) && !isTestKanaalCmd) {
       const banData = loadVerbanning()[command.user_id];
       const terugTijd = banData ? new Date(banData.tot).toLocaleString('nl-NL', {
         timeZone: 'Europe/Amsterdam', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit'
@@ -1630,15 +1645,19 @@ async function analyseerEnGenereer(prompt) {
 
 app.event('app_mention', async ({ event, client }) => {
   try {
+    // channel_name is niet beschikbaar in Socket Mode mention-events — gebruik isTestKanaalCheck
+    const isTestKanaal = isTestKanaalCheck(event.channel, event.channel_name);
     if (event.channel !== process.env.SLACK_CHANNEL_ID &&
         !ALLOWED_CHANNELS.includes(event.channel_name) &&
-        !TEST_KANALEN.includes(event.channel_name)) return;
+        !isTestKanaal) return;
+
+    // Leer testkanaal ID ook via mentions
+    if (isTestKanaal && event.channel) TEST_KANAAL_IDS.add(event.channel);
 
     const members = loadMembers();
     const userId  = event.user;
     const bijnaam = members[userId]?.bijnaam || 'Ongepaneerde vreemdeling';
     const input   = vervangNamen(event.text.replace(/<@[^>]+>/g, '').trim());
-    const isTestKanaal = TEST_KANALEN.includes(event.channel_name);
 
     // Verbannen gebruiker — cryptisch bericht vanuit het ballingschap (niet in testkanaal)
     const banStatus = isVerbannen(userId);
@@ -1775,7 +1794,9 @@ async function verdientSpontaanReactie(tekst) {
 
 app.event('message', async ({ event }) => {
   try {
-    const isTestKanaalMsg = TEST_KANALEN.includes(event.channel_name);
+    // channel_name is NIET aanwezig in Socket Mode message-events — gebruik isTestKanaalCheck
+    // zodat we testkanalen herkennen via hun geleerde channel ID.
+    const isTestKanaalMsg = isTestKanaalCheck(event.channel, event.channel_name);
 
     if (event.channel !== process.env.SLACK_CHANNEL_ID && !isTestKanaalMsg) return;
     if (event.bot_id) return;
@@ -2507,6 +2528,50 @@ function planLunchwens20260521(client) {
   }, delayMs);
 }
 
+// ── Startup: los testkanaal-namen op naar channel IDs ─────────────────────────
+// Socket Mode events bevatten alleen een channel ID, geen channel_name.
+// Door de IDs eenmalig op te zoeken werkt isTestKanaalCheck() direct na opstarten.
+
+async function laadTestKanaalIds(client) {
+  if (TEST_KANALEN.length === 0) return;
+  try {
+    let cursor;
+    do {
+      const res = await client.conversations.list({
+        types: 'public_channel,private_channel',
+        limit: 200,
+        cursor,
+      });
+      for (const ch of res.channels || []) {
+        if (TEST_KANALEN.includes(ch.name)) {
+          TEST_KANAAL_IDS.add(ch.id);
+          console.log(`🧪 Testkanaal geladen: #${ch.name} → ${ch.id}`);
+        }
+      }
+      cursor = res.response_metadata?.next_cursor;
+    } while (cursor);
+  } catch (err) {
+    console.warn(`⚠️ Testkanaal-IDs niet geladen (${err.message}) — worden geleerd via eerste slash command.`);
+  }
+}
+
+// ── Eenmalige score-correctie voor Mr. Te Lang (22-05-2026) ──────────────────
+// Verwachte stand na alle migraties: TeLang=6 (herstel→7, ban→6).
+// Als de score lager is dan 6 (door onbekende oorzaak), corrigeer eenmalig.
+
+async function correctieTeLang20260522() {
+  const FLAG = path.join(__dirname, 'correctie_telang_20260522.done');
+  if (fs.existsSync(FLAG)) return;
+  const scores = loadScores();
+  const TELANG_ID = 'U09L37GRASZ';
+  if ((scores[TELANG_ID] ?? 0) < 6) {
+    scores[TELANG_ID] = 6;
+    saveScores(scores);
+    console.log('✅ Score Mr. Te Lang gecorrigeerd naar 6 (eenmalig).');
+  }
+  fs.writeFileSync(FLAG, new Date().toISOString());
+}
+
 // ── Start ──────────────────────────────────────────────────────────────────────
 
 (async () => {
@@ -2514,9 +2579,11 @@ function planLunchwens20260521(client) {
   patchVerbanningReden();
   await app.start();
   console.log('⚜️ De Kroket God is wakker. Poort 3000 staat open.');
+  await laadTestKanaalIds(app.client);
   await migreerVerbanningKroketPet(app.client);
   await herstelScoresEenmalig();
   await banSanderEenmalig(app.client);
+  await correctieTeLang20260522();
   planGenade20260522(app.client);
   planLunchwens20260521(app.client);
 })();
