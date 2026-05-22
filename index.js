@@ -266,6 +266,11 @@ function buildContextString() {
 const loadStemmen = () => readJSON('stemmen.json', { weekStart: null, stemmen: {} });
 const saveStemmen = (data) => writeJSON('stemmen.json', data);
 
+// ── Heldentitels (cumulatief aantal keer kroket-held van de week) ─────────────
+
+const loadHeldentitels = () => readJSON('heldentitels.json', {});
+const saveHeldentitels = (data) => writeJSON('heldentitels.json', data);
+
 function getMondayOfWeek(date = new Date()) {
   // Gebruik Amsterdam-tijd voor dag-bepaling zodat dit rond middernacht correct blijft.
   // toLocaleString met timeZone geeft een string die we als lokale tijd parsen —
@@ -1147,11 +1152,14 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
     if (input === 'ranglijst') {
       const scores = loadScores();
       const allMembers = loadMembers();
+      const heldentitels = loadHeldentitels();
       const titels = ['🥇 Opperkroket', '🥈 Paneermeester', '🥉 Aspirant-volgeling'];
       const gesorteerd = Object.entries(scores).sort((a, b) => b[1] - a[1]);
-      const lijst = gesorteerd.map(([id, score], i) =>
-        `${titels[i] || ':lekker_kroketje: Volgeling'} — ${allMembers[id]?.bijnaam || id}: ${score} kroketpunten`
-      ).join('\n');
+      const lijst = gesorteerd.map(([id, score], i) => {
+        const heldAantal = heldentitels[id] || 0;
+        const heldLabel = heldAantal > 0 ? `  🏅 ${heldAantal}× held` : '';
+        return `${titels[i] || ':lekker_kroketje: Volgeling'} — ${allMembers[id]?.bijnaam || id}: ${score} kroketpunten${heldLabel}`;
+      }).join('\n');
       const tekst = `⚜️ DE HEILIGE RANGLIJST DER KROKET ILLUMINATI ⚜️\n\n${lijst}\n\n— De Almachtige Kroket God`;
       if (isDM) {
         await client.chat.postMessage({ channel: command.channel_id, text: schoonOutput(tekst) });
@@ -1174,8 +1182,10 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
       const [id, lid] = gevonden;
       const scores = loadScores();
       const streaks = loadStreaks();
+      const heldentitels = loadHeldentitels();
       const punten = scores[id] ?? 0;
       const streak = streaks[id]?.huidig ?? 0;
+      const heldAantal = heldentitels[id] || 0;
       const lidSinds = lid.lidSinds ? new Date(lid.lidSinds).toLocaleDateString('nl-NL') : 'onbekend';
 
       const banStatus = isVerbannen(id);
@@ -1184,6 +1194,7 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
         `\n*Status:* ${banStatus ? `⛔ VERBANNEN — nog ${dagenTotEinde(banStatus.tot)} dag(en) (wegens: ${banStatus.reden})` : 'Volgeling der Kroket Illuminati'}` +
         `\n*Lid sinds:* ${lidSinds}` +
         `\n*Kroketpunten:* ${punten}` +
+        (heldAantal > 0 ? `\n*Kroket-Held van de Week:* 🏅 ${heldAantal}× gekroond` : '') +
         (streak ? `\n*Vrijdagstreak:* ${streak} week(en) onafgebroken` : '') +
         (lid.favorieteKroket ? `\n*Favoriete kroket:* ${lid.favorieteKroket}` : '') +
         (lid.verjaardag ? `\n*Verjaardag:* ${lid.verjaardag}` : '') +
@@ -2081,8 +2092,14 @@ cron.schedule('0 16 * * 5', async () => {
     // Kroon de winnaar met 2 extra punten
     await pasScoreAanMetCheck(app.client, winnaarId, 2);
 
+    // Heldentitel teller ophogen
+    const heldentitels = loadHeldentitels();
+    heldentitels[winnaarId] = (heldentitels[winnaarId] || 0) + 1;
+    saveHeldentitels(heldentitels);
+    const aantalTitels = heldentitels[winnaarId];
+
     const tekst = await kroketResponse(
-      `Het is vrijdag 16:00. De stemmen zijn geteld. ${winnaar} is uitgeroepen tot Kroket-Held van de Week met ${aantal} stem(men). Verkondig dit plechtig, ken hen extra eer toe (2 kroketpunten extra), en sluit de stembussen tot volgende week. Geen inleidingszin.`,
+      `Het is vrijdag 16:00. De stemmen zijn geteld. ${winnaar} is uitgeroepen tot Kroket-Held van de Week met ${aantal} stem(men). Dit is hun ${aantalTitels}e heldentitel. Verkondig dit plechtig, ken hen extra eer toe (2 kroketpunten extra), en sluit de stembussen tot volgende week. Geen inleidingszin.`,
       500, false
     );
     await postMetStem(app.client, process.env.SLACK_CHANNEL_ID, tekst);
