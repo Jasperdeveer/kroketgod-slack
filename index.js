@@ -2268,7 +2268,7 @@ async function stuurWeekSamenvatting(client) {
   console.log('📋 Weekoverzicht gepost en log gereset.');
 }
 
-cron.schedule('30 16 * * 5', async () => {
+cron.schedule('0 15 * * 5', async () => {
   try {
     await stuurWeekSamenvatting(app.client);
   } catch (err) {
