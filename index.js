@@ -970,6 +970,10 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
     //    Passieve commando's (ranglijst, dossier, help, prompts) zijn wel toegestaan
     const PASSIEVE_COMMANDO_S = ['ranglijst', 'dossier', 'help', 'prompts'];
     if (isVerbannen(command.user_id) && !PASSIEVE_COMMANDO_S.includes(eersteWoord)) {
+      const banData = loadVerbanning()[command.user_id];
+      const terugTijd = banData ? new Date(banData.tot).toLocaleString('nl-NL', {
+        timeZone: 'Europe/Amsterdam', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit'
+      }) : '?';
       const ballingTekst = await kroketResponse(
         `Een balling in het ballingschap probeert de Kroket God aan te roepen. ` +
         `Spreek een cryptisch decreet uit: vanuit het ballingschap wordt door de Almachtige Kroket God geen gehoor gegeven aan ketters. ` +
@@ -977,7 +981,9 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
         `Eén tot twee zinnen. Geen inleidingszin.`,
         150, false
       );
-      await postToChannel(client, command.channel_id, ballingTekst);
+      await postToChannel(client, command.channel_id,
+        `${ballingTekst}\n\n_Terugkeer toegestaan vanaf: ${terugTijd}._`
+      );
       return;
     }
 
@@ -1627,6 +1633,9 @@ app.event('app_mention', async ({ event, client }) => {
     // Verbannen gebruiker — cryptisch bericht vanuit het ballingschap
     const banStatus = isVerbannen(userId);
     if (banStatus) {
+      const terugTijd = new Date(banStatus.tot).toLocaleString('nl-NL', {
+        timeZone: 'Europe/Amsterdam', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit'
+      });
       const afvalligeTekst = await kroketResponse(
         `Een balling in het ballingschap probeert de Kroket God aan te spreken. ` +
         `Spreek een cryptisch decreet uit: vanuit het ballingschap wordt door de Almachtige Kroket God geen gehoor gegeven aan ketters. ` +
@@ -1635,7 +1644,10 @@ app.event('app_mention', async ({ event, client }) => {
         150, false
       );
       const thread_ts = event.thread_ts || (event.parent_user_id ? event.ts : undefined);
-      await postToChannel(client, event.channel, afvalligeTekst, { thread_ts });
+      await postToChannel(client, event.channel,
+        `${afvalligeTekst}\n\n_Terugkeer toegestaan vanaf: ${terugTijd}._`,
+        { thread_ts }
+      );
       return;
     }
 
