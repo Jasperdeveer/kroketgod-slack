@@ -1747,7 +1747,7 @@ async function analyseerEnGenereer(prompt) {
           content: `Classify this Dutch message directed at a godly authority figure. Reply with EXACTLY one word. When in doubt, choose NEUTRAAL.
 
 BELEDIGING: explicit insult, curse word, or direct attack aimed AT the Kroket God ("jij bent niks", "hou je kop", "nep-god", "vetklep kroketbakkes").
-SARCASME: unmistakably sarcastic — only when tone is clearly ironic/dismissive AND directed at the Kroket God himself. Examples: "ja hoor vast", "o wauw wat bijzonder", "geweldig zeg", "klinkt heel geloofwaardig". NOT sarcasm: questions, requests, praise for others, formal address using "Uw", asking for information.
+SARCASME: unmistakably sarcastic or mocking — tone is clearly ironic, dismissive, or belittling toward the Kroket God. Examples: "ja hoor vast", "o wauw wat bijzonder", "geweldig zeg", "klinkt heel geloofwaardig", wordplay that ridicules the bot ("ware lijder of was het leider", "lekker bezig maat" addressed to a deity), backhanded compliments. NOT sarcasm: questions, requests, praise for others, formal address using "Uw", asking for information.
 LOFZANG: genuine praise or admiration for the Kroket God or frituurkring, including praising other members.
 NEUTRAAL: everything else — questions (including "Wat zal Uw straf zijn?"), requests, neutral observations, praise aimed at others ("eer de kroketPet"), formal address, asking about scores or rules.
 
@@ -1801,17 +1801,17 @@ app.event('app_mention', async ({ event, client }) => {
     const bijnaam = members[userId]?.bijnaam || 'Ongepaneerde vreemdeling';
     const input   = vervangNamen(event.text.replace(/<@[^>]+>/g, '').trim());
 
-    // Verbannen gebruiker — cryptisch bericht vanuit het ballingschap (niet in testkanaal)
+    // Verbannen gebruiker — korte, vernietigende afwijzing (niet in testkanaal)
     const banStatus = isVerbannen(userId);
     if (banStatus && !isTestKanaal) {
       const terugTijd = new Date(banStatus.tot).toLocaleString('nl-NL', {
         timeZone: 'Europe/Amsterdam', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit'
       });
       const afvalligeTekst = await kroketResponse(
-        `Een balling in het ballingschap probeert de Kroket God aan te spreken. ` +
-        `Spreek een cryptisch decreet uit: vanuit het ballingschap wordt door de Almachtige Kroket God geen gehoor gegeven aan ketters. ` +
-        `Noem de balling niet bij naam. Verwijs naar "de balling", "de ketter" of "de afvallige". ` +
-        `Eén tot twee zinnen. Geen inleidingszin.`,
+        `${bijnaam} zit in het ballingschap en durft toch te spreken. Ze zeiden: "${input}". ` +
+        `Geef een korte, vernietigende afwijzing: de Kroket God luistert niet naar ballingen. ` +
+        `Verwijs naar ${bijnaam} in de derde persoon als "de balling" of "de afvallige". ` +
+        `Maximaal 2 zinnen. Geen inleidingszin.`,
         150, false
       );
       const thread_ts = event.thread_ts || (event.parent_user_id ? event.ts : undefined);
@@ -1934,12 +1934,19 @@ app.event('app_mention', async ({ event, client }) => {
         logGebeurtenis('belediging', userId, `${bijnaam} liet zich beledigend uit`, input);
         prompt = `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} heeft zich beledigend uitgelaten: "${input}". Reageer bestraffend. Vermeld GEEN puntenaantal — het systeem heeft niets gewijzigd. Begin de inleidingszin letterlijk met: ${introStart}`;
       } else if (sentiment === 'SARCASME') {
-        prompt = `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} heeft sarcastisch gereageerd: "${input}". ` +
-          `Wijs dit streng aan als verkapte oneerbiedigheid. Vermeld GEEN puntenaantal. Begin de inleidingszin letterlijk met: ${introStart}`;
+        prompt = `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} heeft sarcastisch gereageerd op de Kroket God: "${input}". ` +
+          `De Kroket God doorziet dit sarcasme feilloos. Citeer de sarcastische uitspraak letterlijk en ontmasker hem als ` +
+          `laffe, verkapte oneerbiedigheid — een kroket die glimt van buiten maar van binnen koud en rancuneus is. ` +
+          `Wees scherp en vernietigend, maar waardig. Vermeld GEEN puntenaantal. Begin de inleidingszin letterlijk met: ${introStart}`;
       } else if (sentiment === 'LOFZANG') {
         prompt = `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} heeft zich respectvol uitgelaten: "${input}". Reageer met een warme zegen. Vermeld GEEN puntenaantal — het systeem heeft niets gewijzigd. Begin de inleidingszin letterlijk met: ${introStart}`;
       } else {
-        prompt = `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} zegt: "${input}". Begin de inleidingszin letterlijk met: ${introStart}`;
+        prompt = `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} zegt tegen de Kroket God: "${input}". ` +
+          `Reageer volledig in karakter — gezaghebbend, dramatisch, relevant aan wat er gevraagd of gezegd wordt. ` +
+          `Als het een verzoek is: behandel het als een petitie aan de Hoge Frituurraad. ` +
+          `Als het een vraag is: beantwoord hem op de meest goddelijke manier mogelijk. ` +
+          `Als het onduidelijk is: interpreteer het op de meest dramatische manier. ` +
+          `Begin de inleidingszin letterlijk met: ${introStart}`;
       }
     } else {
       prompt = `${bijnaam} heeft je gementioned zonder verdere boodschap. Reageer passend.`;
