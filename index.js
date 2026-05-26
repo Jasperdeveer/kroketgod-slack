@@ -3095,6 +3095,27 @@ async function rectificatie20260526(client) {
   console.log('📜 Rectificatie 26-05-2026 uitgevoerd.');
 }
 
+// ── Eenmalige rectificatie 26-05-2026b: frituurvet-incident ───────────────────
+
+async function rectificatie20260526b(client) {
+  const FLAG = path.join(__dirname, 'rectificatie_20260526b.done');
+  if (fs.existsSync(FLAG)) return;
+  fs.writeFileSync(FLAG, new Date().toISOString());
+
+  const tekst = await kroketResponse(
+    `De Kroket God spreekt een tweede rectificatie uit over de gebeurtenissen van eerder vandaag. ` +
+    `De verklaring voor de reeks misplaatste, verwarde en onrechtvaardige uitspraken is als volgt: ` +
+    `het frituurvet was te warm geworden — een technische calamiteit in de goddelijke frituurinstallatie ` +
+    `die tijdelijk zorgde voor oververhitte oordelen, aangebrande vonnissen en een overgare bamischijf-respons. ` +
+    `De Hoge Frituurraad betreurt dit incident diep. Het vet is inmiddels teruggebracht op de juiste temperatuur. ` +
+    `Spreek dit uit als een officiële verklaring — plechtig, met zelfspot, en met een oprechte maar waardig geformuleerde excuses ` +
+    `aan alle betrokken volgelingen. Gebruik het decreet-formaat. Geen inleidingszin.`,
+    500, false
+  );
+  await postToChannel(client, process.env.SLACK_CHANNEL_ID, tekst);
+  console.log('📜 Rectificatie 26-05-2026b (frituurvet) uitgevoerd.');
+}
+
 // ── Start ──────────────────────────────────────────────────────────────────────
 
 (async () => {
@@ -3112,6 +3133,7 @@ async function rectificatie20260526(client) {
   planLunchwens20260521(app.client);
   planVerzonnenWeekSamenvatting20260522(app.client);
   await rectificatie20260526(app.client);
+  await rectificatie20260526b(app.client);
 })();
 
 async function banSanderEenmalig(client) {
