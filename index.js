@@ -271,6 +271,29 @@ const saveStemmen = (data) => writeJSON('stemmen.json', data);
 const loadHeldentitels = () => readJSON('heldentitels.json', {});
 const saveHeldentitels = (data) => writeJSON('heldentitels.json', data);
 
+// ── Weekend-check (Amsterdam-tijd) ───────────────────────────────────────────
+// Geeft true als het zaterdag of zondag is in de Amsterdam-tijdzone.
+
+function isWeekendAms() {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Europe/Amsterdam',
+    weekday: 'short',
+  }).formatToParts(new Date());
+  const dag = parts.find(p => p.type === 'weekday')?.value;
+  return dag === 'Sat' || dag === 'Sun';
+}
+
+// Stuurt een kort, in-karakter weekend-rustbericht als reactie op een verzoek.
+async function stuurWeekendRustBericht(client, channelId, userId) {
+  const tekst = await kroketResponse(
+    `Iemand heeft de Kroket God gestoord in het weekend. Reageer kort en waardig: de Kroket God rust, ` +
+    `de frituur is uit, en verzoeken worden pas maandag weer behandeld. ` +
+    `Verwijs naar de heilige rust van de Hoge Frituurraad. Max 2 zinnen. Geen inleidingszin.`,
+    120, false
+  );
+  await postToChannel(client, channelId, userId ? `<@${userId}>\n\n${tekst}` : tekst);
+}
+
 function getMondayOfWeek(date = new Date()) {
   // Gebruik Amsterdam-tijd voor dag-bepaling zodat dit rond middernacht correct blijft.
   // toLocaleString met timeZone geeft een string die we als lokale tijd parsen —
@@ -1013,6 +1036,12 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
       return;
     }
 
+    // Weekend: Kroket God rust — testkanaal is uitgezonderd
+    if (isWeekendAms() && !isTestKanaalCmd) {
+      await stuurWeekendRustBericht(client, command.channel_id, command.user_id);
+      return;
+    }
+
     const members = loadMembers();
     const aanvrager = members[command.user_id]?.bijnaam || 'Ongepaneerde vreemdeling';
 
@@ -1742,6 +1771,12 @@ app.event('app_mention', async ({ event, client }) => {
         !ALLOWED_CHANNELS.includes(event.channel_name) &&
         !isTestKanaal) return;
 
+    // Weekend: Kroket God rust — testkanaal is uitgezonderd zodat testen altijd werkt
+    if (isWeekendAms() && !isTestKanaal) {
+      await stuurWeekendRustBericht(client, event.channel, event.user);
+      return;
+    }
+
     const members = loadMembers();
     const userId  = event.user;
     const bijnaam = members[userId]?.bijnaam || 'Ongepaneerde vreemdeling';
@@ -1907,6 +1942,9 @@ app.event('message', async ({ event, client }) => {
 
     if (event.channel !== process.env.SLACK_CHANNEL_ID && !isTestKanaalMsg) return;
     if (event.bot_id) return;
+
+    // Weekend: geen geautomatiseerde berichtreacties — testkanaal uitgezonderd
+    if (isWeekendAms() && !isTestKanaalMsg) return;
     if (event.subtype && !['file_share', 'thread_broadcast'].includes(event.subtype)) return;
     if (!event.user || !event.text?.trim()) return;
 
@@ -2370,6 +2408,8 @@ cron.schedule('30 9 * * 1', () => {
 
 cron.schedule('30 8 * * *', async () => {
   try {
+    if (isWeekendAms()) return; // Kroket God rust in het weekend
+
     const nu = new Date();
     const dag   = String(nu.getDate()).padStart(2, '0');
     const maand = String(nu.getMonth() + 1).padStart(2, '0');
@@ -2399,28 +2439,48 @@ cron.schedule('30 8 * * *', async () => {
 
 cron.schedule('0 9 1 * *', async () => {
   try {
-    const scores = loadScores();
-    const gesorteerd = Object.entries(scores).sort((a, b) => b[1] - a[1]);
-    if (gesorteerd.length === 0) return;
-
-    const members = loadMembers();
-    const [kampioenId, kampioenScore] = gesorteerd[0];
-    const kampioenBijnaam = members[kampioenId]?.bijnaam || kampioenId;
-
-    const tekst = await kroketResponse(
-      `Het is de eerste van de maand. Kondig ${kampioenBijnaam} aan als maandkampioen met ${kampioenScore} kroketpunten. Dramatisch en plechtig, met kroning en alles. Daarna worden de scores gereset voor een nieuwe maand. Geen inleidingszin.`,
-      500, false
-    );
-    await postMetStem(app.client, process.env.SLACK_CHANNEL_ID, tekst);
-
-    // Reset scores naar 0
-    const nieuwScores = {};
-    Object.keys(scores).forEach(id => { nieuwScores[id] = 0; });
-    saveScores(nieuwScores);
+    // Als de 1e van de maand op een weekend valt, verschuif naar de eerstvolgende maandag
+    if (isWeekendAms()) {
+      const nu = new Date();
+      const amsNu = new Date(nu.toLocaleString('en-US', { timeZone: 'Europe/Amsterdam' }));
+      const dagNummer = amsNu.getDay(); // 6=zat, 0=zon
+      const dagenNaarMaandag = dagNummer === 6 ? 2 : 1;
+      const delayMs = dagenNaarMaandag * 24 * 60 * 60_000;
+      console.log(`📅 Maandkampioen: 1e valt op weekend — verschoven naar maandag (+${dagenNaarMaandag} dag(en)).`);
+      setTimeout(() => {
+        (async () => {
+          try { await voerMaandkampioenUit(app.client); }
+          catch (err) { console.error('Fout bij uitgestelde maandkampioen:', err); }
+        })();
+      }, delayMs);
+      return;
+    }
+    await voerMaandkampioenUit(app.client);
   } catch (error) {
     console.error('Fout bij maandkampioen:', error);
   }
 }, { timezone: 'Europe/Amsterdam' });
+
+async function voerMaandkampioenUit(client) {
+  const scores = loadScores();
+  const gesorteerd = Object.entries(scores).sort((a, b) => b[1] - a[1]);
+  if (gesorteerd.length === 0) return;
+
+  const members = loadMembers();
+  const [kampioenId, kampioenScore] = gesorteerd[0];
+  const kampioenBijnaam = members[kampioenId]?.bijnaam || kampioenId;
+
+  const tekst = await kroketResponse(
+    `Het is de eerste van de maand. Kondig ${kampioenBijnaam} aan als maandkampioen met ${kampioenScore} kroketpunten. Dramatisch en plechtig, met kroning en alles. Daarna worden de scores gereset voor een nieuwe maand. Geen inleidingszin.`,
+    500, false
+  );
+  await postMetStem(client, process.env.SLACK_CHANNEL_ID, tekst);
+
+  // Reset scores naar 0
+  const nieuwScores = {};
+  Object.keys(scores).forEach(id => { nieuwScores[id] = 0; });
+  saveScores(nieuwScores);
+}
 
 // ── Eenmalige migratie: begrens bestaande verbanning Mr. KroketPet tot 2 dagen ─
 
