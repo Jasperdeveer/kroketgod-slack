@@ -694,11 +694,10 @@ ${ledenLijst}`,
       return laatste.choices[0].message.content;
     } catch (error) {
       laatsteFout = error;
-      const isRateLimit = error?.status === 429 || error?.error?.error?.code === 'rate_limit_exceeded';
-      const isSkip = error?.skip === true; // bv. Gemini key ontbreekt
       const isLaatste = i === modellen.length - 1;
-      if ((isRateLimit || isSkip) && !isLaatste) {
-        console.warn(`⚠️ ${model.naam} niet beschikbaar (${error.status || 'skip'}), fallback naar volgende model.`);
+      if (!isLaatste) {
+        // Altijd doorgaan naar het volgende model — rate limits, netwerk, timeouts, alles
+        console.warn(`⚠️ ${model.naam} faalde (${error?.status || error?.message || 'onbekend'}), fallback naar volgende model.`);
         continue;
       }
       throw error;
@@ -1966,6 +1965,20 @@ app.event('app_mention', async ({ event, client }) => {
     await postToChannel(client, event.channel, tekst, { thread_ts });
   } catch (error) {
     console.error('Fout bij mention:', error);
+    // Alle AI-modellen faalden — stuur een statisch fallback zodat de gebruiker
+    // niet in stilte blijft hangen. Geen AI-aanroep meer, want die zal ook falen.
+    const FALLBACKS = [
+      '⚜️ _De Goddelijke Frituur is tijdelijk overbelast. De Kroket God zweigt — maar hoort alles. Probeer het later opnieuw._\n\n— De Almachtige Kroket God',
+      '⚜️ _De heilige olietemperatuur is tijdelijk instabiel. Uw verzoek is ontvangen maar kan momenteel niet worden verwerkt._\n\n— De Almachtige Kroket God',
+      '⚜️ _De Hoge Frituurraad is in spoedberaad. Een antwoord volgt zodra het vet is gestabiliseerd._\n\n— De Almachtige Kroket God',
+    ];
+    try {
+      const thread_ts = event.thread_ts || (event.parent_user_id ? event.ts : undefined);
+      await postToChannel(client, event.channel,
+        FALLBACKS[Math.floor(Math.random() * FALLBACKS.length)],
+        { thread_ts }
+      );
+    } catch (_) {}
   }
 });
 
