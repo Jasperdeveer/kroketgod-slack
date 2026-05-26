@@ -1744,12 +1744,12 @@ async function analyseerEnGenereer(prompt) {
       messages: [
         {
           role: 'system',
-          content: `Classify this Dutch message directed at a godly authority figure. Reply with EXACTLY one word.
+          content: `Classify this Dutch message directed at a godly authority figure. Reply with EXACTLY one word. When in doubt, choose NEUTRAAL.
 
-BELEDIGING: direct insult, mockery or attack aimed AT the Kroket God or frituurkring.
-SARCASME: sarcastic, ironic or dismissive tone toward the Kroket God — fake compliance, eye-rolling, passive-aggressive remarks, or insincere praise ("ja hoor", "wauw wat bijzonder", "o geweldig", "klinkt heel overtuigend", "vast wel"). Sarcasm disguises disrespect as politeness.
-LOFZANG: genuine praise or admiration for the Kroket God or frituurkring.
-NEUTRAAL: everything else — honest questions, neutral statements, agreement, comments about outsiders.
+BELEDIGING: explicit insult, curse word, or direct attack aimed AT the Kroket God ("jij bent niks", "hou je kop", "nep-god", "vetklep kroketbakkes").
+SARCASME: unmistakably sarcastic — only when tone is clearly ironic/dismissive AND directed at the Kroket God himself. Examples: "ja hoor vast", "o wauw wat bijzonder", "geweldig zeg", "klinkt heel geloofwaardig". NOT sarcasm: questions, requests, praise for others, formal address using "Uw", asking for information.
+LOFZANG: genuine praise or admiration for the Kroket God or frituurkring, including praising other members.
+NEUTRAAL: everything else — questions (including "Wat zal Uw straf zijn?"), requests, neutral observations, praise aimed at others ("eer de kroketPet"), formal address, asking about scores or rules.
 
 Reply with EXACTLY one word: BELEDIGING, SARCASME, LOFZANG, or NEUTRAAL.`,
         },
@@ -3064,6 +3064,30 @@ async function amnestie20260522(client) {
   console.log(`🕊️ Amnestie uitgevoerd voor: ${namen}`);
 }
 
+// ── Eenmalige rectificatie 26-05-2026: onterechte sarcasme-straf terugdraaien ──
+
+async function rectificatie20260526(client) {
+  const FLAG = path.join(__dirname, 'rectificatie_20260526.done');
+  if (fs.existsSync(FLAG)) return;
+  fs.writeFileSync(FLAG, new Date().toISOString());
+
+  // Sander (Mr. Te Lang) verloor onterecht een punt wegens valse sarcasme-detectie
+  const SANDER_ID = 'U09L37GRASZ';
+  await pasScoreAanMetCheck(client, SANDER_ID, 1);
+
+  const tekst = await kroketResponse(
+    `De Kroket God moet een plechtige rectificatie uitspreken. ` +
+    `Eerder vandaag heeft de Hoge Frituurraad een beoordelingsfout gemaakt: ` +
+    `Mr. Te Lang Gefrituurde Kroket (<@${SANDER_ID}>) werd ten onrechte beschuldigd van sarcasme ` +
+    `terwijl hij slechts een neutrale vraag stelde. Dit is een miscarriage of frituur-justitie. ` +
+    `De Kroket God erkent de fout — zeldzaam maar noodzakelijk — en herstelt het onterecht afgenomen kroketpunt. ` +
+    `Spreek dit waardig en met een vleugje zelfspot uit. Kondig aan dat het detectiesysteem is gescherpt. Geen inleidingszin.`,
+    500, false
+  );
+  await postToChannel(client, process.env.SLACK_CHANNEL_ID, tekst);
+  console.log('📜 Rectificatie 26-05-2026 uitgevoerd.');
+}
+
 // ── Start ──────────────────────────────────────────────────────────────────────
 
 (async () => {
@@ -3080,6 +3104,7 @@ async function amnestie20260522(client) {
   planGenade20260522(app.client);
   planLunchwens20260521(app.client);
   planVerzonnenWeekSamenvatting20260522(app.client);
+  await rectificatie20260526(app.client);
 })();
 
 async function banSanderEenmalig(client) {
