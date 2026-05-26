@@ -243,6 +243,48 @@ function logBericht(spreker, tekst) {
   saveGeschiedenis(geschiedenis);
 }
 
+// Bouwt een leesbare statusstring met echte leden-, score- en bandata.
+// Wordt geïnjecteerd in de prompt als iemand vraagt naar leden of verbannelingen.
+function bouwLedenStatus() {
+  const members   = loadMembers();
+  const scores    = loadScores();
+  const verbanning = loadVerbanning();
+  const heldentitels = loadHeldentitels();
+  const nu = Date.now();
+
+  const ledenLijst = Object.entries(members).map(([id, lid]) => {
+    const punten  = scores[id] ?? 0;
+    const ban     = verbanning[id];
+    const actief  = ban && nu < new Date(ban.tot).getTime();
+    const helden  = heldentitels[id] || 0;
+    const banInfo = actief
+      ? ` — ⛔ VERBANNEN tot ${new Date(ban.tot).toLocaleString('nl-NL', { timeZone: 'Europe/Amsterdam', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })} (reden: ${ban.reden || 'onbekend'})`
+      : '';
+    const heldInfo = helden > 0 ? ` — 🏅 ${helden}× kroket-held van de week` : '';
+    return `- ${lid.bijnaam}: ${punten} kroketpunten${heldInfo}${banInfo}`;
+  }).join('\n');
+
+  const actiefVerbannen = Object.entries(verbanning)
+    .filter(([, v]) => nu < new Date(v.tot).getTime())
+    .map(([id, v]) => {
+      const naam = members[id]?.bijnaam || id;
+      const tot  = new Date(v.tot).toLocaleString('nl-NL', { timeZone: 'Europe/Amsterdam', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
+      return `- ${naam}: verbannen tot ${tot} (${v.reden || 'reden onbekend'})`;
+    }).join('\n') || '- Niemand momenteel verbannen';
+
+  return `ACTUELE LEDENLIJST (gebruik UITSLUITEND deze echte data — verzin geen getallen):\n${ledenLijst}\n\nACTIEVE VERBANNINGEN:\n${actiefVerbannen}`;
+}
+
+// Detecteert of een bericht vraagt naar leden, scores of verbannelingen
+function vraagNaarLedenData(tekst) {
+  const lower = tekst.toLowerCase();
+  return [
+    'volger', 'verbann', 'balling', 'leden', 'lid ', 'wie ', 'wie?',
+    'update', 'status', 'overzicht', 'stand', 'hoeveel', 'wie zijn',
+    'welke', 'ranglijst', 'score',
+  ].some(kw => lower.includes(kw));
+}
+
 function buildContextString() {
   const geschiedenis = loadGeschiedenis();
   if (geschiedenis.length === 0) return '';
@@ -973,6 +1015,7 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
         { cmd: 'begenade [naam]',       uitleg: 'verbanning vroegtijdig opheffen' },
         { cmd: 'dossier [naam]',        uitleg: 'kroket-CV van een lid' },
         { cmd: 'stem [naam]',           uitleg: 'stem op Held van de Week' },
+        { cmd: 'status',                uitleg: 'leden, scores en actieve verbannelingen' },
         { cmd: 'hoelang',               uitleg: 'hoe lang nog tot vrijdag 12:00' },
         { cmd: 'feitje',               uitleg: 'kroketfeitje, mop of historisch weetje' },
         { cmd: 'frituur [tekst]',       uitleg: 'AI-afbeelding' },
@@ -1126,6 +1169,23 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
 
     if (input === 'weekoverzicht') {
       await stuurWeekSamenvatting(client);
+      return;
+    }
+
+    // ── Status: leden + scores + actieve bans
+    if (input === 'status') {
+      const statusData = bouwLedenStatus();
+      const tekst = await kroketResponse(
+        `Geef een plechtig statusoverzicht van alle volgelingen en actieve verbannelingen. ` +
+        `Gebruik UITSLUITEND de onderstaande data — verzin geen getallen of namen. ` +
+        `Structuur: leden met scores, dan actieve verbannelingen. Dramatisch maar informatief. Geen inleidingszin.\n\n${statusData}`,
+        600, false
+      );
+      if (isDM) {
+        await client.chat.postMessage({ channel: command.channel_id, text: schoonOutput(tekst) });
+      } else {
+        await postToChannel(client, command.channel_id, tekst);
+      }
       return;
     }
 
@@ -1953,6 +2013,11 @@ app.event('app_mention', async ({ event, client }) => {
 
     // 10% kans: vraag expliciet om warrig formaat
     if (Math.random() < 0.10) prompt += ' Gebruik het warrige formaat.';
+
+    // Injecteer echte ledendata als de vraag ernaar vraagt — voorkomt hallucinatie
+    if (input && vraagNaarLedenData(input)) {
+      prompt += `\n\n${bouwLedenStatus()}`;
+    }
 
     let tekst = await kroketResponse(prompt);
     // 2% kans: voeg een wiskundig correcte vrijdag-countdown toe
