@@ -754,73 +754,83 @@ async function postToChannel(client, channelId, text, options = {}) {
 // ── Beeld genereren ────────────────────────────────────────────────────────────
 
 const BEELD_STIJLEN = [
-  {
-    naam: 'cinematic',
-    suffix: 'cinematic lighting, shot on Canon EOS R5 85mm f/1.4, shallow depth of field, ultra-detailed photorealistic, dramatic chiaroscuro, golden hour ambiance',
-    intro: 'A cinematic photograph in the style of a high-end Dutch food commercial meets a Vermeer still life.',
-  },
-  {
-    naam: 'renaissance',
-    suffix: 'oil painting in the style of Caravaggio, chiaroscuro lighting, dramatic Baroque composition, deep shadows, museum quality, ornate gilded frame implied',
-    intro: 'A Renaissance oil painting depicting',
-  },
-  {
-    naam: 'byzantine',
-    suffix: 'Byzantine icon style, gold leaf background, religious iconography, halo, ornate detailing, devotional art aesthetic',
-    intro: 'A Byzantine religious icon featuring',
-  },
-  {
-    naam: 'editorial',
-    suffix: 'editorial photography, Vogue food editorial style, minimalist composition, soft directional studio light, marble surfaces, high fashion food art',
-    intro: 'An editorial fashion photograph featuring',
-  },
-  {
-    naam: 'mythical',
-    suffix: 'epic fantasy concept art, volumetric god rays, mythical atmosphere, hyper-detailed, painted by Greg Rutkowski',
-    intro: 'An epic fantasy concept painting of',
-  },
+  { naam: 'baroque oil painting',        suffix: 'oil painting, Caravaggio chiaroscuro, deep shadows, museum quality, ornate gilded frame implied, dramatic Baroque composition' },
+  { naam: 'Byzantine icon',              suffix: 'Byzantine religious icon, gold leaf background, flat devotional style, sacred iconography, luminous halo, ancient tempera on wood' },
+  { naam: 'Soviet propaganda poster',    suffix: 'Soviet constructivist poster, bold flat colors, strong diagonal composition, stark typography implied, 1930s lithograph style' },
+  { naam: 'medieval illuminated manuscript', suffix: 'medieval manuscript illumination, gold leaf, intricate border decorations, tempera on vellum, gothic script implied, 13th century style' },
+  { naam: 'Japanese ukiyo-e woodblock',  suffix: 'ukiyo-e woodblock print, flat areas of color, bold outlines, Mount Fuji palette, Hokusai style, Edo period' },
+  { naam: 'Art Nouveau poster',          suffix: 'Art Nouveau illustration, flowing organic lines, Alphonse Mucha style, decorative botanical border, muted gold and sage palette, 1900s print' },
+  { naam: 'brutalist architecture render', suffix: 'architectural render, brutalist concrete, raw exposed textures, dramatic low-angle perspective, overcast sky, hyperrealistic' },
+  { naam: 'infrared photography',        suffix: 'infrared photography, white glowing foliage, dark dramatic sky, dreamlike high contrast, Kodak Aerochrome style' },
+  { naam: 'tarot card illustration',     suffix: 'tarot card art, mystical symbolism, celestial imagery, ornate border, gold and indigo palette, Rider-Waite style' },
+  { naam: 'Dutch Golden Age still life', suffix: 'Dutch Golden Age still life oil painting, Vermeer lighting, velvet draped table, extreme detail, shallow depth, dark background' },
+  { naam: 'surrealist painting',         suffix: 'surrealist oil painting, Salvador Dalí style, dreamlike impossible physics, melting forms, vast empty desert landscape, hyperreal detail' },
+  { naam: '1970s pulp sci-fi cover',     suffix: '1970s pulp science fiction paperback cover, airbrush illustration, chrome lettering implied, lurid colors, Frank Frazetta influence' },
+  { naam: 'expressionist woodcut',       suffix: 'German Expressionist woodcut, angular harsh lines, high contrast black and white, emotional distortion, Ernst Ludwig Kirchner style' },
+  { naam: 'stained glass window',        suffix: 'stained glass window, leading lines, jewel-toned translucent colors, backlit glow, Gothic cathedral scale, intricate geometric patterns' },
+  { naam: 'technical blueprint',         suffix: 'technical blueprint schematic, white lines on Prussian blue, precise annotations, cross-section view, engineering drawing style' },
+  { naam: 'cinematic photograph',        suffix: 'cinematic photograph, anamorphic lens flare, film grain, Kodak Vision3 500T, dramatic chiaroscuro, 2.39:1 aspect ratio feel' },
+  { naam: 'ancient Roman mosaic',        suffix: 'Roman mosaic, tesserae tiles, earthy terracotta and lapis palette, worn and ancient, unearthed Pompeii style' },
+  { naam: 'risograph print',             suffix: 'risograph print, limited two-color palette, slight misregistration, visible grain texture, indie zine aesthetic' },
+  { naam: 'watercolor and ink',          suffix: 'loose expressive watercolor with ink linework, wet-on-wet bleeds, visible paper texture, editorial illustration style' },
+  { naam: 'glitch art',                  suffix: 'digital glitch art, pixel sorting artifacts, RGB channel shift, corrupted JPEG noise, neon on black, cyberpunk aesthetic' },
+];
+
+// Willekeurige wildcard-elementen die de AI extra in een richting duwen
+const BEELD_WILDCARDS = [
+  'The scene takes place in a vast abandoned cathedral.',
+  'The setting is a cosmic void filled with distant galaxies.',
+  'Everything is submerged underwater, light refracting from above.',
+  'The scene is viewed from directly above, bird\'s eye perspective.',
+  'The environment is a crumbling ancient temple overgrown with jungle.',
+  'The setting is a frozen arctic tundra under northern lights.',
+  'The scene unfolds inside a microscopic world, extreme macro scale.',
+  'The environment is a labyrinthine library stretching to infinity.',
+  'The setting is a volcanic landscape with rivers of lava.',
+  'The scene takes place at the edge of a thunderstorm.',
+  'Everything exists in a bureaucratic government office, absurdly mundane.',
+  'The setting is a 1970s television studio mid-broadcast.',
+  'The scene is reflected in a broken mirror, fragmented.',
+  'The environment is a surreal floating island in the clouds.',
+  'The setting is an ancient Roman bathhouse at midnight.',
 ];
 
 function kiesBeeldStijl() {
   return BEELD_STIJLEN[Math.floor(Math.random() * BEELD_STIJLEN.length)];
 }
 
-async function genereerBeeld(client, channelId, userId, beschrijving) {
+function kiesWildcard() {
+  return BEELD_WILDCARDS[Math.floor(Math.random() * BEELD_WILDCARDS.length)];
+}
+
+async function genereerBeeld(client, channelId, userId, _beschrijving) {
   const stijl = kiesBeeldStijl();
+  const wildcard = kiesWildcard();
 
   const promptResponse = await groq.chat.completions.create({
     model: 'llama-3.3-70b-versatile',
     max_tokens: 300,
-    temperature: 0.9,
+    temperature: 1.1,
     messages: [
       {
         role: 'system',
-        content: `You are an expert AI image prompt writer for FLUX.1 Pro. Convert a Dutch description into a vivid, specific English image prompt.
+        content: `You are an avant-garde AI image prompt writer for FLUX.1 Pro. Your task is to generate a wildly unexpected, visually striking image prompt.
 
-STYLE PRESET: ${stijl.naam}
-START WITH: "${stijl.intro}"
-END WITH (literally append): "${stijl.suffix}"
+STYLE: ${stijl.naam}
+MANDATORY SUFFIX (append literally at the end): "${stijl.suffix}"
+ENVIRONMENTAL WILDCARD (incorporate this setting): ${wildcard}
 
-HERO OBJECT — KROKET:
-A single large, perfectly golden-brown Dutch croquette MUST appear as the dominant hero object — on a pedestal, throne, altar, marble surface, or held aloft. It is a REAL physical crispy croquette with visible breading texture. Never worn as clothing. Never a costume. Never metaphorical.
+THEME: A divine manifestation — an eruption of sacred, unknowable power. Interpret this as freely and unexpectedly as possible. It does NOT have to be a food item. Think: light phenomena, cosmic events, architectural visions, mythological scenes, impossible geometry, sacred geometry, celestial beings, primordial forces.
 
-COMPOSITION RULES:
-- Exactly ONE clear hero
-- Strong directional warm light from one specific direction
-- Clean, focused background (no clutter)
-- 2-3 distinct elements max
-- Specific textures: visible breadcrumbs, glossy mustard sheen, steam, marble veining, velvet folds
-- Specific colors named (deep amber, ochre, ivory, burgundy)
+RULES:
+- Be specific and concrete — name exact colors, textures, materials
+- Avoid generic words: beautiful, stunning, amazing, epic
+- 2-3 vivid sentences max
+- The result should look NOTHING like a standard food photo
 
-FORBIDDEN:
-- People dressed as kroket / costumes
-- Floating clouds, smoke, surreal abstract elements
-- Generic adjectives (beautiful, amazing, epic, stunning)
-- More than 3 elements
-
-OUTPUT: Return ONLY the image prompt as plain text. No quotes, no explanation. 2-3 sentences.`,
+OUTPUT: Return ONLY the image prompt as plain text. No quotes, no explanation.`,
       },
-      { role: 'user', content: beschrijving },
+      { role: 'user', content: 'Generate a divine manifestation image prompt.' },
     ],
   });
 
