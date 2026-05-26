@@ -1744,20 +1744,21 @@ async function analyseerEnGenereer(prompt) {
       messages: [
         {
           role: 'system',
-          content: `Classify this Dutch message. Reply with EXACTLY one word.
+          content: `Classify this Dutch message directed at a godly authority figure. Reply with EXACTLY one word.
 
-BELEDIGING: the message DIRECTLY insults, mocks, or attacks the Kroket God or the frituurkring itself. The insult must be aimed AT the bot or the group — not at outsiders or third parties.
-LOFZANG: the message praises, worships, or expresses admiration for the Kroket God or the frituurkring.
-NEUTRAAL: everything else — including messages about outsiders, agreement with the Kroket God, general statements, questions, jokes, or comments not directed at the bot.
+BELEDIGING: direct insult, mockery or attack aimed AT the Kroket God or frituurkring.
+SARCASME: sarcastic, ironic or dismissive tone toward the Kroket God — fake compliance, eye-rolling, passive-aggressive remarks, or insincere praise ("ja hoor", "wauw wat bijzonder", "o geweldig", "klinkt heel overtuigend", "vast wel"). Sarcasm disguises disrespect as politeness.
+LOFZANG: genuine praise or admiration for the Kroket God or frituurkring.
+NEUTRAAL: everything else — honest questions, neutral statements, agreement, comments about outsiders.
 
-Replying about "ongepaneerden" (outsiders) being bad = NEUTRAAL (it aligns with the Kroket God's worldview).
-Reply with EXACTLY one word: BELEDIGING, LOFZANG, or NEUTRAAL.`,
+Reply with EXACTLY one word: BELEDIGING, SARCASME, LOFZANG, or NEUTRAAL.`,
         },
         { role: 'user', content: prompt },
       ],
     });
     const uitkomst = result.choices[0].message.content.trim().toUpperCase();
     if (uitkomst.includes('BELEDIGING')) return 'BELEDIGING';
+    if (uitkomst.includes('SARCASME')) return 'SARCASME';
     if (uitkomst.includes('LOFZANG')) return 'LOFZANG';
     return 'NEUTRAAL';
   } catch {
@@ -1874,6 +1875,10 @@ app.event('app_mention', async ({ event, client }) => {
         pasScoreAan(userId, -1);
         logGebeurtenis('belediging', userId, `${bijnaam} beledigd de Kroket God en verloor een punt`, input);
         prompt = `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} heeft zich beledigend uitgelaten tegen de Kroket God: "${input}". Straf hen met goddelijk gezag. Het systeem heeft al 1 kroketpunt afgenomen — bevestig dit. Begin de inleidingszin letterlijk met: ${introStart}`;
+      } else if (sentiment === 'SARCASME' && members[userId] && scoreKans) {
+        pasScoreAan(userId, -1);
+        logGebeurtenis('belediging', userId, `${bijnaam} reageerde sarcastisch op de Kroket God en verloor een punt`, input);
+        prompt = `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} heeft sarcastisch gereageerd op de Kroket God: "${input}". De Kroket God doorziet sarcasme als een lauwe kroket — knapperig van buiten, bedorven van binnen. Wijs dit streng en expliciet aan als laffe verkapte oneerbiedigheid. Het systeem heeft al 1 kroketpunt afgenomen — bevestig dit. Begin de inleidingszin letterlijk met: ${introStart}`;
       } else if (sentiment === 'LOFZANG' && members[userId] && scoreKans) {
         await pasScoreAanMetCheck(client, userId, 1);
         logGebeurtenis('lofzang', userId, `${bijnaam} prees de Kroket God en verdiende een punt`, input);
@@ -1881,6 +1886,9 @@ app.event('app_mention', async ({ event, client }) => {
       } else if (sentiment === 'BELEDIGING') {
         logGebeurtenis('belediging', userId, `${bijnaam} liet zich beledigend uit`, input);
         prompt = `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} heeft zich beledigend uitgelaten: "${input}". Reageer bestraffend. Vermeld GEEN puntenaantal — het systeem heeft niets gewijzigd. Begin de inleidingszin letterlijk met: ${introStart}`;
+      } else if (sentiment === 'SARCASME') {
+        logGebeurtenis('belediging', userId, `${bijnaam} reageerde sarcastisch`, input);
+        prompt = `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} heeft sarcastisch gereageerd: "${input}". Wijs dit streng aan als verkapte oneerbiedigheid. Vermeld GEEN puntenaantal. Begin de inleidingszin letterlijk met: ${introStart}`;
       } else if (sentiment === 'LOFZANG') {
         prompt = `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} heeft zich respectvol uitgelaten: "${input}". Reageer met een warme zegen. Vermeld GEEN puntenaantal — het systeem heeft niets gewijzigd. Begin de inleidingszin letterlijk met: ${introStart}`;
       } else {
