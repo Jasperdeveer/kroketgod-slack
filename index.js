@@ -1875,10 +1875,57 @@ app.event('app_mention', async ({ event, client }) => {
         pasScoreAan(userId, -1);
         logGebeurtenis('belediging', userId, `${bijnaam} beledigd de Kroket God en verloor een punt`, input);
         prompt = `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} heeft zich beledigend uitgelaten tegen de Kroket God: "${input}". Straf hen met goddelijk gezag. Het systeem heeft al 1 kroketpunt afgenomen — bevestig dit. Begin de inleidingszin letterlijk met: ${introStart}`;
-      } else if (sentiment === 'SARCASME' && members[userId] && scoreKans) {
-        pasScoreAan(userId, -1);
-        logGebeurtenis('belediging', userId, `${bijnaam} reageerde sarcastisch op de Kroket God en verloor een punt`, input);
-        prompt = `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} heeft sarcastisch gereageerd op de Kroket God: "${input}". De Kroket God doorziet sarcasme als een lauwe kroket — knapperig van buiten, bedorven van binnen. Wijs dit streng en expliciet aan als laffe verkapte oneerbiedigheid. Het systeem heeft al 1 kroketpunt afgenomen — bevestig dit. Begin de inleidingszin letterlijk met: ${introStart}`;
+      } else if (sentiment === 'SARCASME' && members[userId]) {
+        const sarBan   = Math.random() < 0.10;
+        const sarPunt  = !sarBan && Math.random() < 0.33;
+
+        if (sarBan) {
+          // Ban tot einde werkdag (18:00 AMS)
+          const nu     = new Date();
+          const amsNu  = new Date(nu.toLocaleString('en-US', { timeZone: 'Europe/Amsterdam' }));
+          const offset = nu.getTime() - amsNu.getTime();
+          const target = new Date(amsNu);
+          target.setHours(18, 0, 0, 0);
+          if (target <= amsNu) target.setDate(target.getDate() + 1); // al voorbij → morgen 18:00
+          const eindeUtc = new Date(target.getTime() + offset);
+
+          const verbanning = loadVerbanning();
+          verbanning[userId] = {
+            tot: eindeUtc.toISOString(),
+            reden: 'sarcasme tegenover de Kroket God',
+            citaat: input,
+            dagen: null,
+            opgelegd: nu.toISOString(),
+          };
+          saveVerbanning(verbanning);
+          logGebeurtenis('verbanning', userId, `${bijnaam} werd verbannen tot einde werkdag wegens sarcasme`, input);
+
+          const terugTijd = eindeUtc.toLocaleTimeString('nl-NL', { timeZone: 'Europe/Amsterdam', hour: '2-digit', minute: '2-digit' });
+          const verdictTekst = await kroketResponse(
+            `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} heeft sarcastisch gereageerd op de Kroket God: "${input}". ` +
+            `Sarcasme is de sluipendste vorm van oneerbiedigheid — een kroket die glimt van buiten maar van binnen rancuneus en koud is. ` +
+            `Verban ${bijnaam} met onmiddellijke ingang tot einde werkdag (${terugTijd}). Wees furieus maar waardig. Gebruik het decreet-formaat. Geen inleidingszin.`,
+            450, false
+          );
+          const thread_ts = event.thread_ts || (event.parent_user_id ? event.ts : undefined);
+          await postToChannel(client, event.channel,
+            `<@${userId}>\n\n${verdictTekst}\n\n_De poorten heropenen zich om ${terugTijd}._`,
+            { thread_ts }
+          );
+          return;
+        }
+
+        if (sarPunt) {
+          pasScoreAan(userId, -1);
+          logGebeurtenis('belediging', userId, `${bijnaam} reageerde sarcastisch en verloor een punt`, input);
+          prompt = `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} heeft sarcastisch gereageerd op de Kroket God: "${input}". ` +
+            `Sarcasme is verkapte oneerbiedigheid — een kroket die glanst maar van binnen bedorven is. Wijs dit streng aan. ` +
+            `Het systeem heeft al 1 kroketpunt afgenomen — bevestig dit. Begin de inleidingszin letterlijk met: ${introStart}`;
+        } else {
+          logGebeurtenis('belediging', userId, `${bijnaam} reageerde sarcastisch`, input);
+          prompt = `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} heeft sarcastisch gereageerd op de Kroket God: "${input}". ` +
+            `Wijs dit streng aan als laffe verkapte oneerbiedigheid. Vermeld GEEN puntenaantal. Begin de inleidingszin letterlijk met: ${introStart}`;
+        }
       } else if (sentiment === 'LOFZANG' && members[userId] && scoreKans) {
         await pasScoreAanMetCheck(client, userId, 1);
         logGebeurtenis('lofzang', userId, `${bijnaam} prees de Kroket God en verdiende een punt`, input);
@@ -1887,8 +1934,8 @@ app.event('app_mention', async ({ event, client }) => {
         logGebeurtenis('belediging', userId, `${bijnaam} liet zich beledigend uit`, input);
         prompt = `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} heeft zich beledigend uitgelaten: "${input}". Reageer bestraffend. Vermeld GEEN puntenaantal — het systeem heeft niets gewijzigd. Begin de inleidingszin letterlijk met: ${introStart}`;
       } else if (sentiment === 'SARCASME') {
-        logGebeurtenis('belediging', userId, `${bijnaam} reageerde sarcastisch`, input);
-        prompt = `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} heeft sarcastisch gereageerd: "${input}". Wijs dit streng aan als verkapte oneerbiedigheid. Vermeld GEEN puntenaantal. Begin de inleidingszin letterlijk met: ${introStart}`;
+        prompt = `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} heeft sarcastisch gereageerd: "${input}". ` +
+          `Wijs dit streng aan als verkapte oneerbiedigheid. Vermeld GEEN puntenaantal. Begin de inleidingszin letterlijk met: ${introStart}`;
       } else if (sentiment === 'LOFZANG') {
         prompt = `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} heeft zich respectvol uitgelaten: "${input}". Reageer met een warme zegen. Vermeld GEEN puntenaantal — het systeem heeft niets gewijzigd. Begin de inleidingszin letterlijk met: ${introStart}`;
       } else {
