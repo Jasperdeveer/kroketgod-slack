@@ -1967,6 +1967,31 @@ app.event('app_mention', async ({ event, client }) => {
 // Cooldown voor spontane reacties: max 1x per 20 minuten
 let spontaanCooldownTot = 0;
 
+// Detecteert of een bericht over de Kroket God gaat zonder directe @-mention
+async function gaatOverKroketGod(tekst) {
+  try {
+    const result = await groq.chat.completions.create({
+      model: 'llama-3.1-8b-instant',
+      max_tokens: 5,
+      temperature: 0,
+      messages: [
+        { role: 'system', content: 'Antwoord ALLEEN met JA of NEE. Geen uitleg.' },
+        {
+          role: 'user',
+          content:
+            `Gaat dit bericht over een almachtige bot/godheid genaamd "de Kroket God" die een Slack-kanaal beheert? ` +
+            `Antwoord JA als de boodschap verwijst naar "hij", "hem", "de god", "kroket god", "de hoge frituurraad", ` +
+            `of duidelijk over het gedrag, de regels of uitspraken van zo'n gezaghebbende figuur gaat. ` +
+            `Antwoord NEE als het over iets anders gaat. Bericht: "${tekst}"`,
+        },
+      ],
+    });
+    return result.choices[0].message.content.trim().toUpperCase().startsWith('JA');
+  } catch {
+    return false;
+  }
+}
+
 async function verdientSpontaanReactie(tekst) {
   try {
     const result = await groq.chat.completions.create({
@@ -2037,12 +2062,31 @@ app.event('message', async ({ event, client }) => {
       return;
     }
 
-    // Spontane reactie — alleen voor bekende leden, niet in threads, niet tijdens cooldown
+    // Spontane reacties — alleen voor bekende leden, niet in threads
     if (!members[event.user]) return;
     if (event.thread_ts) return;
     if (isVerbannen(event.user)) return;
-    if (Date.now() < spontaanCooldownTot) return;
     if (event.text.trim().split(/\s+/).length < 3) return;
+
+    // ── Check 1: gaat het bericht over de Kroket God? (alleen kroket-illuminati)
+    // Reageert altijd als iemand over hem praat, mits cooldown vrij is.
+    if (event.channel === process.env.SLACK_CHANNEL_ID && Date.now() >= spontaanCooldownTot) {
+      const overBot = await gaatOverKroketGod(event.text);
+      if (overBot) {
+        spontaanCooldownTot = Date.now() + 20 * 60 * 1000;
+        const tekst = await kroketResponse(
+          `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} praat over de Kroket God zonder hem direct aan te spreken: "${event.text}". ` +
+          `De Kroket God mengt zich onuitgenodigd in het gesprek. Reageer als iemand die alles hoort en niets ontgaat — ` +
+          `kort, scherp, lichtelijk dreigend of gevat. Geen inleidingszin.`,
+          300
+        );
+        await postToChannel(app.client, event.channel, tekst);
+        return;
+      }
+    }
+
+    // ── Check 2: algemene spontane reactie op interessante berichten
+    if (Date.now() < spontaanCooldownTot) return;
 
     const reageert = await verdientSpontaanReactie(event.text);
     if (!reageert) return;
