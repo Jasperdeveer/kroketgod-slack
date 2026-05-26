@@ -2093,22 +2093,38 @@ cron.schedule('0 12 * * *', async () => {
       const ctx = dagContext[dag];
       if (!ctx) return;
 
-      // Voorberekende omrekeningen — AI rekent NIET zelf, gebruikt alleen deze getallen
-      const uren        = ctx.dagenNog * 24;
-      const werkuren    = ctx.dagenNog * 8;
-      const minuten     = ctx.dagenNog * 24 * 60;
-      const friends     = Math.round(minuten / 22);   // Friends-aflevering ≈ 22 min
-      const vergadering = Math.round(werkuren * 60 / 45); // vergadering ≈ 45 min
-      const schoolles   = Math.round(werkuren * 60 / 50); // schoolles ≈ 50 min
-      const koffie      = ctx.dagenNog * 3;           // ≈ 3 koffie per dag
-      const omrekeningen = [
-        `${uren} uur`,
-        `${werkuren} werkuren`,
-        `${friends} afleveringen Friends`,
-        `${vergadering} vergaderingen van 45 minuten`,
-        `${schoolles} schoollessen`,
-        `${koffie} bakken koffie`,
+      // Pool van creatieve omrekeningen — JS berekent, AI kiest en schrijft er omheen
+      const min = ctx.dagenNog * 24 * 60;
+      const OMREKENING_POOL = [
+        { label: n => `${n} afleveringen Friends`,                        factor: 22   },
+        { label: n => `${n} afleveringen Baantjer`,                       factor: 50   },
+        { label: n => `${n} keer het Nederlandse volkslied`,              factor: 2    },
+        { label: n => `${n} vergaderingen die een mail hadden kunnen zijn`, factor: 45 },
+        { label: n => `${n} kroket-frituurbeurten`,                         factor: 4    },
+        { label: n => `${n} bakken koffie`,                               factor: 90   },
+        { label: n => `${n} LinkedIn-posts over persoonlijke groei`,      factor: 8    },
+        { label: n => `${n} FEBO-bezoeken`,                               factor: 30   },
+        { label: n => `${n} schoollessen`,                                factor: 50   },
+        { label: n => `${n} borrelrondjes bitterballen`,                  factor: 45   },
+        { label: n => `${n} keer de weersverwachting checken`,            factor: 15   },
+        { label: n => `${n} uur in de file op de A10`,                    factor: 60   },
+        { label: n => `${n} keer "nou ja" zeggen in een vergadering`,     factor: 5    },
+        { label: n => `${n} afleveringen van een TED Talk`,               factor: 18   },
+        { label: n => `${n} potjes Mario Kart`,                           factor: 8    },
+        { label: n => `${n} keer het krokettengebed opzeggen`,            factor: 5    },
+        { label: n => `${n} uitzendingen van het NOS Journaal`,           factor: 25   },
+        { label: n => `${n} kopjes koffie uit een automaat`,              factor: 45   },
+        { label: n => `${n} keer "ik stuur je even een mailtje" zeggen`,  factor: 8    },
+        { label: n => `${n} avonden Netflix voor de bank`,                factor: 120  },
+        { label: n => `${n} keer door de Albert Heijn lopen`,             factor: 20   },
+        { label: n => `${n} keer het Wilhelmus`,                          factor: 2    },
       ];
+      // Kies 3 willekeurige uit de pool zonder herhaling
+      const gekozen = OMREKENING_POOL
+        .sort(() => Math.random() - 0.5)
+        .slice(0, 3)
+        .map(o => o.label(Math.round(min / o.factor)));
+      const omrekeningen = gekozen;
 
       const positief = Math.random() < 0.5;
       const uitverkorene = Math.random() < 0.4 ? getUitverkorene(positief) : null;
