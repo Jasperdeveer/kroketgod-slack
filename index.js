@@ -803,7 +803,7 @@ function kiesWildcard() {
   return BEELD_WILDCARDS[Math.floor(Math.random() * BEELD_WILDCARDS.length)];
 }
 
-async function genereerBeeld(client, channelId, userId, _beschrijving) {
+async function genereerBeeld(client, channelId, userId, beschrijving) {
   const stijl = kiesBeeldStijl();
   const wildcard = kiesWildcard();
 
@@ -814,23 +814,23 @@ async function genereerBeeld(client, channelId, userId, _beschrijving) {
     messages: [
       {
         role: 'system',
-        content: `You are an avant-garde AI image prompt writer for FLUX.1 Pro. Your task is to generate a wildly unexpected, visually striking image prompt.
+        content: `You are an avant-garde AI image prompt writer for FLUX.1 Pro. Transform a Dutch subject into a wildly unexpected, visually striking image prompt.
 
 STYLE: ${stijl.naam}
 MANDATORY SUFFIX (append literally at the end): "${stijl.suffix}"
 ENVIRONMENTAL WILDCARD (incorporate this setting): ${wildcard}
 
-THEME: A divine manifestation — an eruption of sacred, unknowable power. Interpret this as freely and unexpectedly as possible. It does NOT have to be a food item. Think: light phenomena, cosmic events, architectural visions, mythological scenes, impossible geometry, sacred geometry, celestial beings, primordial forces.
+TREATMENT: Render the subject as a DIVINE MANIFESTATION — a sacred, otherworldly eruption of power. The subject itself may be mundane, but its depiction must feel cosmic, mythological, or transcendent. Elevate it far beyond its literal form.
 
 RULES:
 - Be specific and concrete — name exact colors, textures, materials
 - Avoid generic words: beautiful, stunning, amazing, epic
 - 2-3 vivid sentences max
-- The result should look NOTHING like a standard food photo
+- The result should look nothing like a standard photo
 
 OUTPUT: Return ONLY the image prompt as plain text. No quotes, no explanation.`,
       },
-      { role: 'user', content: 'Generate a divine manifestation image prompt.' },
+      { role: 'user', content: beschrijving },
     ],
   });
 
