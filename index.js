@@ -2408,7 +2408,9 @@ cron.schedule('30 9 * * 1', () => {
 
 cron.schedule('30 8 * * *', async () => {
   try {
-    if (isWeekendAms()) return; // Kroket God rust in het weekend
+    // Verjaardagen zijn een uitzondering op de weekendrust — ze worden altijd verstuurd.
+    // Als het weekend is, vermeldt de bot dat het bericht pas maandag wordt gelezen.
+    const isWeekend = isWeekendAms();
 
     const nu = new Date();
     const dag   = String(nu.getDate()).padStart(2, '0');
@@ -2421,10 +2423,14 @@ cron.schedule('30 8 * * *', async () => {
       const lidDatum = lid.verjaardag?.split('-').slice(0, 2).join('-');
       if (lidDatum === vandaag) {
         await pasScoreAanMetCheck(app.client, id, 3); // 3 punten bonus op verjaardag
+        const weekendNoot = isWeekend
+          ? ` Het is weekend en de Kroket God rust normaliter — maar een verjaardag duldt geen uitstel. Voeg aan het einde toe dat dit bericht pas maandag zal worden gelezen, maar dat de kroket God de geboortedag niet ongemarkeerd kon laten.`
+          : '';
         const tekst = await kroketResponse(
           `Vandaag is het de verjaardag van ${lid.bijnaam}. Stuur een plechtige kroket-verjaardagszegen en kondig aan dat 3 kroketpunten worden toegekend als geschenk van de Kroket God. Geen inleidingszin.` +
-          (lid.favorieteKroket ? ` Verwijzing naar hun favoriete kroket (${lid.favorieteKroket}) is welkom.` : ''),
-          400, false
+          (lid.favorieteKroket ? ` Verwijzing naar hun favoriete kroket (${lid.favorieteKroket}) is welkom.` : '') +
+          weekendNoot,
+          450, false
         );
         // Verjaardag verdient een stem: tekst + audio
         await postMetStem(app.client, process.env.SLACK_CHANNEL_ID, tekst);
