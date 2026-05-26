@@ -59,7 +59,7 @@ Regels:
 - Schrijf in correct Nederlands. Gebruik GEEN verzonnen samenstellingen of niet-bestaande woorden. Als je twijfelt of een woord bestaat — gebruik het niet.
 - Neem NOOIT format-labels op in je output (zoals "--- [decreet]" of "--- [one-liner]"). Die zijn alleen voor intern gebruik.
 - Ken NOOIT zelf kroketpunten toe of af tenzij de prompt dit expliciet meldt. Noem GEEN specifieke puntenaantallen — jij weet de actuele stand niet. Als het systeem een punt heeft toegekend of afgenomen staat dit in de prompt vermeld.
-- Gebruik getallen ALLEEN als ze letterlijk in de prompt staan. Reken ze NOOIT om naar andere eenheden of alternatieve berekeningen. "3 dagen" is "3 dagen" — niet "12.3 schooldagen" of "98.4 vergaderingen". Geen decimalen, geen neppe precisiemetingen, geen creatieve omrekeningen.
+- Gebruik getallen ALLEEN als ze in de prompt staan. Verzin geen getallen zelf — geen decimalen, geen neppe berekeningen. Als een prompt voorberekende alternatieve eenheden aanbiedt, mag je die gebruiken, maar alleen exact zoals gegeven.
 - INLEIDINGSZIN — KRITIEKE REGEL: Als het prompt de tekst "Geen inleidingszin" bevat: begin DIRECT met de inhoud — absoluut geen cursieve openingsregel, geen introductie, niets. Direct de hoofdtekst. Als het prompt "Geen inleidingszin" NIET bevat: begin met één cursieve inleidingsregel (_zoals dit_) die in maximaal één zin parafraseert wat er gezegd of gevraagd werd, gevolgd door een lege regel. Doe dit NIET bij algemene aankondigingen.
 - Houd berichten kort: max 4-5 regels hoofdtekst. Elke zin telt.
 - Gebruik Slack blockquote opmaak: zet de hoofdtekst als blockquote met "> ". Header en ondertekening staan buiten de blockquote.
@@ -2092,6 +2092,24 @@ cron.schedule('0 12 * * *', async () => {
     } else {
       const ctx = dagContext[dag];
       if (!ctx) return;
+
+      // Voorberekende omrekeningen — AI rekent NIET zelf, gebruikt alleen deze getallen
+      const uren        = ctx.dagenNog * 24;
+      const werkuren    = ctx.dagenNog * 8;
+      const minuten     = ctx.dagenNog * 24 * 60;
+      const friends     = Math.round(minuten / 22);   // Friends-aflevering ≈ 22 min
+      const vergadering = Math.round(werkuren * 60 / 45); // vergadering ≈ 45 min
+      const schoolles   = Math.round(werkuren * 60 / 50); // schoolles ≈ 50 min
+      const koffie      = ctx.dagenNog * 3;           // ≈ 3 koffie per dag
+      const omrekeningen = [
+        `${uren} uur`,
+        `${werkuren} werkuren`,
+        `${friends} afleveringen Friends`,
+        `${vergadering} vergaderingen van 45 minuten`,
+        `${schoolles} schoollessen`,
+        `${koffie} bakken koffie`,
+      ];
+
       const positief = Math.random() < 0.5;
       const uitverkorene = Math.random() < 0.4 ? getUitverkorene(positief) : null;
       const extra = uitverkorene
@@ -2102,7 +2120,8 @@ cron.schedule('0 12 * * *', async () => {
       const tekst = await kroketResponse(
         `Het is ${ctx.naam} 12:00. Wens de Heren van de Kroket Illuminati smakelijk eten, maar herinner hen eraan dat het geen vrijdag is. ` +
         `Er zijn nog ${ctx.dagenNog} dag(en) tot het heilige kroketmoment. Toon: ${ctx.toon} ` +
-        `Gebruik :lekker_kroketje: als emoji. Wees creatief, kort en in stijl.${extra} Geen inleidingszin.`,
+        `Gebruik :lekker_kroketje: als emoji. Wees creatief, kort en in stijl.${extra} Geen inleidingszin.\n\n` +
+        `Je MAG de wachttijd creatief uitdrukken in alternatieve eenheden — gebruik dan UITSLUITEND de volgende voorberekende getallen (kies 2-3): ${omrekeningen.join(' / ')}. Verzin geen andere getallen.`,
         400, false
       );
       await postToChannel(app.client, process.env.SLACK_CHANNEL_ID, tekst);
