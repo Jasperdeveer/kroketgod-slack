@@ -1743,7 +1743,14 @@ async function analyseerEnGenereer(prompt) {
       messages: [
         {
           role: 'system',
-          content: 'Classify the sentiment of this Dutch message toward a godly authority figure. Reply with EXACTLY one word: BELEDIGING, LOFZANG, or NEUTRAAL.',
+          content: `Classify this Dutch message. Reply with EXACTLY one word.
+
+BELEDIGING: the message DIRECTLY insults, mocks, or attacks the Kroket God or the frituurkring itself. The insult must be aimed AT the bot or the group — not at outsiders or third parties.
+LOFZANG: the message praises, worships, or expresses admiration for the Kroket God or the frituurkring.
+NEUTRAAL: everything else — including messages about outsiders, agreement with the Kroket God, general statements, questions, jokes, or comments not directed at the bot.
+
+Replying about "ongepaneerden" (outsiders) being bad = NEUTRAAL (it aligns with the Kroket God's worldview).
+Reply with EXACTLY one word: BELEDIGING, LOFZANG, or NEUTRAAL.`,
         },
         { role: 'user', content: prompt },
       ],
