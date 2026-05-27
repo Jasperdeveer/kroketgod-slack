@@ -1764,6 +1764,36 @@ app.view('intake_modal', async ({ ack, view, body, client }) => {
   }
 });
 
+// ── Sarcasme-verificatie: tweede-pass check met grotere model ────────────────
+// Voorkomt dat neutrale of grappige berichten als sarcasme worden bestraft.
+// Alleen als BEIDE checks JA zeggen wordt het als sarcasme behandeld.
+
+async function isSarcasme(tekst) {
+  try {
+    const result = await groq.chat.completions.create({
+      model: 'llama-3.3-70b-versatile',
+      max_tokens: 5,
+      temperature: 0,
+      messages: [
+        { role: 'system', content: 'Antwoord ALLEEN met JA of NEE. Geen uitleg.' },
+        {
+          role: 'user',
+          content:
+            `Is dit bericht DUIDELIJK sarcastisch of spottend bedoeld richting een gezaghebbende figuur? ` +
+            `Antwoord JA alleen als de ironie of spot ondubbelzinnig is — iemand die overduidelijk de spot drijft, ` +
+            `neerbuigend doet, of iets beweert wat ze duidelijk niet menen. ` +
+            `Antwoord NEE bij: oprechte vragen, neutrale opmerkingen, grapjes die ook serieus bedoeld kunnen zijn, ` +
+            `complimenten (ook overdreven), en alles waarbij twijfel mogelijk is. Bij twijfel altijd NEE. ` +
+            `Bericht: "${tekst}"`,
+        },
+      ],
+    });
+    return result.choices[0].message.content.trim().toUpperCase().startsWith('JA');
+  } catch {
+    return false; // bij twijfel: geen sarcasme
+  }
+}
+
 // ── Banwaardig-check: is dit écht beledigend genoeg voor ballingschap? ────────
 // Tweede filter na sentimentanalyse — voorkomt dat grappige opmerkingen of
 // lichte kritiek tot een verbanning leiden.
@@ -1934,7 +1964,7 @@ app.event('app_mention', async ({ event, client }) => {
         pasScoreAan(userId, -1);
         logGebeurtenis('belediging', userId, `${bijnaam} beledigd de Kroket God en verloor een punt`, input);
         prompt = `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} heeft zich beledigend uitgelaten tegen de Kroket God: "${input}". Straf hen met goddelijk gezag. Het systeem heeft al 1 kroketpunt afgenomen — bevestig dit. Begin de inleidingszin letterlijk met: ${introStart}`;
-      } else if (sentiment === 'SARCASME' && members[userId]) {
+      } else if (sentiment === 'SARCASME' && members[userId] && await isSarcasme(input)) {
         const sarBan   = Math.random() < 0.10;
         const sarPunt  = !sarBan && Math.random() < 0.33;
 
@@ -1992,7 +2022,7 @@ app.event('app_mention', async ({ event, client }) => {
       } else if (sentiment === 'BELEDIGING') {
         logGebeurtenis('belediging', userId, `${bijnaam} liet zich beledigend uit`, input);
         prompt = `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} heeft zich beledigend uitgelaten: "${input}". Reageer bestraffend. Vermeld GEEN puntenaantal — het systeem heeft niets gewijzigd. Begin de inleidingszin letterlijk met: ${introStart}`;
-      } else if (sentiment === 'SARCASME') {
+      } else if (sentiment === 'SARCASME' && await isSarcasme(input)) {
         prompt = `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} heeft sarcastisch gereageerd op de Kroket God: "${input}". ` +
           `De Kroket God doorziet dit sarcasme feilloos. Citeer de sarcastische uitspraak letterlijk en ontmasker hem als ` +
           `laffe, verkapte oneerbiedigheid — een kroket die glimt van buiten maar van binnen koud en rancuneus is. ` +
