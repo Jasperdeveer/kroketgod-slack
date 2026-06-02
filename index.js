@@ -1195,9 +1195,24 @@ function normaliseerOndertekening(tekst) {
 // Combineerde output-filter: namen vervangen + ondertekening normaliseren
 const schoonOutput = (tekst) => normaliseerOndertekening(vervangNamen(tekst));
 
+// Slack groepeert opeenvolgende bot-berichten met hetzelfde username én icon.
+// Door het icon per bericht te wisselen verschijnt elk bericht als een eigen blok.
+const KROKET_ICONS = [':illuminati-kroket:', ':lekker_kroketje:'];
+let _iconIndex = 0;
+function volgendIcon() {
+  const icon = KROKET_ICONS[_iconIndex % KROKET_ICONS.length];
+  _iconIndex++;
+  return icon;
+}
+
 async function postToChannel(client, channelId, text, options = {}) {
   const gefilterd = schoonOutput(text);
-  const payload = { channel: channelId, text: gefilterd };
+  const payload = {
+    channel: channelId,
+    text: gefilterd,
+    username: 'Kroket God',
+    icon_emoji: volgendIcon(),
+  };
   if (options.thread_ts) payload.thread_ts = options.thread_ts;
   await client.chat.postMessage(payload);
   // Bot-berichten worden NIET in de context opgeslagen — alleen mensberichten geven
