@@ -2642,20 +2642,21 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
       const maskValt = Math.random() < 0.15;
       if (maskValt) {
         const tekst = await kroketResponse(
-          `Een anonieme aanklacht tegen ${lid.bijnaam} wegens: "${reden || 'niet nader omschreven vergrijpen'}". ` +
-          `Dramatische wending: het masker is gevallen. Onthul dat de aanklager ${aanvrager} is. ` +
-          `De Kroket God is niet onder de indruk van anonieme achterbaksheid. ` +
-          `Behandel de aanklacht als verdacht en bestraf de aanklager licht. Geen inleidingszin.`,
+          `[BESCHULDIGDE: ${lid.bijnaam}] [AANKLAGER: ${aanvrager}] ` +
+          `Een anonieme aanklacht was ingediend tegen ${lid.bijnaam} wegens: "${reden || 'niet nader omschreven vergrijpen'}". ` +
+          `Dramatische wending: het masker is gevallen. De Kroket God onthult dat de aanklager ${aanvrager} is — niet ${lid.bijnaam}. ` +
+          `Richt je woord tot ${aanvrager} (de aanklager) en spreek ${lid.bijnaam} (de beschuldigde) vrij van blaam. ` +
+          `De Kroket God is niet onder de indruk van anonieme achterbaksheid. Bestraf ${aanvrager} licht. Geen inleidingszin.`,
           400, false
         );
         await postToChannel(client, command.channel_id, tekst);
       } else {
         const tekst = await kroketResponse(
-          `Een anonieme bron heeft bij de Hoge Frituurraad een klacht ingediend tegen ${lid.bijnaam}: ` +
-          `"${reden || 'niet nader omschreven vergrijpen'}". ` +
-          `De identiteit van de aanklager blijft achter het schild van de Frituurraad verborgen. ` +
-          `Behandel de klacht serieus maar met gepaste scepsis — anonimiteit is geoorloofd maar roept vragen op. ` +
-          `Geen inleidingszin.`,
+          `[BESCHULDIGDE: ${lid.bijnaam}] ` +
+          `Een anonieme bron heeft een klacht ingediend bij de Hoge Frituurraad. ` +
+          `De beschuldigde is ${lid.bijnaam} — en alleen ${lid.bijnaam}. De aanklager is onbekend en blijft onbekend. ` +
+          `Spreek ${lid.bijnaam} aan over de aanklacht: "${reden || 'niet nader omschreven vergrijpen'}". ` +
+          `Behandel de klacht serieus maar met gepaste scepsis. Geen inleidingszin.`,
           400, false
         );
         await postToChannel(client, command.channel_id, tekst);
