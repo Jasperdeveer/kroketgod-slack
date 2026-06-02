@@ -1207,11 +1207,17 @@ function volgendIcon() {
 
 async function postToChannel(client, channelId, text, options = {}) {
   const gefilterd = schoonOutput(text);
+  // Slack's sectie-blokken hebben een limiet van 3000 tekens
+  const tekstVoorBlok = gefilterd.substring(0, 2999);
   const payload = {
     channel: channelId,
-    text: gefilterd,
+    text: gefilterd, // fallback voor notificaties
     username: 'Kroket God',
     icon_emoji: volgendIcon(),
+    blocks: [
+      { type: 'divider' },
+      { type: 'section', text: { type: 'mrkdwn', text: tekstVoorBlok } },
+    ],
   };
   if (options.thread_ts) payload.thread_ts = options.thread_ts;
   await client.chat.postMessage(payload);
