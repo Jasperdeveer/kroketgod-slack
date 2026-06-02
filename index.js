@@ -1841,7 +1841,7 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
       return;
     }
 
-    // ── Uitbreken — verbannen lid probeert te ontsnappen (20% kans, geen beroep nodig)
+    // ── Uitbreken — verbannen lid probeert te ontsnappen (20% kans, max 1x/uur)
     if (input === 'uitbreken') {
       const banStatus = isVerbannen(command.user_id);
       if (!banStatus) {
@@ -1849,10 +1849,27 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
         return;
       }
 
+      // Cooldown: max 1 poging per uur — timestamp opgeslagen in verbanning-record
+      const verbanning = loadVerbanning();
+      const laastePoging = verbanning[command.user_id]?.uitbreekPoging || 0;
+      const cooldownMs = 60 * 60 * 1000;
+      const restMs = cooldownMs - (Date.now() - laastePoging);
+      if (restMs > 0) {
+        const restMin = Math.ceil(restMs / 60_000);
+        await respond({
+          text: `_De frituurwachters hebben uw vorige poging nog vers in het geheugen. Wacht nog ${restMin} minuut(en) voor de volgende poging._`,
+          response_type: 'ephemeral',
+        });
+        return;
+      }
+
+      // Sla tijdstip van deze poging op
+      verbanning[command.user_id].uitbreekPoging = Date.now();
+      saveVerbanning(verbanning);
+
       const geslaagd = Math.random() < 0.20;
 
       if (geslaagd) {
-        const verbanning = loadVerbanning();
         delete verbanning[command.user_id];
         saveVerbanning(verbanning);
         resetVergrijpen(command.user_id);
@@ -1866,10 +1883,10 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
           `Gebruik het spoedmelding-formaat. Geen inleidingszin.`,
           400, false
         );
+        // Geslaagde ontsnapping altijd publiek
         await postToChannel(client, command.channel_id, `<@${command.user_id}>\n\n${tekst}`);
       } else {
-        // Mislukt — ban verlengd met 1 uur als straf
-        const verbanning = loadVerbanning();
+        // Mislukt — ban verlengd met 1 uur
         const huidig = new Date(verbanning[command.user_id].tot);
         huidig.setHours(huidig.getHours() + 1);
         verbanning[command.user_id].tot = huidig.toISOString();
@@ -1885,9 +1902,18 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
           `Spreek dit uit als een waarschuwend decreet: vluchten maakt het alleen maar erger. Geen inleidingszin.`,
           400, false
         );
-        await postToChannel(client, command.channel_id,
-          `<@${command.user_id}>\n\n${tekst}\n\n_De poorten heropenen zich nu pas om ${terugTijd}._`
-        );
+
+        // 50% kans: publiek zichtbaar — 50% kans: alleen privé zichtbaar voor de balling
+        if (Math.random() < 0.50) {
+          await postToChannel(client, command.channel_id,
+            `<@${command.user_id}>\n\n${tekst}\n\n_De poorten heropenen zich nu pas om ${terugTijd}._`
+          );
+        } else {
+          await respond({
+            text: `${tekst}\n\n_De poorten heropenen zich nu pas om ${terugTijd}. Niemand hoeft dit te weten._`,
+            response_type: 'ephemeral',
+          });
+        }
       }
       return;
     }
