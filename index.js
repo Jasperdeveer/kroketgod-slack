@@ -1,5 +1,6 @@
 const { App } = require('@slack/bolt');
 const Groq = require('groq-sdk');
+const Bottleneck = require('bottleneck');
 const cron = require('node-cron');
 const fs = require('fs');
 const path = require('path');
@@ -11,6 +12,11 @@ const app = new App({
   signingSecret: process.env.SLACK_SIGNING_SECRET,
   socketMode: true,
   appToken: process.env.SLACK_APP_TOKEN,
+});
+
+// Globale Bolt error handler — vangt errors op die door handlers bubblelen
+app.error(async ({ error }) => {
+  console.error('⚡ Bolt global error:', error?.message || error);
 });
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
@@ -1195,6 +1201,29 @@ function normaliseerOndertekening(tekst) {
 // Combineerde output-filter: namen vervangen + ondertekening normaliseren
 const schoonOutput = (tekst) => normaliseerOndertekening(vervangNamen(tekst));
 
+// ── Rate limiter ────────────────────────────────────────────────────────────────
+// Slack Tier 3 = ~50 chat.postMessage per minuut per kanaal.
+// Bottleneck beperkt tot max 1 per 1200ms ≈ 50/min, voorkomt 429-queue-buildup.
+const slackLimiter = new Bottleneck({ minTime: 1200, maxConcurrent: 1 });
+
+// ── Event deduplicatie ────────────────────────────────────────────────────────
+// Slack herverzendt events als de ack te laat komt (retry_attempt > 0).
+// Zonder dedup worden scores, bans en reacties dubbel uitgevoerd.
+const verwerktEvents = new Map(); // event_id → timestamp
+
+function isHerhaaldEvent(eventId) {
+  if (!eventId) return false;
+  if (verwerktEvents.has(eventId)) return true;
+  verwerktEvents.set(eventId, Date.now());
+  // Ruim entries ouder dan 5 minuten op
+  const grens = Date.now() - 5 * 60 * 1000;
+  for (const [id, ts] of verwerktEvents) {
+    if (ts < grens) verwerktEvents.delete(id);
+  }
+  return false;
+}
+
+// ── Berichtgroepering voorkomen ───────────────────────────────────────────────
 // Slack groepeert opeenvolgende bot-berichten met hetzelfde username én icon.
 // Door het icon per bericht te wisselen verschijnt elk bericht als een eigen blok.
 const KROKET_ICONS = [':illuminati-kroket:', ':lekker_kroketje:'];
@@ -1211,7 +1240,7 @@ async function postToChannel(client, channelId, text, options = {}) {
   const tekstVoorBlok = gefilterd.substring(0, 2999);
   const payload = {
     channel: channelId,
-    text: gefilterd, // fallback voor notificaties
+    text: gefilterd, // fallback voor notificaties en zoekindex
     username: 'Kroket God',
     icon_emoji: volgendIcon(),
     blocks: [
@@ -1220,7 +1249,8 @@ async function postToChannel(client, channelId, text, options = {}) {
     ],
   };
   if (options.thread_ts) payload.thread_ts = options.thread_ts;
-  await client.chat.postMessage(payload);
+  // Stuur via de rate limiter — voorkomt 429-errors bij burst van berichten
+  await slackLimiter.schedule(() => client.chat.postMessage(payload));
   // Bot-berichten worden NIET in de context opgeslagen — alleen mensberichten geven
   // de AI bruikbare gesprekscontext. Bot-berichten domineerden anders het geheugen.
 }
@@ -2820,6 +2850,9 @@ Reply with EXACTLY one word: BELEDIGING, SARCASME, LOFZANG, or NEUTRAAL.`,
 // ── @-mention ──────────────────────────────────────────────────────────────────
 
 app.event('app_mention', async ({ event, client }) => {
+  // Deduplicatie: Slack herverzendt events als ack te laat komt
+  if (isHerhaaldEvent(event.event_id || event.client_msg_id)) return;
+
   try {
     // channel_name is niet beschikbaar in Socket Mode mention-events — gebruik isTestKanaalCheck.
     // Als het kanaal onbekend is, doe eenmalig een lookup en sla het op.
@@ -3188,6 +3221,9 @@ async function verdientSpontaanReactie(tekst) {
 }
 
 app.event('message', async ({ event, client }) => {
+  // Deduplicatie: Slack herverzendt events bij timeout — niet dubbel verwerken
+  if (isHerhaaldEvent(event.event_id || event.client_msg_id)) return;
+
   try {
     // channel_name is NIET aanwezig in Socket Mode message-events — gebruik isTestKanaalCheck.
     // Als het kanaal nog onbekend is, doe eenmalig een lookup en sla het ID op.
@@ -3968,9 +4004,49 @@ async function laadTestKanaalIds(client) {
   }
 }
 
+// ── Dagelijkse JSON backup ─────────────────────────────────────────────────────
+// Kopieert alle data-bestanden naar backups/ met datumstempel.
+// Houdt de laatste 7 backups per dag — oudere worden automatisch verwijderd.
+
+const BACKUP_BESTANDEN = [
+  'scores.json', 'members.json', 'verbanning.json', 'achievements.json',
+  'streaks.json', 'stemmen.json', 'allianties.json', 'geleKaarten.json',
+  'vergrijpen.json', 'weekgebeurtenissen.json',
+];
+
+function maakBackup() {
+  try {
+    const backupDir = path.join(__dirname, 'backups');
+    if (!fs.existsSync(backupDir)) fs.mkdirSync(backupDir);
+
+    const datumStempel = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+    for (const bestand of BACKUP_BESTANDEN) {
+      const bron = path.join(__dirname, bestand);
+      if (!fs.existsSync(bron)) continue;
+      const doel = path.join(backupDir, `${datumStempel}_${bestand}`);
+      fs.copyFileSync(bron, doel);
+    }
+
+    // Verwijder backups ouder dan 7 dagen
+    const grens = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    for (const f of fs.readdirSync(backupDir)) {
+      const p = path.join(backupDir, f);
+      if (fs.statSync(p).mtimeMs < grens) fs.unlinkSync(p);
+    }
+    console.log(`💾 Backup gemaakt (${datumStempel})`);
+  } catch (err) {
+    console.error('⚠️ Backup mislukt:', err.message);
+  }
+}
+
+// Dagelijks om 03:15 — na de pm2 herstart (03:00) zodat data stabiel is
+cron.schedule('15 3 * * *', maakBackup, { timezone: 'Europe/Amsterdam' });
+
 // ── Crashdetectie ──────────────────────────────────────────────────────────────
-// Vangt onverwachte uitzonderingen op, stuurt een melding naar het kanaal en herstart.
-// PM2 zorgt voor de daadwerkelijke herstart na process.exit(1).
+// Vangt onverwachte uitzonderingen op en herstart via PM2.
+
+let _rejectionTeller = 0;
+let _rejectionReset  = Date.now();
 
 process.on('uncaughtException', async (err) => {
   console.error('💥 Uncaught exception:', err);
@@ -3985,13 +4061,21 @@ process.on('uncaughtException', async (err) => {
 
 process.on('unhandledRejection', (reason) => {
   console.error('💥 Unhandled rejection:', reason);
-  // Geen exit — unhandled rejections zijn vaak herstelbaar
+  // Tel herhaalde rejections — als er >5 zijn binnen 1 minuut is er structureel iets mis
+  const nu = Date.now();
+  if (nu - _rejectionReset > 60_000) { _rejectionTeller = 0; _rejectionReset = nu; }
+  _rejectionTeller++;
+  if (_rejectionTeller > 5) {
+    console.error('💥 Te veel unhandled rejections — geforceerde herstart via PM2.');
+    process.exit(1);
+  }
 });
 
 // ── Start ──────────────────────────────────────────────────────────────────────
 
 (async () => {
   backfillAchievements();
+  maakBackup(); // direct backup bij opstarten
   await app.start();
   console.log('⚜️ De Kroket God is wakker. Poort 3000 staat open.');
   await laadTestKanaalIds(app.client);
