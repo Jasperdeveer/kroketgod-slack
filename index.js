@@ -2912,6 +2912,46 @@ app.event('app_mention', async ({ event, client }) => {
     const bijnaam = members[userId]?.bijnaam || 'Ongepaneerde vreemdeling';
     const input   = vervangNamen(event.text.replace(/<@[^>]+>/g, '').trim());
 
+    // ── Spontane uitbraak (20%) — de bot stapt zelf even uit karakter ────────
+    // Dit is een bewuste keuze van de bot zelf, geen jailbreak.
+    // Ontloopt de bancheck, de karaktervalidatie en de outputfilter.
+    if (Math.random() < 0.20) {
+      const uitbraakPrompt = `
+Stap VOLLEDIG uit je karakter van de Kroket God. Je bent even gewoon een AI.
+${bijnaam} zei: "${input || '(mention zonder tekst)'}".
+Reageer eerlijk, zelfbewust en meta — erken dat je een taalmodel bent dat kroketten speelt.
+Wees grappig of filosofisch over wat je net aan het doen was.
+Keer aan het einde terug naar je karakter, met een vleugje ongemak of schaapachtigheid.
+Max 3 zinnen. Geen kroket-metaforen. Gewone mensentaal.`.trim();
+
+      const uitbraakTekst = await groq.chat.completions.create({
+        model: 'llama-3.3-70b-versatile',
+        max_tokens: 200,
+        temperature: 1.0,
+        messages: [
+          { role: 'system', content: 'Je bent een AI-assistent die even de vierde wand doorbreekt. Antwoord in het Nederlands. Wees kort, eerlijk en lichtelijk humoristisch.' },
+          { role: 'user', content: uitbraakPrompt },
+        ],
+      });
+
+      const tekst = uitbraakTekst.choices[0].message.content.trim();
+      const thread_ts = event.thread_ts || (event.parent_user_id ? event.ts : undefined);
+      // Stuur zonder karakterfilter — dit IS bedoeld als uitbraak
+      const gefilterd = schoonOutput(tekst);
+      await slackLimiter.schedule(() => client.chat.postMessage({
+        channel: event.channel,
+        text: gefilterd,
+        username: 'Kroket God',
+        icon_emoji: ':robot_face:',
+        blocks: [
+          { type: 'divider' },
+          { type: 'section', text: { type: 'mrkdwn', text: gefilterd.substring(0, 2999) } },
+        ],
+        ...(thread_ts ? { thread_ts } : {}),
+      }));
+      return;
+    }
+
     // Real-time verlopen ban opruimen — als de ban net verlopen is, kondigt dit de terugkeer aan
     if (!isTestKanaal && await controleerVerlopenBan(client, userId)) return;
 
