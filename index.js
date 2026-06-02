@@ -7,11 +7,39 @@ const path = require('path');
 const fetch = require('node-fetch');
 require('dotenv').config();
 
+// ── Startup env-validatie ──────────────────────────────────────────────────────
+// Fail loud bij ontbrekende env-vars — beter nu dan een cryptische runtime-fout.
+const REQUIRED_ENV = [
+  'SLACK_BOT_TOKEN', 'SLACK_APP_TOKEN', 'SLACK_SIGNING_SECRET',
+  'SLACK_CHANNEL_ID', 'GROQ_API_KEY',
+];
+const ontbrekendeVars = REQUIRED_ENV.filter(k => !process.env[k]);
+if (ontbrekendeVars.length) {
+  console.error('❌ Ontbrekende omgevingsvariabelen:', ontbrekendeVars.join(', '));
+  process.exit(1);
+}
+
+// ── App initialisatie ──────────────────────────────────────────────────────────
+let isReady = false; // wordt true na app.start() — gebruikt door health endpoint
+
 const app = new App({
   token: process.env.SLACK_BOT_TOKEN,
   signingSecret: process.env.SLACK_SIGNING_SECRET,
   socketMode: true,
   appToken: process.env.SLACK_APP_TOKEN,
+  // Bolt's ingebouwde MemoryStore voor conversation state groeit onbeperkt.
+  // Wij beheren state zelf via JSON-bestanden — sla dit uit.
+  convoStore: false,
+  // Health endpoint op poort 3001 zodat uptime-monitoring de bot kan pingen
+  port: 3001,
+  customRoutes: [{
+    path: '/health',
+    method: ['GET'],
+    handler: (req, res) => {
+      res.writeHead(isReady ? 200 : 503, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: isReady ? 'ok' : 'starting', ts: Date.now() }));
+    },
+  }],
 });
 
 // Globale Bolt error handler — vangt errors op die door handlers bubblelen
@@ -3380,9 +3408,18 @@ app.event('reaction_added', async ({ event, client }) => {
   }
 });
 
+// ── Cron-taak tracking ────────────────────────────────────────────────────────
+// Alle geplande crons worden bijgehouden zodat graceful shutdown ze allemaal stopt.
+const geplandeCrons = [];
+function planCron(expression, handler, options = {}) {
+  const taak = planCron(expression, handler, { timezone: 'Europe/Amsterdam', ...options });
+  geplandeCrons.push(taak);
+  return taak;
+}
+
 // ── Cron: dagelijks 12:00 (lunch + vrijdagoproep) ─────────────────────────────
 
-cron.schedule('0 12 * * *', async () => {
+planCron('0 12 * * *', async () => {
   try {
     const dag = new Date().getDay();
     if (dag === 0 || dag === 6) return;
@@ -3498,7 +3535,7 @@ cron.schedule('0 12 * * *', async () => {
 
 // ── Cron: maandag 09:00 — weekopening ─────────────────────────────────────────
 
-cron.schedule('0 9 * * 1', async () => {
+planCron('0 9 * * 1', async () => {
   try {
     // ── Vrijdag-streaks verwerken ─────────────────────────────────────────────
     // Vorige week's maandagsleutel = zeven dagen geleden
@@ -3564,7 +3601,7 @@ cron.schedule('0 9 * * 1', async () => {
 
 // ── Cron: dagelijks 09:00 (di-vr) — stemming van de dag ──────────────────────
 
-cron.schedule('0 9 * * 2-5', async () => {
+planCron('0 9 * * 2-5', async () => {
   try {
     const stemming = getDagelijkseStemming();
     const tijd = getTijdContext();
@@ -3582,7 +3619,7 @@ cron.schedule('0 9 * * 2-5', async () => {
 
 // ── Cron: vrijdag 16:00 — wekelijkse held verkondigen ─────────────────────────
 
-cron.schedule('0 16 * * 5', async () => {
+planCron('0 16 * * 5', async () => {
   try {
     const stemData = loadStemmen();
     const weekStart = getMondayOfWeek();
@@ -3688,8 +3725,8 @@ async function maybeSpontaan() {
   }
 }
 
-cron.schedule('0 10 * * 2,4', maybeSpontaan, { timezone: 'Europe/Amsterdam' });
-cron.schedule('0 14 * * 2,4', maybeSpontaan, { timezone: 'Europe/Amsterdam' });
+planCron('0 10 * * 2,4', maybeSpontaan, { timezone: 'Europe/Amsterdam' });
+planCron('0 14 * * 2,4', maybeSpontaan, { timezone: 'Europe/Amsterdam' });
 
 // ── Kroketfeitjes / mopjes / historische weetjes ──────────────────────────────
 
@@ -3736,7 +3773,7 @@ function planKroketFeitje(client) {
 }
 
 // Weekdagen 07:30 — 60% kans op een kroketfeitje die dag
-cron.schedule('30 7 * * 1-5', () => {
+planCron('30 7 * * 1-5', () => {
   if (Math.random() < 0.60) planKroketFeitje(app.client);
 }, { timezone: 'Europe/Amsterdam' });
 
@@ -3792,7 +3829,7 @@ async function stuurWeekSamenvatting(client) {
   console.log('📋 Weekoverzicht gepost en log gereset.');
 }
 
-cron.schedule('0 15 * * 5', async () => {
+planCron('0 15 * * 5', async () => {
   try {
     await stuurWeekSamenvatting(app.client);
   } catch (err) {
@@ -3802,7 +3839,7 @@ cron.schedule('0 15 * * 5', async () => {
 
 // ── Cron: vrijdag 11:30 — aankondiging 30 minuten voor het heilige uur ────────
 
-cron.schedule('30 11 * * 5', async () => {
+planCron('30 11 * * 5', async () => {
   try {
     const tekst = await kroketResponse(
       `Het is vrijdag 11:30. Over precies 30 minuten is het heilige uur van 12:00 aangebroken — het moment van #lekkerkroketje. ` +
@@ -3878,7 +3915,7 @@ function planWillekeurigKroketEvent(client) {
 }
 
 // Maandag 09:30 — plan event op willekeurig moment ergens deze week (ma–vr 10:00–17:00)
-cron.schedule('30 9 * * 1', () => {
+planCron('30 9 * * 1', () => {
   const extraDagen = Math.floor(Math.random() * 5);         // 0=ma … 4=vr
   const doelUur   = 10 + Math.floor(Math.random() * 7);    // 10–16
   const doelMin   = Math.floor(Math.random() * 60);
@@ -3892,7 +3929,7 @@ cron.schedule('30 9 * * 1', () => {
 
 // ── Cron: dagelijks 08:30 — verjaardagscheck ──────────────────────────────────
 
-cron.schedule('30 8 * * *', async () => {
+planCron('30 8 * * *', async () => {
   try {
     // Verjaardagen zijn een uitzondering op de weekendrust — ze worden altijd verstuurd.
     // Als het weekend is, vermeldt de bot dat het bericht pas maandag wordt gelezen.
@@ -3932,7 +3969,7 @@ cron.schedule('30 8 * * *', async () => {
 
 // ── Cron: 1e van de maand 09:00 — maandkampioen & score reset ─────────────────
 
-cron.schedule('0 9 1 * *', async () => {
+planCron('0 9 1 * *', async () => {
   try {
     // Als de 1e van de maand op een weekend valt, verschuif naar de eerstvolgende maandag
     if (isWeekendAms()) {
@@ -4040,7 +4077,7 @@ function maakBackup() {
 }
 
 // Dagelijks om 03:15 — na de pm2 herstart (03:00) zodat data stabiel is
-cron.schedule('15 3 * * *', maakBackup, { timezone: 'Europe/Amsterdam' });
+planCron('15 3 * * *', maakBackup, { timezone: 'Europe/Amsterdam' });
 
 // ── Crashdetectie ──────────────────────────────────────────────────────────────
 // Vangt onverwachte uitzonderingen op en herstart via PM2.
@@ -4071,12 +4108,35 @@ process.on('unhandledRejection', (reason) => {
   }
 });
 
+// ── Graceful shutdown ──────────────────────────────────────────────────────────
+// systemd (Pi) stuurt SIGTERM voor kill. Zonder handler worden:
+// - lopende JSON-writes afgekapt (datacorruptie)
+// - de Slack WebSocket niet netjes gesloten (reconnect-delays)
+// - node-cron taken niet gestopt (process hangt)
+
+async function gracefulShutdown(signaal) {
+  console.log(`🛑 ${signaal} ontvangen — graceful shutdown...`);
+  isReady = false;
+  // Stop alle geplande cron-taken
+  for (const taak of geplandeCrons) {
+    try { taak.stop(); } catch (_) {}
+  }
+  // Stop Bolt (sluit WebSocket netjes)
+  try { await app.stop(); } catch (_) {}
+  console.log('✅ Kroket God netjes afgesloten.');
+  process.exit(0);
+}
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT',  () => gracefulShutdown('SIGINT'));
+
 // ── Start ──────────────────────────────────────────────────────────────────────
 
 (async () => {
   backfillAchievements();
   maakBackup(); // direct backup bij opstarten
   await app.start();
-  console.log('⚜️ De Kroket God is wakker. Poort 3000 staat open.');
+  isReady = true;
+  console.log('⚜️ De Kroket God is wakker. Health: http://localhost:3001/health');
   await laadTestKanaalIds(app.client);
 })();
