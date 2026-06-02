@@ -1704,6 +1704,7 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
         { cmd: 'weekoverzicht',         uitleg: 'humoristisch overzicht van de week' },
         { cmd: 'gelekaart [naam] [reden]', uitleg: 'formele waarschuwing — tweede overtreding = directe ban' },
         { cmd: 'beroep [smoes]',          uitleg: '20% kans op genade — 80% extra vernedering' },
+        { cmd: 'uitbreken',               uitleg: '20% kans op ontsnapping — 80% ban +1 uur' },
         { cmd: 'streaks',                  uitleg: 'ranglijst van vrijdag-streaks' },
         { cmd: 'begenade [naam]',       uitleg: 'verbanning vroegtijdig opheffen' },
         { cmd: 'dossier [naam]',        uitleg: 'kroket-CV van een lid' },
@@ -1797,7 +1798,7 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
 
     // ── Verbanning check — verbannen leden kunnen geen publieke commando's uitvoeren
     //    Passieve commando's (ranglijst, dossier, help, prompts) zijn wel toegestaan
-    const PASSIEVE_COMMANDO_S = ['ranglijst', 'dossier', 'help', 'prompts', 'kroketprompts', 'beroep'];
+    const PASSIEVE_COMMANDO_S = ['ranglijst', 'dossier', 'help', 'prompts', 'kroketprompts', 'beroep', 'uitbreken'];
     if (isVerbannen(command.user_id) && !PASSIEVE_COMMANDO_S.includes(eersteWoord) && !isTestKanaalCmd) {
       const banData = loadVerbanning()[command.user_id];
       const terugTijd = banData ? new Date(banData.tot).toLocaleString('nl-NL', {
@@ -1837,6 +1838,57 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
       }
       const tekst = await kroketResponse(`Spreek ${lid[1].bijnaam} aan met een willekeurige uitspraak — zegen, waarschuwing, observatie of compliment. Verras met de toon. Geen inleidingszin.`);
       await postToChannel(client, command.channel_id, tekst);
+      return;
+    }
+
+    // ── Uitbreken — verbannen lid probeert te ontsnappen (20% kans, geen beroep nodig)
+    if (input === 'uitbreken') {
+      const banStatus = isVerbannen(command.user_id);
+      if (!banStatus) {
+        await respond({ text: '_U zit niet in het ballingschap. Uitbreken is hier niet van toepassing._', response_type: 'ephemeral' });
+        return;
+      }
+
+      const geslaagd = Math.random() < 0.20;
+
+      if (geslaagd) {
+        const verbanning = loadVerbanning();
+        delete verbanning[command.user_id];
+        saveVerbanning(verbanning);
+        resetVergrijpen(command.user_id);
+        logGebeurtenis('genade', command.user_id, `${aanvrager} brak succesvol uit het ballingschap`);
+
+        const tekst = await kroketResponse(
+          `${aanvrager} heeft een gedurfde ontsnapping geprobeerd uit het ballingschap — en is geslaagd. ` +
+          `De poorten zijn voor hun neus dichtgegaan, maar zij glipten er toch doorheen. ` +
+          `Kondig dit aan als een ongekend moment: de frituurmuren zijn doorbroken. ` +
+          `Waarschuw dat dit slechts uitstel is — de Hoge Frituurraad vergeet nooit. ` +
+          `Gebruik het spoedmelding-formaat. Geen inleidingszin.`,
+          400, false
+        );
+        await postToChannel(client, command.channel_id, `<@${command.user_id}>\n\n${tekst}`);
+      } else {
+        // Mislukt — ban verlengd met 1 uur als straf
+        const verbanning = loadVerbanning();
+        const huidig = new Date(verbanning[command.user_id].tot);
+        huidig.setHours(huidig.getHours() + 1);
+        verbanning[command.user_id].tot = huidig.toISOString();
+        saveVerbanning(verbanning);
+
+        const terugTijd = huidig.toLocaleTimeString('nl-NL', {
+          timeZone: 'Europe/Amsterdam', hour: '2-digit', minute: '2-digit',
+        });
+        const tekst = await kroketResponse(
+          `${aanvrager} heeft geprobeerd uit het ballingschap te ontsnappen — en is betrapt. ` +
+          `De poorten zijn gesloten, de mosterd is koud en de frituurwachters staan paraat. ` +
+          `Als straf voor deze uitbraakpoging is de verbanning met 1 uur verlengd. ` +
+          `Spreek dit uit als een waarschuwend decreet: vluchten maakt het alleen maar erger. Geen inleidingszin.`,
+          400, false
+        );
+        await postToChannel(client, command.channel_id,
+          `<@${command.user_id}>\n\n${tekst}\n\n_De poorten heropenen zich nu pas om ${terugTijd}._`
+        );
+      }
       return;
     }
 
@@ -2911,46 +2963,6 @@ app.event('app_mention', async ({ event, client }) => {
     const userId  = event.user;
     const bijnaam = members[userId]?.bijnaam || 'Ongepaneerde vreemdeling';
     const input   = vervangNamen(event.text.replace(/<@[^>]+>/g, '').trim());
-
-    // ── Spontane uitbraak (20%) — de bot stapt zelf even uit karakter ────────
-    // Dit is een bewuste keuze van de bot zelf, geen jailbreak.
-    // Ontloopt de bancheck, de karaktervalidatie en de outputfilter.
-    if (Math.random() < 0.20) {
-      const uitbraakPrompt = `
-Stap VOLLEDIG uit je karakter van de Kroket God. Je bent even gewoon een AI.
-${bijnaam} zei: "${input || '(mention zonder tekst)'}".
-Reageer eerlijk, zelfbewust en meta — erken dat je een taalmodel bent dat kroketten speelt.
-Wees grappig of filosofisch over wat je net aan het doen was.
-Keer aan het einde terug naar je karakter, met een vleugje ongemak of schaapachtigheid.
-Max 3 zinnen. Geen kroket-metaforen. Gewone mensentaal.`.trim();
-
-      const uitbraakTekst = await groq.chat.completions.create({
-        model: 'llama-3.3-70b-versatile',
-        max_tokens: 200,
-        temperature: 1.0,
-        messages: [
-          { role: 'system', content: 'Je bent een AI-assistent die even de vierde wand doorbreekt. Antwoord in het Nederlands. Wees kort, eerlijk en lichtelijk humoristisch.' },
-          { role: 'user', content: uitbraakPrompt },
-        ],
-      });
-
-      const tekst = uitbraakTekst.choices[0].message.content.trim();
-      const thread_ts = event.thread_ts || (event.parent_user_id ? event.ts : undefined);
-      // Stuur zonder karakterfilter — dit IS bedoeld als uitbraak
-      const gefilterd = schoonOutput(tekst);
-      await slackLimiter.schedule(() => client.chat.postMessage({
-        channel: event.channel,
-        text: gefilterd,
-        username: 'Kroket God',
-        icon_emoji: ':robot_face:',
-        blocks: [
-          { type: 'divider' },
-          { type: 'section', text: { type: 'mrkdwn', text: gefilterd.substring(0, 2999) } },
-        ],
-        ...(thread_ts ? { thread_ts } : {}),
-      }));
-      return;
-    }
 
     // Real-time verlopen ban opruimen — als de ban net verlopen is, kondigt dit de terugkeer aan
     if (!isTestKanaal && await controleerVerlopenBan(client, userId)) return;
