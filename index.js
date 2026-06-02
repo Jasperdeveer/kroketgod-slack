@@ -974,6 +974,41 @@ async function callGemini({ model, messages, max_tokens, temperature }) {
   return await response.json();
 }
 
+// ── Karakter-validatie ─────────────────────────────────────────────────────────
+// Detecteert responses waarbij de AI uit karakter valt — meta-taal, Engelse
+// modelreferenties, helpdesk-toon, of expliciete AI-zelfidentificatie.
+
+const UIT_KARAKTER_PATRONEN = [
+  /\bals (een |taal)?ai\b/i,
+  /\bals taalmodel\b/i,
+  /\blanguage model\b/i,
+  /\bchatgpt\b/i,
+  /\bals (grote )?taalmodel\b/i,
+  /\bik (kan|zal) (dit|dat) niet/i,
+  /ik zal mijn (huidige |vorige )?reactie verwijderen/i,
+  /ik zal mijn instellingen herstellen/i,
+  /niet deel uitmaakt van het gesprek/i,
+  /kunt u me dat (dan )?laten weten/i,
+  /als u klaar bent met uw verzoek/i,
+  /\bI('ll| will| am| can)\b/,            // Engelse persoonsvorm
+  /\b(I|you|your|we|they)\b.*\bkroket\b/i, // Engels met kroket-verwijzing
+  /getuige aanwezig zijn.*frituur/i,
+  /wanneer een klacht wordt ingediend.*getuige/i,
+];
+
+const KARAKTER_FALLBACK = [
+  '> De frituur heeft gesproken. Meer valt er niet te zeggen.\n\n— De Almachtige Kroket God',
+  '> De Hoge Frituurraad heeft uw verzoek ontvangen. Het oordeel volgt in stilte.\n\n— De Almachtige Kroket God',
+  '> De mosterd is koud. Dat is uw schuld.\n\n— De Almachtige Kroket God',
+  '> Sta op. Panner uzelf. Ga.\n\n— De Almachtige Kroket God',
+  '> Gebod I: De kroket wacht op niemand. Niet op u. Niet op de Raad.\n\n— De Almachtige Kroket God',
+];
+
+function isUitKarakter(tekst) {
+  if (!tekst) return false;
+  return UIT_KARAKTER_PATRONEN.some(p => p.test(tekst));
+}
+
 async function kroketResponse(prompt, maxTokens = 400, metContext = true) {
   const systemPrompt = metContext
     ? buildSystemPrompt() + buildContextString()
@@ -1044,8 +1079,15 @@ ${ledenLijst}`,
           : await groq.chat.completions.create(opts);
         const keuze = laatste.choices[0];
         if (keuze.finish_reason !== 'length') {
+          const inhoud = keuze.message.content;
+          if (isUitKarakter(inhoud)) {
+            const isLaatsteModel = i === modellen.length - 1;
+            console.warn(`⚠️ Uit-karakter respons gedetecteerd (${model.naam}) — ${isLaatsteModel ? 'statisch fallback' : 'volgend model'}.`);
+            if (!isLaatsteModel) break; // probeer volgend model
+            return KARAKTER_FALLBACK[Math.floor(Math.random() * KARAKTER_FALLBACK.length)];
+          }
           if (i > 0) console.log(`✓ Antwoord via fallback: ${model.naam}`);
-          return keuze.message.content;
+          return inhoud;
         }
         console.warn(`⚠️ Afgeknopt bij ${pogingTokens} tokens (${model.naam}, poging ${poging}).`);
       }
@@ -1494,6 +1536,28 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
         '',
       ];
       await respond({ text: regels.join('\n'), response_type: 'ephemeral' });
+      return;
+    }
+
+    // Opruimen — verwijder recente bot-berichten die uit karakter zijn (alleen voor beheerder)
+    if (input.startsWith('opruimen') && command.user_id === 'U08ALFNQB1V') {
+      const aantalStr = input.replace(/^opruimen\s*/i, '').trim();
+      const aantal = parseInt(aantalStr) || 20;
+      try {
+        const history = await client.conversations.history({ channel: command.channel_id, limit: Math.min(aantal * 3, 100) });
+        const botBerichten = (history.messages || []).filter(m => m.bot_id || m.bot_profile);
+        const teVerwijderen = botBerichten.filter(m => isUitKarakter(m.text || ''));
+        let verwijderd = 0;
+        for (const m of teVerwijderen) {
+          try {
+            await client.chat.delete({ channel: command.channel_id, ts: m.ts });
+            verwijderd++;
+          } catch (_) {}
+        }
+        await respond({ text: `🧹 ${verwijderd} uit-karakter bericht(en) verwijderd uit de laatste ${botBerichten.length} bot-berichten.`, response_type: 'ephemeral' });
+      } catch (err) {
+        await respond({ text: `Fout bij opruimen: ${err.message}`, response_type: 'ephemeral' });
+      }
       return;
     }
 
