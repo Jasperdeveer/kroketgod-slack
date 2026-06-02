@@ -450,6 +450,30 @@ async function stuurWeekendRustBericht(client, channelId, userId) {
   await postToChannel(client, channelId, userId ? `<@${userId}>\n\n${tekst}` : tekst);
 }
 
+// ── Amsterdam-offset helper ───────────────────────────────────────────────────
+// Geeft de UTC-offset van Amsterdam in milliseconden (bijv. UTC+2 → 7200000).
+// Veilig bij DST-wisselingen omdat Intl.DateTimeFormat de actuele offset berekent.
+function getAmsOffsetMs(date = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Europe/Amsterdam',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hour12: false,
+  }).formatToParts(date);
+  const get = (type) => parseInt(parts.find(p => p.type === type)?.value || '0');
+  const amsMs = Date.UTC(get('year'), get('month') - 1, get('day'), get('hour'), get('minute'), get('second'));
+  return amsMs - date.getTime(); // positief voor UTC+ zones
+}
+
+// Geeft een Date terug dat overeenkomt met het opgegeven AMS-uur op dezelfde AMS-dag.
+// Voorbeeld: amsKlokTijdNaarUtc(now, 18, 0) → vandaag 18:00 AMS als UTC Date.
+function amsKlokTijdNaarUtc(date, uurAms, minAms = 0) {
+  const offset = getAmsOffsetMs(date);
+  const amsMs = date.getTime() + offset; // AMS-lokale milliseconden
+  const startVanAmsdag = amsMs - (amsMs % 86_400_000); // AMS-middernacht
+  return new Date(startVanAmsdag + uurAms * 3_600_000 + minAms * 60_000 - offset);
+}
+
 function getMondayOfWeek(date = new Date()) {
   // Gebruik Amsterdam-tijd voor dag-bepaling zodat dit rond middernacht correct blijft.
   // toLocaleString met timeZone geeft een string die we als lokale tijd parsen —
@@ -702,10 +726,8 @@ function getBanEscalatieduur(userId) {
 async function legGeleKaartBanOp(client, channelId, userId, bijnaam, reden, citaat, threadTs) {
   const duurUren = getBanEscalatieduur(userId);
   const nu = new Date();
-  const amsNu = new Date(nu.toLocaleString('en-US', { timeZone: 'Europe/Amsterdam' }));
-  const offset = nu.getTime() - amsNu.getTime();
-  const eindeAms = new Date(amsNu.getTime() + duurUren * 60 * 60 * 1000);
-  const eindeUtc = new Date(eindeAms.getTime() + offset);
+  // Ban-duur is een vaste tijdsduur — gewoon optellen bij huidige UTC, geen tijdzone nodig
+  const eindeUtc = new Date(nu.getTime() + duurUren * 3_600_000);
 
   const verbanning = loadVerbanning();
   verbanning[userId] = {
@@ -1912,8 +1934,10 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
       const geslaagd = Math.random() < 0.20;
 
       if (geslaagd) {
-        delete verbanning[command.user_id];
-        saveVerbanning(verbanning);
+        // Herlaad verbanning vlak voor schrijven — voorkomt race condition met andere handlers
+        const verbanningVers = loadVerbanning();
+        delete verbanningVers[command.user_id];
+        saveVerbanning(verbanningVers);
         resetVergrijpen(command.user_id);
         logGebeurtenis('genade', command.user_id, `${aanvrager} brak succesvol uit het ballingschap`);
 
@@ -1928,11 +1952,13 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
         // Geslaagde ontsnapping altijd publiek
         await postToChannel(client, command.channel_id, `<@${command.user_id}>\n\n${tekst}`);
       } else {
-        // Mislukt — ban verlengd met 1 uur
-        const huidig = new Date(verbanning[command.user_id].tot);
+        // Mislukt — ban verlengd met 1 uur; herlaad voor schrijven
+        const verbanningVers = loadVerbanning();
+        if (!verbanningVers[command.user_id]) return; // ban al verlopen in tussentijd
+        const huidig = new Date(verbanningVers[command.user_id].tot);
         huidig.setHours(huidig.getHours() + 1);
-        verbanning[command.user_id].tot = huidig.toISOString();
-        saveVerbanning(verbanning);
+        verbanningVers[command.user_id].tot = huidig.toISOString();
+        saveVerbanning(verbanningVers);
 
         const terugTijd = huidig.toLocaleTimeString('nl-NL', {
           timeZone: 'Europe/Amsterdam', hour: '2-digit', minute: '2-digit',
@@ -1977,7 +2003,8 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
         timeZone: 'Europe/Amsterdam', minute: 'numeric', hour12: false,
       }).formatToParts(new Date());
       const min = parseInt(minParts.find(p => p.type === 'minute')?.value || '0');
-      const isVrijdagVoorTwaalf = dag === 5 && (uur < 12 || (uur === 12 && min === 0));
+      // 12:00 exact = heilig moment is aangebroken → viering, niet aftelling
+      const isVrijdagVoorTwaalf = dag === 5 && uur < 12;
       const isVrijdagNaTwaalf   = dag === 5 && !isVrijdagVoorTwaalf;
       const dagenTot = isVrijdagVoorTwaalf ? 0 : ((5 - dag + 7) % 7) || 7;
 
@@ -3162,10 +3189,7 @@ app.event('app_mention', async ({ event, client }) => {
           // 5+ vergrijpen → 4-uurs ban
           resetVergrijpen(userId);
           const nu     = new Date();
-          const amsNu  = new Date(nu.toLocaleString('en-US', { timeZone: 'Europe/Amsterdam' }));
-          const offset = nu.getTime() - amsNu.getTime();
-          const eindeAms = new Date(amsNu.getTime() + 4 * 60 * 60 * 1000);
-          const eindeUtc = new Date(eindeAms.getTime() + offset);
+          const eindeUtc = new Date(nu.getTime() + 4 * 3_600_000);
           const verbanning = loadVerbanning();
           verbanning[userId] = {
             tot: eindeUtc.toISOString(),
@@ -3210,14 +3234,10 @@ app.event('app_mention', async ({ event, client }) => {
         const sarPunt  = !sarBan && Math.random() < 0.33;
 
         if (sarBan) {
-          // Ban tot einde werkdag (18:00 AMS)
-          const nu     = new Date();
-          const amsNu  = new Date(nu.toLocaleString('en-US', { timeZone: 'Europe/Amsterdam' }));
-          const offset = nu.getTime() - amsNu.getTime();
-          const target = new Date(amsNu);
-          target.setHours(18, 0, 0, 0);
-          if (target <= amsNu) target.setDate(target.getDate() + 1); // al voorbij → morgen 18:00
-          const eindeUtc = new Date(target.getTime() + offset);
+          // Ban tot einde werkdag (18:00 AMS) — gebruik DST-veilige helper
+          const nu = new Date();
+          let eindeUtc = amsKlokTijdNaarUtc(nu, 18, 0);
+          if (eindeUtc <= nu) eindeUtc = amsKlokTijdNaarUtc(new Date(nu.getTime() + 86_400_000), 18, 0);
 
           const verbanning = loadVerbanning();
           verbanning[userId] = {
@@ -3566,7 +3586,8 @@ function planCron(expression, handler, options = {}) {
 
 planCron('0 12 * * *', async () => {
   try {
-    const dag = new Date().getDay();
+    // Gebruik Amsterdam-tijdzone expliciet — Pi draait op UTC, getDay() geeft UTC-dag
+    const dag = getTijdContext().dag;
     if (dag === 0 || dag === 6) return;
 
     const dagContext = {
@@ -3651,11 +3672,10 @@ planCron('0 12 * * *', async () => {
         { label: n => `${n} keer het Wilhelmus`,                          factor: 2    },
       ];
       // Kies 3 willekeurige uit de pool zonder herhaling
-      const gekozen = OMREKENING_POOL
+      const omrekeningen = OMREKENING_POOL
         .sort(() => Math.random() - 0.5)
         .slice(0, 3)
         .map(o => o.label(Math.round(min / o.factor)));
-      const omrekeningen = gekozen;
 
       const positief = Math.random() < 0.5;
       const uitverkorene = Math.random() < 0.4 ? getUitverkorene(positief) : null;
