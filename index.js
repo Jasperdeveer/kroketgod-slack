@@ -246,6 +246,38 @@ function getUitverkorene(positief = true) {
 const loadWeekgebeurtenissen = () => readJSON('weekgebeurtenissen.json', { weekStart: null, events: [] });
 const saveWeekgebeurtenissen = (data) => writeJSON('weekgebeurtenissen.json', data);
 
+// ── Eer-limiet: max 3x per dag ────────────────────────────────────────────────
+const loadEerGegeven = () => readJSON('eerGegeven.json', {});
+const saveEerGegeven = (data) => writeJSON('eerGegeven.json', data);
+
+const EER_DAGELIJKS_MAX = 3;
+
+// Geeft het aantal eer dat userId vandaag al heeft gegeven.
+function telEerVandaag(userId) {
+  const data = loadEerGegeven();
+  const amsParts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Europe/Amsterdam', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(new Date());
+  const vandaag = `${amsParts.find(p => p.type === 'year').value}-${amsParts.find(p => p.type === 'month').value}-${amsParts.find(p => p.type === 'day').value}`;
+  const entry = data[userId];
+  if (!entry || entry.datum !== vandaag) return 0;
+  return entry.aantal || 0;
+}
+
+// Registreer n gegeven eer voor userId vandaag.
+function registreerEer(userId, n = 1) {
+  const data = loadEerGegeven();
+  const amsParts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Europe/Amsterdam', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(new Date());
+  const vandaag = `${amsParts.find(p => p.type === 'year').value}-${amsParts.find(p => p.type === 'month').value}-${amsParts.find(p => p.type === 'day').value}`;
+  if (!data[userId] || data[userId].datum !== vandaag) {
+    data[userId] = { datum: vandaag, aantal: 0 };
+  }
+  data[userId].aantal += n;
+  saveEerGegeven(data);
+}
+
 function logGebeurtenis(type, userId, beschrijving, citaat = null) {
   try {
     const data = loadWeekgebeurtenissen();
@@ -2229,6 +2261,26 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
         return;
       }
 
+      // Daglimiet: max 3x eer geven per dag
+      const reedsBesteed = telEerVandaag(command.user_id);
+      const nodigVoor = geeerden.length;
+      if (reedsBesteed >= EER_DAGELIJKS_MAX) {
+        await respond({
+          text: `_Uw dagelijkse eerlimiet is bereikt. De Hoge Frituurraad staat slechts ${EER_DAGELIJKS_MAX} eerbewijzen per dag toe. Morgen hervat de vrijgevigheid._`,
+          response_type: 'ephemeral',
+        });
+        return;
+      }
+      // Bij meerdere namen: alleen zoveel eren als de dagelijkse limiet toestaat
+      const resterend = EER_DAGELIJKS_MAX - reedsBesteed;
+      if (nodigVoor > resterend) {
+        geeerden.splice(resterend); // kap af op het resterende aantal
+        await respond({
+          text: `_U had nog ${resterend} eerbewijzen over. De overige namen zijn genegeerd._`,
+          response_type: 'ephemeral',
+        });
+      }
+
       // Verbod: jezelf eren is een doodzonde
       const zelflof = geeerden.find(([id]) => id === command.user_id);
       if (zelflof) {
@@ -2249,6 +2301,7 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
       for (const [eerId] of geeerden) {
         await pasScoreAanMetCheck(client, eerId, 1);
       }
+      registreerEer(command.user_id, geeerden.length);
 
       const namen = geeerden.map(([, lid]) => lid.bijnaam);
       const tekst = geeerden.length === 1
@@ -4136,7 +4189,7 @@ async function laadTestKanaalIds(client) {
 const BACKUP_BESTANDEN = [
   'scores.json', 'members.json', 'verbanning.json', 'achievements.json',
   'streaks.json', 'stemmen.json', 'allianties.json', 'geleKaarten.json',
-  'vergrijpen.json', 'weekgebeurtenissen.json',
+  'vergrijpen.json', 'weekgebeurtenissen.json', 'eerGegeven.json',
 ];
 
 function maakBackup() {
