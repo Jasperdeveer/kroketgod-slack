@@ -3412,7 +3412,7 @@ app.event('reaction_added', async ({ event, client }) => {
 // Alle geplande crons worden bijgehouden zodat graceful shutdown ze allemaal stopt.
 const geplandeCrons = [];
 function planCron(expression, handler, options = {}) {
-  const taak = planCron(expression, handler, { timezone: 'Europe/Amsterdam', ...options });
+  const taak = cron.schedule(expression, handler, { timezone: 'Europe/Amsterdam', ...options });
   geplandeCrons.push(taak);
   return taak;
 }
