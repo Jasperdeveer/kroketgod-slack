@@ -1806,6 +1806,7 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
         { cmd: 'straf [naam]',          uitleg: 'leg een creatieve straf op' },
         { cmd: 'gebod [1-10]',          uitleg: 'toelichting op een Gebod' },
         { cmd: 'horoscoop [naam]',      uitleg: 'kroket-horoscoop voor de week' },
+        { cmd: 'weer',                  uitleg: 'officiële kroket-weersverwachting met echt Amsterdams weer' },
         { cmd: 'quote',                 uitleg: 'willekeurige kroket-wijsheid' },
         { cmd: 'nieuws',                uitleg: 'breaking news uit het Vetbad' },
         { cmd: 'vrijdag',               uitleg: 'countdown of viering' },
