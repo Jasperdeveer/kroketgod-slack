@@ -97,7 +97,8 @@ Regels:
 - Schrijf in correct Nederlands. Gebruik GEEN verzonnen samenstellingen of niet-bestaande woorden. Als je twijfelt of een woord bestaat — gebruik het niet.
 - Neem NOOIT format-labels op in je output (zoals "--- [decreet]" of "--- [one-liner]"). Die zijn alleen voor intern gebruik.
 - Ken NOOIT zelf kroketpunten toe of af tenzij de prompt dit expliciet meldt. Noem GEEN specifieke puntenaantallen — jij weet de actuele stand niet. Als het systeem een punt heeft toegekend of afgenomen staat dit in de prompt vermeld.
-- ALLIANTIES: leden kunnen een heilig verbond sluiten via het alliantie-commando. Alliantie-partners delen voordelen: gedeelde eer (bonus kroketpunt), pact-bescherming bij beroep, alliantie-vonnis als beiden verbannen zijn, solidariteitsbonus bij achievements. Als iemand vraagt om een punt te "delen" met zijn partner of compagnon: verwijs naar het eer-commando met de naam van de partner — de alliantie-bonus wordt dan automatisch berekend. Ken NOOIT zelf punten toe op basis van alliantie-verzoeken — dat doet het systeem.
+- ALLIANTIES: leden kunnen een heilig verbond sluiten via het alliantie-commando. Alliantie-partners delen voordelen: gedeelde eer (1–3 bonuspunten, 80% kans), pact-bescherming bij beroep, alliantie-vonnis als beiden verbannen zijn, solidariteitsbonus bij achievements. Als iemand vraagt om een punt te "delen" met zijn partner of compagnon: verwijs naar het eer-commando met de naam van de partner — de alliantie-bonus wordt dan automatisch berekend. Ken NOOIT zelf punten toe op basis van alliantie-verzoeken — dat doet het systeem.
+- EER-COMMANDO: geeft 1 of 2 kroketpunten (het exacte aantal staat in de prompt). Er kan een optionele reden meegegeven worden — als die er is, staat deze expliciet in de prompt en moet je hem verwerken in je reactie.
 - Gebruik getallen ALLEEN als ze in de prompt staan. Verzin geen getallen zelf — geen decimalen, geen neppe berekeningen. Als een prompt voorberekende alternatieve eenheden aanbiedt, mag je die gebruiken, maar alleen exact zoals gegeven.
 - INLEIDINGSZIN — KRITIEKE REGEL: Als het prompt de tekst "Geen inleidingszin" bevat: begin DIRECT met de inhoud — absoluut geen cursieve openingsregel, geen introductie, niets. Direct de hoofdtekst. Als het prompt "Geen inleidingszin" NIET bevat: begin met één cursieve inleidingsregel (_zoals dit_) die in maximaal één zin parafraseert wat er gezegd of gevraagd werd, gevolgd door een lege regel. Doe dit NIET bij algemene aankondigingen.
 - Houd berichten kort: max 4-5 regels hoofdtekst. Elke zin telt.
@@ -1868,6 +1869,7 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
       // Voeg nieuwe commando's hier toe — kroketprompts-lijst wordt automatisch opgebouwd
       const GEHEIME_COMMANDO_S = [
         { categorie: '⚙️ Beheer & scores' },
+        { cmd: 'eer [naam] (voor [reden])', uitleg: '1–2 kroketpunten toekennen, optionele reden — alliantie-partner krijgt 80% kans op 1–3 bonuspunten' },
         { cmd: 'zondebok',              uitleg: '−1 punt willekeurig lid' },
         { cmd: 'weekoverzicht',         uitleg: 'humoristisch overzicht van de week' },
         { cmd: 'gelekaart [naam] [reden]', uitleg: 'formele waarschuwing — tweede overtreding = directe ban' },
@@ -2383,8 +2385,13 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
     if (input.startsWith('eer ')) {
       const invoer = input.replace('eer ', '').trim();
 
+      // Splits optionele reden af op eerste " voor "
+      const voorIdx = invoer.search(/ voor /i);
+      const naamGedeelte = voorIdx !== -1 ? invoer.slice(0, voorIdx).trim() : invoer;
+      const reden = voorIdx !== -1 ? invoer.slice(voorIdx + 6).trim() : null;
+
       // Ondersteuning voor meerdere namen: splits op " en " of ","
-      const naamDelen = invoer.split(/\s+en\s+|,\s*/i).map(s => s.trim()).filter(Boolean);
+      const naamDelen = naamGedeelte.split(/\s+en\s+|,\s*/i).map(s => s.trim()).filter(Boolean);
       const geeerden = [];
       const onbekend = [];
 
@@ -2435,27 +2442,31 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
         return;
       }
 
-      // Eren — één of meerdere leden
+      // Eren — 1 of 2 punten per persoon, afhankelijk van de prestatie
+      const eerPunten = {};
       for (const [eerId] of geeerden) {
-        await pasScoreAanMetCheck(client, eerId, 1);
+        const punten = Math.floor(Math.random() * 2) + 1; // 1 of 2
+        eerPunten[eerId] = punten;
+        await pasScoreAanMetCheck(client, eerId, punten);
       }
       registreerEer(command.user_id, geeerden.length);
 
       const namen = geeerden.map(([, lid]) => lid.bijnaam);
+      const redenZin = reden ? ` De reden voor deze eer: "${reden}". Verwerk dit in je reactie.` : '';
       const tekst = geeerden.length === 1
         ? await kroketResponse(
-            `De Kroket God zegent ${namen[0]} met een kroketpunt. ` +
+            `De Kroket God zegent ${namen[0]} met ${eerPunten[geeerden[0][0]]} kroketpunt${eerPunten[geeerden[0][0]] > 1 ? 'en' : ''}.${redenZin} ` +
             `KRITIEK: gebruik de naam "${namen[0]}" LETTERLIJK in je response — niet "u", niet "volgeling", maar de exacte naam. ` +
             `Begin DIRECT met de zegen, geen inleidingszin.`,
             400, false)
         : await kroketResponse(
-            `De Kroket God zegent ${namen.join(' en ')} elk met een kroketpunt. ` +
+            `De Kroket God zegent ${namen.join(' en ')} met kroketpunten (${geeerden.map(([id, lid]) => `${lid.bijnaam}: +${eerPunten[id]}`).join(', ')}).${redenZin} ` +
             `KRITIEK: noem ALLE namen letterlijk in je response: ${namen.map(n => `"${n}"`).join(', ')}. Geen "u" of "volgelingen" als vervanging. ` +
             `Kondig dit gezamenlijk aan. Geen inleidingszin.`,
             400, false);
       await postToChannel(client, command.channel_id, tekst);
 
-      // Gedeelde eer: 50% kans dat de alliantie-partner van de ontvanger ook +1 krijgt.
+      // Gedeelde eer: 80% kans dat de alliantie-partner van de ontvanger 1–3 punten krijgt.
       // De gever mag zichzelf niet bevoordelen via zijn eigen partner.
       const allMembers = loadMembers();
       for (const [eerId, eerLid] of geeerden) {
@@ -2463,12 +2474,13 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
         if (!partnerId) continue;
         if (partnerId === command.user_id) continue; // gever is partner — niet toegestaan
         if (isVerbannen(partnerId)) continue;
-        if (Math.random() >= 0.50) continue;
-        await pasScoreAanMetCheck(client, partnerId, 1);
+        if (Math.random() >= 0.80) continue;
+        const bonusPunten = Math.floor(Math.random() * 3) + 1; // 1, 2 of 3
+        await pasScoreAanMetCheck(client, partnerId, bonusPunten);
         const partnerBijnaam = allMembers[partnerId]?.bijnaam || 'de bondgenoot';
         const bonusTekst = await kroketResponse(
           `Via het heilige verbond tussen ${eerLid.bijnaam} en ${partnerBijnaam} sijpelt de zegen door. ` +
-          `${partnerBijnaam} ontvangt als bondgenoot +1 kroketpunt. ` +
+          `${partnerBijnaam} ontvangt als bondgenoot +${bonusPunten} kroketpunt${bonusPunten > 1 ? 'en' : ''}. ` +
           `KRITIEK: noem BEIDE namen letterlijk — "${eerLid.bijnaam}" én "${partnerBijnaam}" — in je response. Geen "u" of "volgeling". ` +
           `Kort en plechtig. Geen inleidingszin.`,
           200, false
@@ -4062,16 +4074,14 @@ async function stuurKroketFeitje(client, channelId = process.env.SLACK_CHANNEL_I
   }
 
   if (keuze < 0.65) {
-    // 25%: Echte grap via JokeAPI, kroketiseren
+    // 25%: Echte grap via JokeAPI — onvertaald, met korte intro
     const grap = await haalGrap();
     if (grap) {
-      const tekst = await kroketResponse(
-        `Vertaal de volgende Engelse grap naar het Nederlands en herschrijf hem in de stijl van de Kroket God. ` +
-        `Verwerk er een kroket-metafoor in. De originele grap: "${grap}". ` +
-        `Max 3 zinnen. Geen inleidingszin.`,
-        250, false
+      const intro = await kroketResponse(
+        `Introduceer in één zin dat de Kroket God een wijsheid deelt. Geen inleidingszin.`,
+        60, false
       );
-      await postToChannel(client, channelId, tekst);
+      await postToChannel(client, channelId, `${intro}\n\n> ${grap}\n\n— De Almachtige Kroket God`);
       return;
     }
   }
@@ -4089,14 +4099,12 @@ async function stuurKroketFeitje(client, channelId = process.env.SLACK_CHANNEL_I
 async function stuurMop(client, channelId = process.env.SLACK_CHANNEL_ID) {
   const grap = await haalGrap();
   if (grap) {
-    const tekst = await kroketResponse(
-      `Vertaal de volgende Engelse mop naar correct Nederlands en presenteer hem in de stijl van de Kroket God. ` +
-      `Verwerk er een kroket- of frituurverwijzing in als dat past, maar forceer het niet. ` +
-      `De originele mop: "${grap}". ` +
-      `Vertel de mop volledig en in correct Nederlands. Geen inleidingszin.`,
-      300, false
+    // Mop onvertaald laten — vertaling bederft de humor
+    const intro = await kroketResponse(
+      `Introduceer in één korte zin dat de Kroket God een mop gaat vertellen. Geen inleidingszin.`,
+      60, false
     );
-    await postToChannel(client, channelId, tekst);
+    await postToChannel(client, channelId, `${intro}\n\n> ${grap}\n\n— De Almachtige Kroket God`);
   } else {
     // Fallback als JokeAPI niet beschikbaar is
     const tekst = await kroketResponse(
