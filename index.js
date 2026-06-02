@@ -3058,7 +3058,8 @@ app.event('message', async ({ event, client }) => {
     }
 
     if (event.channel !== process.env.SLACK_CHANNEL_ID && !isTestKanaalMsg) return;
-    if (event.bot_id) return;
+    // Filter alle bot-berichten: bot_id, bot_profile, of bot_message subtype
+    if (event.bot_id || event.bot_profile || event.subtype === 'bot_message') return;
 
     // Weekend: geen geautomatiseerde berichtreacties — testkanaal uitgezonderd
     if (isWeekendAms() && !isTestKanaalMsg) return;
@@ -3846,11 +3847,4 @@ process.on('unhandledRejection', (reason) => {
   await app.start();
   console.log('⚜️ De Kroket God is wakker. Poort 3000 staat open.');
   await laadTestKanaalIds(app.client);
-  // Opstartmelding in kanaal na (her)start — geeft zichtbaarheid bij crashes
-  try {
-    await app.client.chat.postMessage({
-      channel: process.env.SLACK_CHANNEL_ID,
-      text: '_De frituurinstallatie is opgestart. De Kroket God is gereed._',
-    });
-  } catch (_) {}
 })();
