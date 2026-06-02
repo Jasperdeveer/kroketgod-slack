@@ -2306,11 +2306,14 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
       const namen = geeerden.map(([, lid]) => lid.bijnaam);
       const tekst = geeerden.length === 1
         ? await kroketResponse(
-            `De Kroket God zegent ${namen[0]} met een kroketpunt — uit eigen goddelijke wil, zonder aanleiding. Begin DIRECT met de zegen, geen inleidingszin, geen verwijzing naar een aanvraag of reden.`,
+            `De Kroket God zegent ${namen[0]} met een kroketpunt. ` +
+            `KRITIEK: gebruik de naam "${namen[0]}" LETTERLIJK in je response — niet "u", niet "volgeling", maar de exacte naam. ` +
+            `Begin DIRECT met de zegen, geen inleidingszin.`,
             400, false)
         : await kroketResponse(
-            `De Kroket God zegent ${namen.slice(0, -1).join(', ')} en ${namen[namen.length - 1]} elk met een kroketpunt. ` +
-            `Kondig dit gezamenlijk aan als een plechtige zegen voor meerdere volgelingen tegelijk. Geen inleidingszin.`,
+            `De Kroket God zegent ${namen.join(' en ')} elk met een kroketpunt. ` +
+            `KRITIEK: noem ALLE namen letterlijk in je response: ${namen.map(n => `"${n}"`).join(', ')}. Geen "u" of "volgelingen" als vervanging. ` +
+            `Kondig dit gezamenlijk aan. Geen inleidingszin.`,
             400, false);
       await postToChannel(client, command.channel_id, tekst);
 
@@ -2326,9 +2329,10 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
         await pasScoreAanMetCheck(client, partnerId, 1);
         const partnerBijnaam = allMembers[partnerId]?.bijnaam || 'de bondgenoot';
         const bonusTekst = await kroketResponse(
-          `Via het heilige verbond tussen ${eerLid.bijnaam} en ${partnerBijnaam} sijpelt de zegen door — ` +
-          `een alliantie deelt meer dan een naam. ${partnerBijnaam} ontvangt als bondgenoot +1 kroketpunt. ` +
-          `Kondig dit kort en plechtig aan. Geen inleidingszin.`,
+          `Via het heilige verbond tussen ${eerLid.bijnaam} en ${partnerBijnaam} sijpelt de zegen door. ` +
+          `${partnerBijnaam} ontvangt als bondgenoot +1 kroketpunt. ` +
+          `KRITIEK: noem BEIDE namen letterlijk — "${eerLid.bijnaam}" én "${partnerBijnaam}" — in je response. Geen "u" of "volgeling". ` +
+          `Kort en plechtig. Geen inleidingszin.`,
           200, false
         );
         await postToChannel(client, command.channel_id, bonusTekst);
