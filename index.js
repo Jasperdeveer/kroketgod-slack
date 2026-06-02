@@ -1417,12 +1417,61 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
       return;
     }
 
-    // Geheime prompts — niet in de help
+    // Willekeurige suggesties — 5 tips uit de publiekslaag, elke keer anders
     if (input === 'prompts') {
+      const SUGGESTIES = [
+        'biecht ik heb ketchup gebruikt',
+        'biecht ik heb een broodje kroket laten liggen',
+        'horoscoop',
+        'quote',
+        'nieuws',
+        'vrijdag',
+        'slachtoffer',
+        'orakel wordt het vandaag een goede kroketdag',
+        'orakel is de frituur gunstig gestemd',
+        'feitje',
+        'straf [naam]',
+        'bekeer [naam]',
+        'debat ketchup bij kroket',
+        'debat kroket in de oven vs frituur',
+        'kroket vs bitterbal',
+        'rap de snackleer',
+        'rap [naam]',
+        'rechtbank [naam1] vs [naam2]',
+        'schrijf een necrologie voor een mislukte kroket',
+        'schrijf een kroket-huwelijksaanzoek',
+        'schrijf een kroket-horrorscenario',
+        'wat zou Aristoteles zeggen over de kroket',
+        'geef een kroket-weersverwachting',
+        'onthul de naam van mijn spirit-kroket',
+        'canoniseer [naam] als heilige van de snackleer',
+        'oordeel over mijn leven: [beschrijving]',
+        'houd een TED talk over de kroket',
+        'alliantie [naam]',
+        'klacht [naam] [beschrijving]',
+        'geef [naam] een kroket-therapiesessie',
+        'frituur de Kroket God op zijn troon',
+        'frituur [naam] als Byzantijns icoon',
+      ];
+      const gekozen = [...SUGGESTIES].sort(() => Math.random() - 0.5).slice(0, 5);
+      const regels = [
+        '✨ *SUGGESTIES* ✨',
+        '_Typ één van deze achter `/kroketgod` — of verzin iets eigens:_',
+        '',
+        ...gekozen.map(s => `\`${s}\``),
+        '',
+        '_Meer opties? Typ `/kroketgod kroketprompts`_',
+      ];
+      await respond({ text: regels.join('\n'), response_type: 'ephemeral' });
+      return;
+    }
+
+    // Geheime prompts — volledig register van alle commando's
+    if (input === 'kroketprompts') {
       // ── REGISTER VAN GEHEIME COMMANDO'S ──────────────────────────────────────
-      // Voeg nieuwe commando's hier toe — prompts-lijst wordt automatisch opgebouwd
+      // Voeg nieuwe commando's hier toe — kroketprompts-lijst wordt automatisch opgebouwd
       const GEHEIME_COMMANDO_S = [
-        { categorie: '⚙️ Extra commando\'s' },
+        { categorie: '⚙️ Beheer & scores' },
         { cmd: 'zondebok',              uitleg: '−1 punt willekeurig lid' },
         { cmd: 'weekoverzicht',         uitleg: 'humoristisch overzicht van de week' },
         { cmd: 'gelekaart [naam] [reden]', uitleg: 'formele waarschuwing — tweede overtreding = directe ban' },
@@ -1433,12 +1482,12 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
         { cmd: 'stem [naam]',           uitleg: 'stem op Held van de Week' },
         { cmd: 'status',                uitleg: 'leden, scores en actieve verbannelingen' },
         { cmd: 'hoelang',               uitleg: 'hoe lang nog tot vrijdag 12:00' },
-        { cmd: 'feitje',               uitleg: 'kroketfeitje, mop of historisch weetje' },
-        { cmd: 'frituur [tekst]',       uitleg: 'AI-afbeelding' },
+        { cmd: 'feitje',                uitleg: 'kroketfeitje, mop of historisch weetje' },
+        { cmd: 'frituur [tekst]',       uitleg: 'AI-afbeelding genereren' },
         { cmd: 'orakel [vraag]',        uitleg: 'cryptisch antwoord uit het Vetbad' },
         { cmd: 'meld [naam]',           uitleg: 'rapporteer een vermoedelijke tegenstander' },
         { cmd: 'klacht [naam] [beschrijving]', uitleg: 'anonieme aanklacht — 15% kans dat het masker valt' },
-        { cmd: 'alliantie [naam]',      uitleg: 'sluit een heilig verbond met een andere volgeling' },
+        { cmd: 'alliantie [naam]',      uitleg: 'sluit een heilig verbond — partner wordt gewaarschuwd bij jouw ban' },
         { cmd: 'alliantie verbreek',    uitleg: 'verbreek uw huidige alliantie' },
         { cmd: 'alliantie overzicht',   uitleg: 'bekijk alle actieve allianties' },
 
@@ -1481,7 +1530,7 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
         { cmd: 'onthul de naam van mijn spirit-kroket',              uitleg: '' },
       ];
 
-      const regels = ['🕵️ *GEHEIME KROKET PROMPTS*', '_Typ achter `/kroketgod`_', ''];
+      const regels = ['🕵️ *ALLE KROKET PROMPTS*', '_Typ achter `/kroketgod`_', ''];
       for (const item of GEHEIME_COMMANDO_S) {
         if (item.categorie) {
           regels.push(``, `*${item.categorie}*`);
@@ -1495,7 +1544,7 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
 
     // DM-bediening: in een Direct Message begint channel_id met 'D' — sommige commando's mogen daar
     const isDM = command.channel_id?.startsWith('D');
-    const DM_TOEGESTAAN = ['biecht', 'orakel', 'dossier', 'ranglijst', 'prompts'];
+    const DM_TOEGESTAAN = ['biecht', 'orakel', 'dossier', 'ranglijst', 'prompts', 'kroketprompts'];
     const eersteWoord = input.split(' ')[0];
 
     const isTestKanaalCmd = isTestKanaalCheck(command.channel_id, command.channel_name);
@@ -1520,7 +1569,7 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
 
     // ── Verbanning check — verbannen leden kunnen geen publieke commando's uitvoeren
     //    Passieve commando's (ranglijst, dossier, help, prompts) zijn wel toegestaan
-    const PASSIEVE_COMMANDO_S = ['ranglijst', 'dossier', 'help', 'prompts', 'beroep'];
+    const PASSIEVE_COMMANDO_S = ['ranglijst', 'dossier', 'help', 'prompts', 'kroketprompts', 'beroep'];
     if (isVerbannen(command.user_id) && !PASSIEVE_COMMANDO_S.includes(eersteWoord) && !isTestKanaalCmd) {
       const banData = loadVerbanning()[command.user_id];
       const terugTijd = banData ? new Date(banData.tot).toLocaleString('nl-NL', {
