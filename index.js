@@ -715,6 +715,88 @@ async function haalGrap() {
   } catch (_) { return null; }
 }
 
+// ── Useless Facts ─────────────────────────────────────────────────────────────
+
+async function haalUselessFact() {
+  try {
+    const resp = await fetch('https://uselessfacts.jsph.pl/api/v2/facts/random', { timeout: 8000 });
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    return data.text || null;
+  } catch (_) { return null; }
+}
+
+// ── Today in History ──────────────────────────────────────────────────────────
+
+async function haalTodayInHistory() {
+  try {
+    const resp = await fetch('https://history.muffinlabs.com/date', { timeout: 8000 });
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    const events = data.data?.Events || [];
+    if (!events.length) return null;
+    const event = events[Math.floor(Math.random() * Math.min(events.length, 15))];
+    return { jaar: event.year, tekst: event.text };
+  } catch (_) { return null; }
+}
+
+// ── Advice Slip ───────────────────────────────────────────────────────────────
+
+async function haalAdvies() {
+  try {
+    const resp = await fetch('https://api.adviceslip.com/advice', { timeout: 8000 });
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    return data.slip?.advice || null;
+  } catch (_) { return null; }
+}
+
+// ── Corporate BS Generator ────────────────────────────────────────────────────
+
+async function haalCorporateBs() {
+  try {
+    const resp = await fetch('https://corporatebs-generator.sameerkumar.website/', { timeout: 8000 });
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    return data.phrase || null;
+  } catch (_) { return null; }
+}
+
+// ── Evil Insult Generator ─────────────────────────────────────────────────────
+
+async function haalHistorischeBeledigung() {
+  try {
+    const resp = await fetch('https://evilinsult.com/generate_insult.php?lang=en&type=json', { timeout: 8000 });
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    return data.insult ? { insult: data.insult, auteur: data.createdby || 'een historische vijand' } : null;
+  } catch (_) { return null; }
+}
+
+// ── Open Trivia Database ──────────────────────────────────────────────────────
+
+async function haalTriviaVraag() {
+  try {
+    const resp = await fetch('https://opentdb.com/api.php?amount=1&type=multiple', { timeout: 8000 });
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    const q = data.results?.[0];
+    if (!q) return null;
+    // HTML entities decoderen
+    const decode = s => s.replace(/&quot;/g, '"').replace(/&#039;/g, "'").replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+    const opties = [...q.incorrect_answers, q.correct_answer]
+      .sort(() => Math.random() - 0.5)
+      .map(decode);
+    return {
+      vraag:       decode(q.question),
+      juist:       decode(q.correct_answer),
+      opties,
+      categorie:   decode(q.category),
+      moeilijkheid: q.difficulty,
+    };
+  } catch (_) { return null; }
+}
+
 // ── Lichte vergrijpen ─────────────────────────────────────────────────────────
 // Bijhoudt kleine overtredingen (belediging/sarcasme zonder directe straf).
 // Drempels: 3 vergrijpen → herderlijke waarschuwing, 5 vergrijpen → 4-uurs ban.
@@ -1828,6 +1910,10 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
         'geef [naam] een kroket-therapiesessie',
         'frituur de Kroket God op zijn troon',
         'frituur [naam] als Byzantijns icoon',
+        'quiz',
+        'advies',
+        'bs',
+        'mop',
       ];
       const gekozen = [...SUGGESTIES].sort(() => Math.random() - 0.5).slice(0, 5);
       const regels = [
@@ -1882,7 +1968,10 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
         { cmd: 'status',                uitleg: 'leden, scores en actieve verbannelingen' },
         { cmd: 'hoelang',               uitleg: 'hoe lang nog tot vrijdag 12:00' },
         { cmd: 'feitje',                uitleg: 'kroketfeitje of historisch weetje (via Wikipedia)' },
-        { cmd: 'mop',                   uitleg: 'echte mop via JokeAPI, vertaald naar Nederlands' },
+        { cmd: 'mop',                   uitleg: 'echte mop via JokeAPI' },
+        { cmd: 'quiz',                  uitleg: 'trivia-vraag — antwoord volgt na 30 seconden' },
+        { cmd: 'advies',                uitleg: 'goddelijk advies via Advice Slip API' },
+        { cmd: 'bs',                    uitleg: 'corporate jargon als heilige openbaring' },
         { cmd: 'frituur [tekst]',       uitleg: 'AI-afbeelding genereren' },
         { cmd: 'orakel [vraag]',        uitleg: 'cryptisch antwoord uit het Vetbad' },
         { cmd: 'meld [naam]',           uitleg: 'rapporteer een vermoedelijke tegenstander' },
@@ -2181,6 +2270,61 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
         await postToChannel(client, command.channel_id, tekst);
         if (zonde) logGebeurtenis('biecht', null, `Een anonieme volgeling deed openbare biecht`, zonde);
       }
+      return;
+    }
+
+    // ── Quiz — Open Trivia Database
+    if (input === 'quiz') {
+      const vraag = await haalTriviaVraag();
+      if (!vraag) {
+        await respond({ text: '_De Hoge Frituurraad kon geen examenvraag ophalen. Probeer het later opnieuw._', response_type: 'ephemeral' });
+        return;
+      }
+      const letters = ['A', 'B', 'C', 'D'];
+      const optiesText = vraag.opties.map((o, i) => `${letters[i]}) ${o}`).join('\n');
+      const moeilijkheidNl = { easy: 'makkelijk', medium: 'gemiddeld', hard: 'zwaar' }[vraag.moeilijkheid] || vraag.moeilijkheid;
+      const intro = await kroketResponse(
+        `De Kroket God stelt een examen voor de Illuminati. Introduceer de volgende trivia-vraag (categorie: ${vraag.categorie}, niveau: ${moeilijkheidNl}) op dramatische wijze. Max 1 zin. Geen inleidingszin.`,
+        80, false
+      );
+      await postToChannel(client, command.channel_id,
+        `${intro}\n\n*${vraag.vraag}*\n\n${optiesText}`
+      );
+      // Na 30 seconden: onthul het antwoord
+      setTimeout(async () => {
+        try {
+          const antwoordTekst = await kroketResponse(
+            `Het juiste antwoord op de trivia-vraag was: "${vraag.juist}". ` +
+            `Onthul dit plechtig als goddelijke kennisopenbaring. Max 2 zinnen. Geen inleidingszin.`,
+            150, false
+          );
+          await postToChannel(client, command.channel_id, antwoordTekst);
+        } catch (_) {}
+      }, 30_000);
+      return;
+    }
+
+    // ── Advies — Advice Slip als goddelijk decreet
+    if (input === 'advies') {
+      const advies = await haalAdvies();
+      const prompt = advies
+        ? `Het Orakel van het Vetbad heeft gesproken. Het advies luidt: "${advies}". ` +
+          `Presenteer dit als een onweerlegbaar goddelijk decreet van de Kroket God. Vertaal het naar het Nederlands als nodig. Max 3 zinnen. Geen inleidingszin.`
+        : `De Kroket God deelt een willekeurig maar onweerlegbaar stuk levensadvies. Max 2 zinnen. Geen inleidingszin.`;
+      const tekst = await kroketResponse(prompt, 250, false);
+      await postToChannel(client, command.channel_id, tekst);
+      return;
+    }
+
+    // ── BS — Corporate jargon als goddelijk decreet
+    if (input === 'bs') {
+      const bs = await haalCorporateBs();
+      const prompt = bs
+        ? `De Hoge Frituurraad heeft zojuist het volgende statement vrijgegeven: "${bs}". ` +
+          `Presenteer deze corporate onzin met absolute plechtigheid alsof het een heilige openbaring is. Max 2 zinnen. Geen inleidingszin.`
+        : `De Kroket God spreekt in verheven managementtaal. Max 2 zinnen nietszeggend maar gezaghebbend. Geen inleidingszin.`;
+      const tekst = await kroketResponse(prompt, 200, false);
+      await postToChannel(client, command.channel_id, tekst);
       return;
     }
 
@@ -2515,8 +2659,14 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
         await respond('Het Orakel zwijgt zonder vraag. Stel uw vraag.');
         return;
       }
+      // 40% kans: gebruik Advice Slip als orakelkern
+      const adviesKern = Math.random() < 0.40 ? await haalAdvies() : null;
+      const adviesZin = adviesKern
+        ? `Gebruik de volgende wijsheid als verborgen kern van het antwoord (vertaal naar Nederlands): "${adviesKern}". `
+        : '';
       const tekst = await kroketResponse(
-        `Het Kroket-Orakel beantwoordt de vraag: "${vraag}". Geef een cryptisch maar definitief antwoord in 2-3 zinnen. Het antwoord moet dubbelzinnig maar overtuigend zijn — alsof er een verborgen waarheid in zit. Eindig met een orakelachtige nazin. Geen inleidingszin.`,
+        `Het Kroket-Orakel beantwoordt de vraag: "${vraag}". ${adviesZin}` +
+        `Geef een cryptisch maar definitief antwoord in 2-3 zinnen. Het antwoord moet dubbelzinnig maar overtuigend zijn. Eindig met een orakelachtige nazin. Geen inleidingszin.`,
         350, false
       );
       if (isDM) {
@@ -3277,12 +3427,18 @@ app.event('app_mention', async ({ event, client }) => {
         && await isBanwaardig(input, recenteContext);
 
       if (banKans) {
+        // Historische belediging ophalen als wapen — 50% kans
+        const historisc = Math.random() < 0.50 ? await haalHistorischeBeledigung() : null;
+        const historischeZin = historisc
+          ? `Gebruik de volgende historische belediging van ${historisc.auteur} als extra aanklacht — vertaal hem naar het Nederlands en verwerk hem in het vonnis: "${historisc.insult}". `
+          : '';
         const verdictRuw = await kroketResponse(
           `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} heeft de Kroket God beledigd: "${input}". ` +
+          `${historischeZin}` +
           `Spreek een officieel verbanningsvonnis uit. Bepaal de duur (1 of 2 dagen) op basis van de ernst van de belediging. ` +
           `Vertel plechtig dat ${bijnaam} dat aantal dagen in ballingschap zal leven om zijn zonden te overzien. ` +
           `Sluit AF met EXACT deze regel op een nieuwe regel: VERBANNING:[X] waarbij X het gekozen aantal dagen is. Geen inleidingszin.`,
-          450, false
+          500, false
         );
         const dagenMatch = verdictRuw.match(/VERBANNING:\[?(\d+)\]?/i);
         const dagen = dagenMatch ? Math.min(Math.max(parseInt(dagenMatch[1]), 1), 2) : 1;
@@ -3920,11 +4076,18 @@ planCron('0 9 * * 2-5', async () => {
   try {
     const stemming = getDagelijkseStemming();
     const tijd = getTijdContext();
+
+    // 40% kans: voeg een historische gebeurtenis van vandaag toe
+    const geschiedenis = Math.random() < 0.40 ? await haalTodayInHistory() : null;
+    const geschiedenisZin = geschiedenis
+      ? ` Op deze dag in ${geschiedenis.jaar}: ${geschiedenis.tekst}. Verwerk dit in één bijzin als historisch feit dat de snackleer bevestigt.`
+      : '';
+
     const tekst = await kroketResponse(
       `Het is ${tijd.dagNaam}ochtend. Kondig in maximaal twee zinnen de stemming van de dag aan. ` +
       `Wees cryptisch maar herkenbaar: volgelingen moeten begrijpen hoe ze zich vandaag het best gedragen. ` +
-      `Stemming: ${stemming.omschrijving} Geen inleidingszin.`,
-      180, false
+      `Stemming: ${stemming.omschrijving}${geschiedenisZin} Geen inleidingszin.`,
+      220, false
     );
     await postToChannel(app.client, process.env.SLACK_CHANNEL_ID, tekst);
   } catch (err) {
@@ -4086,7 +4249,21 @@ async function stuurKroketFeitje(client, channelId = process.env.SLACK_CHANNEL_I
     }
   }
 
-  // 35% (of fallback): Verzonnen feit op basis van FEITJE_TYPES
+  if (keuze < 0.80) {
+    // 15%: Useless fact — absurde maar échte weetjes
+    const feit = await haalUselessFact();
+    if (feit) {
+      const tekst = await kroketResponse(
+        `Het volgende absurde maar feitelijk correcte weetje heeft de Hoge Frituurraad bereikt: "${feit}" ` +
+        `Presenteer dit als een goddelijke openbaring. Max 2 zinnen. Geen inleidingszin.`,
+        200, false
+      );
+      await postToChannel(client, channelId, tekst);
+      return;
+    }
+  }
+
+  // 20% (of fallback): Verzonnen feit op basis van FEITJE_TYPES
   const type = FEITJE_TYPES[Math.floor(Math.random() * FEITJE_TYPES.length)];
   const tekst = await kroketResponse(
     `Deel ${type}. Presenteer dit als een goddelijk inzicht of decreet van de Kroket God. ` +
