@@ -1093,7 +1093,7 @@ function getTijdContext() {
 const COMMANDO_LIJST = [
   { gebruik: '/kroketgod [tekst]',    verwacht: 'vrije vraag, oordeel of opdracht' },
   { gebruik: '/kroketgod aanmelden',  verwacht: 'word lid van de Illuminati' },
-  { gebruik: '/kroketgod eer [naam]', verwacht: '+1 kroketpunt voor een lid' },
+  { gebruik: '/kroketgod eer [naam] (voor [reden])', verwacht: '1–2 kroketpunten voor een lid, optionele reden' },
   { gebruik: '/kroketgod ranglijst',  verwacht: 'wie staat waar in de hiërarchie' },
 ];
 
@@ -1879,7 +1879,8 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
         { cmd: 'stem [naam]',           uitleg: 'stem op Held van de Week' },
         { cmd: 'status',                uitleg: 'leden, scores en actieve verbannelingen' },
         { cmd: 'hoelang',               uitleg: 'hoe lang nog tot vrijdag 12:00' },
-        { cmd: 'feitje',                uitleg: 'kroketfeitje, mop of historisch weetje' },
+        { cmd: 'feitje',                uitleg: 'kroketfeitje of historisch weetje (via Wikipedia)' },
+        { cmd: 'mop',                   uitleg: 'echte mop via JokeAPI, vertaald naar Nederlands' },
         { cmd: 'frituur [tekst]',       uitleg: 'AI-afbeelding genereren' },
         { cmd: 'orakel [vraag]',        uitleg: 'cryptisch antwoord uit het Vetbad' },
         { cmd: 'meld [naam]',           uitleg: 'rapporteer een vermoedelijke tegenstander' },
@@ -2129,6 +2130,11 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
     // ── Verborgen commands (niet in help, wel in prompts)
     if (input === 'feitje') {
       await stuurKroketFeitje(client, command.channel_id);
+      return;
+    }
+
+    if (input === 'mop' || input.startsWith('mop ') || input.includes('vertel een mop') || input.includes('vertel me een mop')) {
+      await stuurMop(client, command.channel_id);
       return;
     }
 
@@ -3428,6 +3434,11 @@ app.event('app_mention', async ({ event, client }) => {
         }
       } else if (sentiment === 'LOFZANG') {
         prompt = `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} heeft zich respectvol uitgelaten: "${input}". Reageer met een warme zegen. Vermeld GEEN puntenaantal — het systeem heeft niets gewijzigd. Begin de inleidingszin letterlijk met: ${introStart}`;
+      } else if (/\bmop\b|vertel.*grap|vertel.*mop|maak.*lachen|grap.*vertellen/i.test(input)) {
+        // Mop-verzoek — haal echte mop op via JokeAPI
+        const thread_ts = event.thread_ts || (event.parent_user_id ? event.ts : undefined);
+        await stuurMop(client, event.channel);
+        return; // stuurMop post zelf, geen verdere verwerking nodig
       } else {
         prompt = `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} zegt tegen de Kroket God: "${input}". ` +
           `Reageer volledig in karakter — gezaghebbend, dramatisch, relevant aan wat er gevraagd of gezegd wordt. ` +
@@ -4073,6 +4084,27 @@ async function stuurKroketFeitje(client, channelId = process.env.SLACK_CHANNEL_I
     300, false
   );
   await postToChannel(client, channelId, tekst);
+}
+
+async function stuurMop(client, channelId = process.env.SLACK_CHANNEL_ID) {
+  const grap = await haalGrap();
+  if (grap) {
+    const tekst = await kroketResponse(
+      `Vertaal de volgende Engelse mop naar correct Nederlands en presenteer hem in de stijl van de Kroket God. ` +
+      `Verwerk er een kroket- of frituurverwijzing in als dat past, maar forceer het niet. ` +
+      `De originele mop: "${grap}". ` +
+      `Vertel de mop volledig en in correct Nederlands. Geen inleidingszin.`,
+      300, false
+    );
+    await postToChannel(client, channelId, tekst);
+  } else {
+    // Fallback als JokeAPI niet beschikbaar is
+    const tekst = await kroketResponse(
+      `Vertel een droge, originele mop over kroketten of frituurcultuur. De grap moet kloppen en grappig zijn. Geen inleidingszin.`,
+      250, false
+    );
+    await postToChannel(client, channelId, tekst);
+  }
 }
 
 function planKroketFeitje(client) {
