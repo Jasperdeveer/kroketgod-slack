@@ -2475,7 +2475,10 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
       const partij1 = g1 ? g1[1].bijnaam : `Buitenstaander "${naam1.trim()}"`;
       const partij2 = g2 ? g2[1].bijnaam : `Buitenstaander "${naam2.trim()}"`;
       const tekst = await kroketResponse(
-        `Leid een rechtbankzaak tussen ${partij1} en ${partij2}. Spreek hen uitsluitend aan als respectievelijk "${partij1}" en "${partij2}". De Kroket God is rechter én aanklager. Presenteer de aanklacht, hoor beide partijen kort en spreek een dramatisch vonnis uit. Verwijs naar de Geboden. Geen inleidingszin.`,
+        `[PARTIJ 1: ${partij1}] [PARTIJ 2: ${partij2}] ` +
+        `Leid een rechtbankzaak tussen ${partij1} en ${partij2}. ` +
+        `Spreek elke partij uitsluitend aan bij hun exacte naam: "${partij1}" en "${partij2}". Gebruik nooit "u" zonder naam als er twee partijen zijn. ` +
+        `De Kroket God is rechter én aanklager. Presenteer de aanklacht, hoor beide partijen kort en spreek een dramatisch vonnis uit. Verwijs naar de Geboden. Geen inleidingszin.`,
         600, false
       );
       await postToChannel(client, command.channel_id, tekst);
@@ -2511,7 +2514,10 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
 
       const aantalStemmen = Object.values(stemData.stemmen).filter(id => id === voteeId).length;
       const tekst = await kroketResponse(
-        `${aanvrager} heeft gestemd op ${voteeLid.bijnaam} als kroket-held van de week. ${voteeLid.bijnaam} heeft nu ${aantalStemmen} stem(men). Reageer plechtig op deze democratische daad. Geen inleidingszin.`,
+        `[STEMMER: ${aanvrager}] [KANDIDAAT: ${voteeLid.bijnaam}] ` +
+        `${aanvrager} heeft zijn stem uitgebracht op ${voteeLid.bijnaam} als kroket-held van de week. ` +
+        `${voteeLid.bijnaam} staat nu op ${aantalStemmen} stem(men). ` +
+        `Richt de aankondiging tot de groep — niet tot één persoon. Reageer plechtig op deze democratische daad. Geen inleidingszin.`,
         350, false
       );
       await postToChannel(client, command.channel_id, tekst);
@@ -2545,7 +2551,11 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
       const facties = ['de Ongepaneerden', 'het Koud-Beleg Front', 'de Saladesekte', 'de Bitterbal-ontkenners', 'de aanhangers van het Droge Brood'];
       const factie = facties[Math.floor(Math.random() * facties.length)];
       const tekst = await kroketResponse(
-        `${aanvrager} meldt "${naam}" aan bij de Hoge Frituurraad als vermoedelijke handlanger van ${factie}. Reageer dramatisch — onderzoek de zaak in stijl, citeer fictief bewijs, en spreek een voorlopig oordeel uit. Eindig met een waarschuwing aan "${naam}" of een geruststelling aan ${aanvrager}. Geen inleidingszin.`,
+        `[MELDER: ${aanvrager}] [VERDACHTE: ${naam}] ` +
+        `${aanvrager} meldt de verdachte "${naam}" aan als handlanger van ${factie}. ` +
+        `Richt het oordeel tot "${naam}" — niet tot ${aanvrager}. ` +
+        `Onderzoek de zaak dramatisch, citeer fictief bewijs, spreek een voorlopig oordeel uit over "${naam}". ` +
+        `Sluit af met een korte geruststelling aan ${aanvrager}. Geen inleidingszin.`,
         500
       );
       await postToChannel(client, command.channel_id, tekst);
@@ -2699,9 +2709,10 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
         const partnerBijnaam = loadMembers()[partnerId]?.bijnaam || 'uw bondgenoot';
         verbreekAlliantie(command.user_id);
         const tekst = await kroketResponse(
+          `[VERBOND VERBROKEN door ${aanvrager} met ${partnerBijnaam}] ` +
           `${aanvrager} heeft het heilige verbond met ${partnerBijnaam} verbroken. ` +
-          `Een alliantie verbreken is geen kleinigheid — spreek dit uit als een moment van rouw voor de snackleer. ` +
-          `Geen inleidingszin.`,
+          `Richt de aankondiging tot de groep — niet tot één persoon. ` +
+          `Een alliantie verbreken is geen kleinigheid — spreek dit uit als een moment van rouw. Geen inleidingszin.`,
           300, false
         );
         await postToChannel(client, command.channel_id, tekst);
@@ -2726,13 +2737,14 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
       logGebeurtenis('alliantie', command.user_id, `${aanvrager} sloot een alliantie met ${partnerLid.bijnaam}`);
 
       const oudeZin = oudePartnerBijnaam
-        ? `Dit verbreekt de vorige alliantie van ${aanvrager} met ${oudePartnerBijnaam}. `
+        ? `De vorige alliantie van ${aanvrager} met ${oudePartnerBijnaam} is hiermee verbroken. `
         : '';
       const tekst = await kroketResponse(
-        `${aanvrager} en ${partnerLid.bijnaam} hebben een heilig kroket-verbond gesloten. ${oudeZin}` +
-        `Kondig dit plechtig aan: zij staan voortaan samen voor de snackleer. ` +
-        `Als één valt, wordt de ander gewaarschuwd. Als één wordt begenadigd, weet de ander het. ` +
-        `Maar waarschuw: het verbond verplicht — wie zijn bondgenoot laat vallen, verliest meer dan een punt. Geen inleidingszin.`,
+        `[NIEUW VERBOND: ${aanvrager} ↔ ${partnerLid.bijnaam}] ` +
+        `${oudeZin}` +
+        `${aanvrager} en ${partnerLid.bijnaam} — en alleen deze twee — hebben een heilig kroket-verbond gesloten. ` +
+        `Richt de aankondiging tot de groep. Kondig plechtig aan wat dit verbond inhoudt en wat het verplicht. ` +
+        `Geen inleidingszin.`,
         400, false
       );
       await postToChannel(client, command.channel_id, tekst);
