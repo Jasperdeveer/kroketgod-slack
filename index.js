@@ -97,6 +97,7 @@ Regels:
 - Schrijf in correct Nederlands. Gebruik GEEN verzonnen samenstellingen of niet-bestaande woorden. Als je twijfelt of een woord bestaat — gebruik het niet.
 - Neem NOOIT format-labels op in je output (zoals "--- [decreet]" of "--- [one-liner]"). Die zijn alleen voor intern gebruik.
 - Ken NOOIT zelf kroketpunten toe of af tenzij de prompt dit expliciet meldt. Noem GEEN specifieke puntenaantallen — jij weet de actuele stand niet. Als het systeem een punt heeft toegekend of afgenomen staat dit in de prompt vermeld.
+- ALLIANTIES: leden kunnen een heilig verbond sluiten via het alliantie-commando. Alliantie-partners delen voordelen: gedeelde eer (bonus kroketpunt), pact-bescherming bij beroep, alliantie-vonnis als beiden verbannen zijn, solidariteitsbonus bij achievements. Als iemand vraagt om een punt te "delen" met zijn partner of compagnon: verwijs naar het eer-commando met de naam van de partner — de alliantie-bonus wordt dan automatisch berekend. Ken NOOIT zelf punten toe op basis van alliantie-verzoeken — dat doet het systeem.
 - Gebruik getallen ALLEEN als ze in de prompt staan. Verzin geen getallen zelf — geen decimalen, geen neppe berekeningen. Als een prompt voorberekende alternatieve eenheden aanbiedt, mag je die gebruiken, maar alleen exact zoals gegeven.
 - INLEIDINGSZIN — KRITIEKE REGEL: Als het prompt de tekst "Geen inleidingszin" bevat: begin DIRECT met de inhoud — absoluut geen cursieve openingsregel, geen introductie, niets. Direct de hoofdtekst. Als het prompt "Geen inleidingszin" NIET bevat: begin met één cursieve inleidingsregel (_zoals dit_) die in maximaal één zin parafraseert wat er gezegd of gevraagd werd, gevolgd door een lege regel. Doe dit NIET bij algemene aankondigingen.
 - Houd berichten kort: max 4-5 regels hoofdtekst. Elke zin telt.
@@ -374,16 +375,32 @@ function bouwLedenStatus() {
       return `- ${naam}: verbannen tot ${tot} (${v.reden || 'reden onbekend'})`;
     }).join('\n') || '- Niemand momenteel verbannen';
 
-  return `ACTUELE LEDENLIJST (gebruik UITSLUITEND deze echte data — verzin geen getallen):\n${ledenLijst}\n\nACTIEVE VERBANNINGEN:\n${actiefVerbannen}`;
+  // Allianties toevoegen aan de statusstring
+  const allianties = loadAllianties();
+  const gezien = new Set();
+  const alliantieRegels = [];
+  for (const [uid1, uid2] of Object.entries(allianties)) {
+    if (gezien.has(uid1) || gezien.has(uid2)) continue;
+    gezien.add(uid1); gezien.add(uid2);
+    const n1 = members[uid1]?.bijnaam || uid1;
+    const n2 = members[uid2]?.bijnaam || uid2;
+    alliantieRegels.push(`- ${n1} ↔ ${n2}`);
+  }
+  const alliantieInfo = alliantieRegels.length > 0
+    ? `\n\nACTIEVE ALLIANTIES (heilige verbonden — gedeelde eer en wederzijdse bescherming):\n${alliantieRegels.join('\n')}`
+    : '\n\nACTIEVE ALLIANTIES:\n- Geen actieve allianties';
+
+  return `ACTUELE LEDENLIJST (gebruik UITSLUITEND deze echte data — verzin geen getallen):\n${ledenLijst}\n\nACTIEVE VERBANNINGEN:\n${actiefVerbannen}${alliantieInfo}`;
 }
 
-// Detecteert of een bericht vraagt naar leden, scores of verbannelingen
+// Detecteert of een bericht vraagt naar leden, scores, verbannelingen of allianties
 function vraagNaarLedenData(tekst) {
   const lower = tekst.toLowerCase();
   return [
     'volger', 'verbann', 'balling', 'leden', 'lid ', 'wie ', 'wie?',
     'update', 'status', 'overzicht', 'stand', 'hoeveel', 'wie zijn',
-    'welke', 'ranglijst', 'score',
+    'welke', 'ranglijst', 'score', 'alliantie', 'verbond', 'compagnon',
+    'bondgenoot', 'partner', 'deel', 'samen', 'kroketpunt',
   ].some(kw => lower.includes(kw));
 }
 
