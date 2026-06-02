@@ -627,6 +627,93 @@ async function haalAmsterdamsWeer() {
   }
 }
 
+// ── wttr.in: aanvullend Amsterdams weer (zonsopkomst/ondergang, maanfase) ─────
+
+async function haalWttrData() {
+  try {
+    const resp = await fetch('https://wttr.in/Amsterdam?format=j1', { timeout: 8000 });
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    const astronomy = data.weather?.[0]?.astronomy?.[0];
+    if (!astronomy) return null;
+    return {
+      zonsopkomst:   astronomy.sunrise,
+      zonsondergang: astronomy.sunset,
+      maanfase:      astronomy.moon_phase,
+      maanverlicht:  parseInt(astronomy.moon_illumination || '0'),
+    };
+  } catch (_) { return null; }
+}
+
+// ── Nager.at: Nederlandse feestdagen ──────────────────────────────────────────
+// In-memory cache — wordt gevuld bij startup en om middernacht ververst via cron.
+
+let _feestdagenCache = [];
+
+async function laadNederlandseFeestdagen() {
+  try {
+    const jaar = new Date().getFullYear();
+    const resp = await fetch(`https://date.nager.at/api/v3/PublicHolidays/${jaar}/NL`, { timeout: 8000 });
+    if (!resp.ok) return;
+    _feestdagenCache = await resp.json();
+    console.log(`📅 ${_feestdagenCache.length} Nederlandse feestdagen geladen (${jaar})`);
+  } catch (err) {
+    console.warn('⚠️ Feestdagen niet geladen:', err.message);
+  }
+}
+
+// Geeft feestdagen terug die binnen `dagen` dagen vallen (standaard: vandaag + 7 dagen).
+function getKomendeFeestdagen(dagen = 7) {
+  const nu  = new Date();
+  const grens = new Date(nu.getTime() + dagen * 86_400_000);
+  const vandaag = nu.toISOString().slice(0, 10);
+  return _feestdagenCache.filter(f => f.date >= vandaag && f.date <= grens.toISOString().slice(0, 10));
+}
+
+// Geeft true als vandaag een feestdag is.
+function isVandaagFeestdag() {
+  const vandaag = new Date().toISOString().slice(0, 10);
+  return _feestdagenCache.find(f => f.date === vandaag) || null;
+}
+
+// ── Wikipedia NL: echte samenvatting van een onderwerp ────────────────────────
+
+const WIKIPEDIA_KROKET_ONDERWERPEN = [
+  'Kroket', 'Bitterbal', 'FEBO', 'Ragout', 'Frikandel', 'Kaassouffle',
+  'Stamppot', 'Hollandse_keuken', 'Frituur', 'Snackbar_(Nederland)',
+];
+
+async function haalWikipediaFeit(onderwerp = null) {
+  try {
+    const topic = onderwerp || WIKIPEDIA_KROKET_ONDERWERPEN[
+      Math.floor(Math.random() * WIKIPEDIA_KROKET_ONDERWERPEN.length)
+    ];
+    const url = `https://nl.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(topic)}`;
+    const resp = await fetch(url, { timeout: 8000 });
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    if (!data.extract) return null;
+    // Eerste twee zinnen als feit
+    const zinnen = data.extract.split(/(?<=[.!?])\s+/);
+    return { tekst: zinnen.slice(0, 2).join(' '), onderwerp: data.title };
+  } catch (_) { return null; }
+}
+
+// ── JokeAPI: Engelse grappen (AI vertaalt en kroketiseert ze) ─────────────────
+
+async function haalGrap() {
+  try {
+    const url = 'https://v2.jokeapi.dev/joke/Pun,Miscellaneous?safe-mode&blacklistFlags=nsfw,racist,sexist,explicit';
+    const resp = await fetch(url, { timeout: 8000 });
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    if (data.error) return null;
+    return data.type === 'twopart'
+      ? `${data.setup} — ${data.delivery}`
+      : data.joke;
+  } catch (_) { return null; }
+}
+
 // ── Lichte vergrijpen ─────────────────────────────────────────────────────────
 // Bijhoudt kleine overtredingen (belediging/sarcasme zonder directe straf).
 // Drempels: 3 vergrijpen → herderlijke waarschuwing, 5 vergrijpen → 4-uurs ban.
@@ -2792,16 +2879,19 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
     // ── Weersverwachting (met echt Amsterdams weer via open-meteo)
     if (input === 'weer' || input.includes('weersverwachting')) {
       const { dagNaam, dagdeel, seizoen } = getTijdContext();
-      const weer = await haalAmsterdamsWeer();
+      const [weer, wttr] = await Promise.all([haalAmsterdamsWeer(), haalWttrData()]);
       const weerZin = weer
-        ? `Het echte weer in Amsterdam op dit moment: ${weer.samenvatting}. Verwerk deze exacte gegevens letterlijk in de verwachting.`
+        ? `Het echte weer in Amsterdam op dit moment: ${weer.samenvatting}. Verwerk deze exacte gegevens letterlijk.`
         : 'Geen weerdata beschikbaar — gebruik metaforisch frituurweer.';
+      const wttrZin = wttr
+        ? `Zonsopkomst: ${wttr.zonsopkomst}, zonsondergang: ${wttr.zonsondergang}. Maanfase: ${wttr.maanfase} (${wttr.maanverlicht}% verlicht). Verwerk de zonstijden en maanfase als kosmische frituuromstandigheden.`
+        : '';
       const tekst = await kroketResponse(
         `Geef een officiële kroket-weersverwachting voor vandaag (${dagNaam}, ${dagdeel}, ${seizoen}). ` +
-        `${weerZin} ` +
+        `${weerZin} ${wttrZin} ` +
         `Vertaal het echte weer naar frituur-metaforen: temperatuur = frituurtemperatuur, wind = paneerdruk, regen = mosterdneerslag, bewolking = vetdamp. ` +
         `Geef drie vooruitzichten (ochtend/middag/avond). Formeel weersbericht-format. Max 5 zinnen. Geen inleidingszin.`,
-        400
+        450
       );
       await postToChannel(client, command.channel_id, tekst);
       return;
@@ -3659,6 +3749,12 @@ planCron('0 12 * * *', async () => {
     }
     if (verbanningSave) saveVerbanning(verbanning);
 
+    // Feestdag-check via Nager.at — als er een feestdag nadert, vermeld het
+    const komendeFeestdag = getKomendeFeestdagen(3); // feestdagen binnen 3 dagen
+    const feestdagZin = komendeFeestdag.length > 0
+      ? ` Vermeld terloops dat ${komendeFeestdag[0].localName} op ${new Date(komendeFeestdag[0].date).toLocaleDateString('nl-NL', { weekday: 'long', day: 'numeric', month: 'long' })} nadert — de snackleer viert mee.`
+      : '';
+
     if (dag === 5) {
       const positief = Math.random() < 0.5;
       const uitverkorene = Math.random() < 0.5 ? getUitverkorene(positief) : null;
@@ -3668,7 +3764,7 @@ planCron('0 12 * * *', async () => {
             : ` Richt daarbij een goedmoedige sneer aan ${uitverkorene[1].bijnaam}.`)
         : '';
       const tekst = await kroketResponse(
-        `Het is vrijdag 12:00 — het heiligste moment van de week. Stuur een uitbundige, plechtige oproep aan de Heren van de Kroket Illuminati voor #lekkerkroketje. Gebruik :lekker_kroketje: als emoji.${extra} Geen inleidingszin.`,
+        `Het is vrijdag 12:00 — het heiligste moment van de week. Stuur een uitbundige, plechtige oproep aan de Heren van de Kroket Illuminati voor #lekkerkroketje. Gebruik :lekker_kroketje: als emoji.${extra}${feestdagZin} Geen inleidingszin.`,
         500, false
       );
       await postToChannel(app.client, process.env.SLACK_CHANNEL_ID, tekst);
@@ -3718,7 +3814,7 @@ planCron('0 12 * * *', async () => {
       const tekst = await kroketResponse(
         `Het is ${ctx.naam} 12:00. Wens de Heren van de Kroket Illuminati smakelijk eten, maar herinner hen eraan dat het geen vrijdag is. ` +
         `Er zijn nog ${ctx.dagenNog} dag(en) tot het heilige kroketmoment. Toon: ${ctx.toon} ` +
-        `Gebruik :lekker_kroketje: als emoji. Wees creatief, kort en in stijl.${extra} Geen inleidingszin.\n\n` +
+        `Gebruik :lekker_kroketje: als emoji. Wees creatief, kort en in stijl.${extra}${feestdagZin} Geen inleidingszin.\n\n` +
         `Je MAG de wachttijd creatief uitdrukken in alternatieve eenheden — gebruik dan UITSLUITEND de volgende voorberekende getallen (kies 2-3): ${omrekeningen.join(' / ')}. Verzin geen andere getallen.`,
         400, false
       );
@@ -3936,6 +4032,40 @@ const FEITJE_TYPES = [
 ];
 
 async function stuurKroketFeitje(client, channelId = process.env.SLACK_CHANNEL_ID) {
+  const keuze = Math.random();
+
+  if (keuze < 0.40) {
+    // 40%: Echt Wikipedia-feit
+    const wiki = await haalWikipediaFeit();
+    if (wiki) {
+      const tekst = await kroketResponse(
+        `Het volgende is een feitelijk correct uittreksel uit de heilige Wikipedia-archieven over "${wiki.onderwerp}": ` +
+        `"${wiki.tekst}" ` +
+        `Presenteer dit feit als een goddelijk decreet. Voeg maximaal één eigen kroket-metafoor toe. ` +
+        `Verzin NIETS — gebruik het feit letterlijk. Max 3 zinnen. Geen inleidingszin.`,
+        300, false
+      );
+      await postToChannel(client, channelId, tekst);
+      return;
+    }
+  }
+
+  if (keuze < 0.65) {
+    // 25%: Echte grap via JokeAPI, kroketiseren
+    const grap = await haalGrap();
+    if (grap) {
+      const tekst = await kroketResponse(
+        `Vertaal de volgende Engelse grap naar het Nederlands en herschrijf hem in de stijl van de Kroket God. ` +
+        `Verwerk er een kroket-metafoor in. De originele grap: "${grap}". ` +
+        `Max 3 zinnen. Geen inleidingszin.`,
+        250, false
+      );
+      await postToChannel(client, channelId, tekst);
+      return;
+    }
+  }
+
+  // 35% (of fallback): Verzonnen feit op basis van FEITJE_TYPES
   const type = FEITJE_TYPES[Math.floor(Math.random() * FEITJE_TYPES.length)];
   const tekst = await kroketResponse(
     `Deel ${type}. Presenteer dit als een goddelijk inzicht of decreet van de Kroket God. ` +
@@ -4121,6 +4251,13 @@ planCron('30 9 * * 1', () => {
   const dagNamen  = ['maandag', 'dinsdag', 'woensdag', 'donderdag', 'vrijdag'];
   console.log(`⚡ Kroket-event gepland op ${dagNamen[extraDagen]} ~${doelUur}:${String(doelMin).padStart(2, '0')} AMS`);
   setTimeout(() => planWillekeurigKroketEvent(app.client), delayMs);
+}, { timezone: 'Europe/Amsterdam' });
+
+// ── Cron: dagelijks 00:05 — Nederlandse feestdagen verversen ─────────────────
+// Nager.at-data is statisch per jaar — middernacht vernieuwen is ruim voldoende.
+
+planCron('5 0 * * *', async () => {
+  await laadNederlandseFeestdagen();
 }, { timezone: 'Europe/Amsterdam' });
 
 // ── Cron: dagelijks 08:30 — verjaardagscheck ──────────────────────────────────
@@ -4335,4 +4472,5 @@ process.on('SIGINT',  () => gracefulShutdown('SIGINT'));
   isReady = true;
   console.log('⚜️ De Kroket God is wakker. Health: http://localhost:3001/health');
   await laadTestKanaalIds(app.client);
+  await laadNederlandseFeestdagen(); // feestdagen voor Nager.at integratie
 })();
