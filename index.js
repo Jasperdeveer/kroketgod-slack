@@ -652,16 +652,32 @@ async function legGeleKaartBanOp(client, channelId, userId, bijnaam, reden, cita
 }
 
 // Notificeer de alliantie-partner als een lid verbannen wordt.
+// Als beide partners tegelijk verbannen zijn → gezamenlijk vonnis.
 async function notificeerAlliantiePartner(client, userId, bijnaam, channelId) {
   try {
     const partnerId = getAlliantiePartner(userId);
     if (!partnerId) return;
     const members = loadMembers();
     const partnerBijnaam = members[partnerId]?.bijnaam || 'uw bondgenoot';
+
+    // Alliantie-vonnis: partner is ook verbannen → gezamenlijk decreet
+    if (isVerbannen(partnerId)) {
+      const tekst = await kroketResponse(
+        `Ongekend: ${bijnaam} én ${partnerBijnaam} zijn tegelijkertijd verbannen. ` +
+        `Zij zijn verbonden door een heilig verbond — en nu delen zij dezelfde schande. ` +
+        `Spreek een gezamenlijk alliantie-vonnis uit: de Hoge Frituurraad noteert dit als een collectieve mislukking van het pact. ` +
+        `Gebruik het decreet-formaat. Noem beiden bij naam. Geen inleidingszin.`,
+        450, false
+      );
+      await postToChannel(client, channelId, `<@${userId}> <@${partnerId}>\n\n${tekst}`);
+      return;
+    }
+
+    // Standaard: partner is vrij → notificeer over val van bondgenoot
     const tekst = await kroketResponse(
       `${bijnaam} — de alliantie-partner van ${partnerBijnaam} — is zojuist verbannen. ` +
       `Spreek ${partnerBijnaam} persoonlijk aan: hun bondgenoot is gevallen. ` +
-      `Dit is een moment van rouw, maar ook van keuze — distantieert men zich, of staat men pal? ` +
+      `Dit is een moment van rouw maar ook van keuze — distantieert men zich, of staat men pal? ` +
       `Waarschuw dat de Hoge Frituurraad allianties goed in de gaten houdt. Max 3 zinnen. Geen inleidingszin.`,
       300, false
     );
@@ -740,6 +756,22 @@ async function controleerAchievements(client, userId, oudeScore, nieuweScore) {
           console.error('Achievement post fout:', err.message);
         }
         logGebeurtenis('achievement', userId, `${bijnaam} verdiende het relikwie "${a.naam}"`);
+
+        // Solidariteitsbonus: actieve alliantie-partner krijgt +1 als beloning voor trouw
+        try {
+          const partnerId = getAlliantiePartner(userId);
+          if (partnerId && !isVerbannen(partnerId)) {
+            const partnerBijnaam = members[partnerId]?.bijnaam || 'de bondgenoot';
+            await pasScoreAanMetCheck(client, partnerId, 1);
+            const solidTekst =
+              `⚔️ *SOLIDARITEITSBONUS* ⚔️\n\n` +
+              `> ${partnerBijnaam} ontvangt +1 kroketpunt als bondgenoot van ${bijnaam}, ` +
+              `die zojuist *${a.naam}* verdiende.\n` +
+              `> _Een verbond draagt zijn vruchten — ook voor de trouwe partner._\n\n` +
+              `— De Hoge Frituurraad`;
+            await postToChannel(client, process.env.SLACK_CHANNEL_ID, solidTekst);
+          }
+        } catch (_) {}
       }
       // Anders: stilletjes markeren als ontgrendeld (backfill)
     }
@@ -1783,17 +1815,23 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
         : `⚖️ *BEROEPSCHRIFT INGEDIEND* ⚖️\n\n<@${command.user_id}> heeft vanuit het ballingschap een beroep ingediend — zonder enige onderbouwing.\n\n_De Kroket God bestudeert het dossier..._`;
       await postToChannel(client, command.channel_id, beroepPubliek);
 
-      const kansOpGenade = Math.random() < 0.20;
+      // Pact-bescherming: actieve alliantie-partner verhoogt kans van 20% naar 35%
+      const beroepPartnerId = getAlliantiePartner(command.user_id);
+      const pactActief = beroepPartnerId && !isVerbannen(beroepPartnerId);
+      const kansOpGenade = Math.random() < (pactActief ? 0.35 : 0.20);
 
       if (kansOpGenade) {
         // Genade — verbanning opheffen
         delete verbanning[command.user_id];
         saveVerbanning(verbanning);
         logGebeurtenis('genade', command.user_id, `${aanvrager} won een beroep en werd begenadigd`);
+        const pactZin = pactActief
+          ? ` Het heilige verbond van ${aanvrager} met ${loadMembers()[beroepPartnerId]?.bijnaam || 'een bondgenoot'} heeft de weegschaal doen doorslaan — een pact verplicht de Hoge Frituurraad tot extra aandacht.`
+          : '';
         const tekst = await kroketResponse(
           `${aanvrager} heeft het volgende beroepschrift ingediend: "${smoes || '(leeg — geen onderbouwing)'}". ` +
           `Citeer dit beroepschrift letterlijk in je reactie. Ga inhoudelijk in op de argumenten: welk specifiek punt vind je — hoe onwaarschijnlijk ook — enigszins overtuigend, en waarom? ` +
-          `Verleen vervolgens genade, maar maak duidelijk dat dit een uitzonderlijk en waarschijnlijk eenmalig geval is. ` +
+          `${pactZin} Verleen vervolgens genade, maar maak duidelijk dat dit een uitzonderlijk en waarschijnlijk eenmalig geval is. ` +
           `Dramatisch en lichtelijk ongemakkelijk van toon. Geen inleidingszin.`,
           500, false
         );
@@ -1937,6 +1975,26 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
             `Kondig dit gezamenlijk aan als een plechtige zegen voor meerdere volgelingen tegelijk. Geen inleidingszin.`,
             400, false);
       await postToChannel(client, command.channel_id, tekst);
+
+      // Gedeelde eer: 50% kans dat de alliantie-partner van de ontvanger ook +1 krijgt.
+      // De gever mag zichzelf niet bevoordelen via zijn eigen partner.
+      const allMembers = loadMembers();
+      for (const [eerId, eerLid] of geeerden) {
+        const partnerId = getAlliantiePartner(eerId);
+        if (!partnerId) continue;
+        if (partnerId === command.user_id) continue; // gever is partner — niet toegestaan
+        if (isVerbannen(partnerId)) continue;
+        if (Math.random() >= 0.50) continue;
+        await pasScoreAanMetCheck(client, partnerId, 1);
+        const partnerBijnaam = allMembers[partnerId]?.bijnaam || 'de bondgenoot';
+        const bonusTekst = await kroketResponse(
+          `Via het heilige verbond tussen ${eerLid.bijnaam} en ${partnerBijnaam} sijpelt de zegen door — ` +
+          `een alliantie deelt meer dan een naam. ${partnerBijnaam} ontvangt als bondgenoot +1 kroketpunt. ` +
+          `Kondig dit kort en plechtig aan. Geen inleidingszin.`,
+          200, false
+        );
+        await postToChannel(client, command.channel_id, bonusTekst);
+      }
       return;
     }
 
