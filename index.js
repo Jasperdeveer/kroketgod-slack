@@ -1460,7 +1460,6 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
         '',
         ...gekozen.map(s => `\`${s}\``),
         '',
-        '_Meer opties? Typ `/kroketgod kroketprompts`_',
       ];
       await respond({ text: regels.join('\n'), response_type: 'ephemeral' });
       return;
