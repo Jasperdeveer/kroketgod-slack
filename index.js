@@ -248,6 +248,91 @@ function getUitverkorene(positief = true) {
 const loadWeekgebeurtenissen = () => readJSON('weekgebeurtenissen.json', { weekStart: null, events: [] });
 const saveWeekgebeurtenissen = (data) => writeJSON('weekgebeurtenissen.json', data);
 
+// ── Verdachtheidsscores ───────────────────────────────────────────────────────
+// Elke aanroep laat de score licht driften — niemand begrijpt de berekening volledig.
+
+const loadVerdacht = () => readJSON('verdacht.json', {});
+const saveVerdacht = (data) => writeJSON('verdacht.json', data);
+
+function getVerdachtheidsscore(userId) {
+  const data = loadVerdacht();
+  if (!data[userId]) data[userId] = { score: Math.random() * 100 };
+  // Score drifts ±3 bij elke aanroep zodat hij nooit stabiel is
+  data[userId].score = Math.max(0.1, Math.min(99.9,
+    data[userId].score + (Math.random() * 6 - 3)
+  ));
+  saveVerdacht(data);
+  return data[userId].score;
+}
+
+// ── Stille Missie ─────────────────────────────────────────────────────────────
+// Één actieve missie per keer, opgeslagen in missie.json.
+
+const loadMissie  = () => readJSON('missie.json', null);
+const saveMissie  = (data) => writeJSON('missie.json', data);
+
+const MISSIE_WOORDEN = [
+  'korststructuur', 'vetbadprotocol', 'paneerdiepte', 'ragoutvloeibaarheid',
+  'frituurdiscipline', 'knapperigheidsindex', 'deegconsistentie', 'olieabsorptiepeil',
+  'mosterdprotocol', 'frituurhiërarchie', 'knapperheidsnorm', 'paneercertificaat',
+];
+
+function genereerMissie() {
+  const type = ['woord', 'woord', 'reactie', 'discussie'][Math.floor(Math.random() * 4)];
+  if (type === 'woord') {
+    const w = MISSIE_WOORDEN[Math.floor(Math.random() * MISSIE_WOORDEN.length)];
+    return {
+      type: 'woord',
+      beschrijving: `Gebruik het woord *"${w}"* vandaag in het kanaal — in een zin zonder directe uitleg. Wees creatief.`,
+      sleutelwoord: w.toLowerCase(),
+    };
+  }
+  if (type === 'reactie') {
+    return {
+      type: 'reactie',
+      beschrijving: `Zorg dat een ander lid vrijwillig reageert met :cucumber: 🥒 op één van uw berichten — zonder het expliciet te vragen.`,
+      emoji: 'cucumber',
+    };
+  }
+  return {
+    type: 'discussie',
+    beschrijving: `Start een discussie over sauzen of dipsauzen in het kanaal zonder het woord "saus" te gebruiken. Zorg dat tenminste 3 berichten van *andere* leden volgen.`,
+    verboden: 'saus',
+    minReacties: 3,
+    geteld: 0,
+    triggerTs: null, // wordt gezet zodra het lid zijn eerste bericht stuurt
+  };
+}
+
+async function vollooiMissie(client, channelId, missie) {
+  missie.status = 'voltooid';
+  saveMissie(missie);
+  await pasScoreAanMetCheck(client, missie.userId, 3);
+  const tekst = await kroketResponse(
+    `De stille missie van ${missie.bijnaam} is voltooid. De opdracht: "${missie.beschrijving}". ` +
+    `Kondig dit plechtig aan — 3 kroketpunten worden toegekend als bewijs van vakmanschap. ` +
+    `De missie was geheim; nu is het moment van onthulling. Geen inleidingszin.`,
+    400, false
+  );
+  await postToChannel(client, channelId, tekst);
+  logGebeurtenis('achievement', missie.userId, `${missie.bijnaam} voltooide een stille missie`);
+}
+
+async function verlopenMissie(client) {
+  const missie = loadMissie();
+  if (!missie || missie.status !== 'actief') return;
+  if (Date.now() < new Date(missie.verloopt).getTime()) return;
+  missie.status = 'verlopen';
+  saveMissie(missie);
+  const tekst = await kroketResponse(
+    `De stille missie van ${missie.bijnaam} is verlopen zonder voltooiing. ` +
+    `De opdracht: "${missie.beschrijving}". ` +
+    `Kondig de mislukking plechtig maar niet te zwaar aan — het was een kans die onbenut bleef. Geen inleidingszin.`,
+    300, false
+  );
+  await postToChannel(client, process.env.SLACK_CHANNEL_ID, tekst);
+}
+
 // ── Eer-limiet: max 3x per dag ────────────────────────────────────────────────
 const loadEerGegeven = () => readJSON('eerGegeven.json', {});
 const saveEerGegeven = (data) => writeJSON('eerGegeven.json', data);
@@ -2000,6 +2085,8 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
         { cmd: 'canoniseer [naam]',            uitleg: 'lid opgezocht — heiligendag, daad en patronaat gegenereerd' },
         { cmd: 'geef [naam] een kroket-therapiesessie', uitleg: 'lid opgezocht — diagnose, behandelplan, prognose' },
         { cmd: 'onthul de naam van mijn spirit-kroket', uitleg: 'willekeurige selectie uit lijst van 10 kroketvarianten' },
+        { cmd: 'complot',                uitleg: 'koppelt recente berichten aan complottheorie + verdachtheidsscores (driften bij elke aanroep)' },
+        { cmd: 'missie',                 uitleg: 'geeft willekeurig lid privé een stille opdracht — 3 punten bij voltooiing, bot monitort het kanaal' },
       ];
 
       const regels = ['🕵️ *ALLE KROKET PROMPTS*', '_Typ achter `/kroketgod`_', ''];
@@ -2197,6 +2284,87 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
       }
       const tekst = await kroketResponse(prompt, 400, false);
       await postToChannel(client, command.channel_id, tekst);
+      return;
+    }
+
+    // ── Complot — koppelt recente berichten aan een complottheorie
+    if (input === 'complot') {
+      const geschiedenis = loadGeschiedenis();
+      const allMembers = loadMembers();
+      if (geschiedenis.length < 3) {
+        await respond({ text: '_De Hoge Frituurraad heeft onvoldoende bewijs om een complot te construeren._', response_type: 'ephemeral' });
+        return;
+      }
+      // Kies 4 willekeurige recente berichten als bewijs
+      const gekozen = [...geschiedenis].sort(() => Math.random() - 0.5).slice(0, 4);
+      const bewijsLijst = gekozen.map(b => `• ${b.spreker}: "${b.tekst}"`).join('\n');
+
+      // Verdachtheidsscores — driften bij elke aanroep
+      const scoreRegels = Object.entries(allMembers).map(([id, lid]) => {
+        const score = getVerdachtheidsscore(id);
+        return `${lid.bijnaam}: ${score.toFixed(2)}%`;
+      }).join(' | ');
+
+      const tekst = await kroketResponse(
+        `De Hoge Frituurraad heeft de volgende recente kanaalgesprekken geanalyseerd:\n\n${bewijsLijst}\n\n` +
+        `Leg een complottheorie bloot die deze berichten causaal aan elkaar koppelt. ` +
+        `Wees specifiek en paranoïde maar logisch klinkend. Gebruik de namen letterlijk. ` +
+        `Sluit af met de actuele verdachtheidsscores van alle leden (presenteer als mysterieuze berekening zonder uitleg): ${scoreRegels}. ` +
+        `Geen inleidingszin.`,
+        600, false
+      );
+      await postToChannel(client, command.channel_id, tekst);
+      return;
+    }
+
+    // ── Stille Missie — geeft willekeurig lid een privémissie
+    if (input === 'missie') {
+      const huidig = loadMissie();
+      if (huidig?.status === 'actief') {
+        await respond({ text: `_Er loopt al een actieve missie voor ${huidig.bijnaam}. Wacht tot die voltooid of verlopen is._`, response_type: 'ephemeral' });
+        return;
+      }
+
+      const kandidaten = Object.entries(loadMembers()).filter(([id]) => !isVerbannen(id));
+      if (!kandidaten.length) {
+        await respond({ text: '_Geen beschikbare leden voor een missie._', response_type: 'ephemeral' });
+        return;
+      }
+      const [doelwitId, doelwitLid] = kandidaten[Math.floor(Math.random() * kandidaten.length)];
+      const missieData = genereerMissie();
+
+      const nieuweM = {
+        userId: doelwitId,
+        bijnaam: doelwitLid.bijnaam,
+        type: missieData.type,
+        beschrijving: missieData.beschrijving,
+        sleutelwoord: missieData.sleutelwoord || null,
+        emoji: missieData.emoji || null,
+        verboden: missieData.verboden || null,
+        minReacties: missieData.minReacties || null,
+        geteld: 0,
+        triggerTs: null,
+        gestart: new Date().toISOString(),
+        verloopt: new Date(Date.now() + 24 * 3600_000).toISOString(),
+        status: 'actief',
+      };
+      saveMissie(nieuweM);
+
+      // Stuur missie privé naar het doelwit
+      await client.chat.postEphemeral({
+        channel: command.channel_id,
+        user: doelwitId,
+        text: `⚜️ *STILLE MISSIE* ⚜️\n\nDe Kroket God heeft u persoonlijk uitverkoren.\n\n*Uw opdracht:*\n${missieData.beschrijving}\n\n_Succesvol voltooid: 3 kroketpunten. Verloopt over 24 uur. Spreek hier niet over._`,
+      });
+
+      // Publiek: aankondiging dat er een missie is uitgedeeld — zonder te onthullen aan wie
+      const aankondiging = await kroketResponse(
+        `De Kroket God heeft zojuist in stilte een geheime missie uitgedeeld aan één lid van de Illuminati. ` +
+        `Niemand weet aan wie. Niemand weet wat. Observeer. Wacht. ` +
+        `Kondig dit mysterieus aan — zonder enige hint over de ontvanger of de opdracht. Geen inleidingszin.`,
+        250, false
+      );
+      await postToChannel(client, command.channel_id, aankondiging);
       return;
     }
 
@@ -3747,6 +3915,38 @@ app.event('message', async ({ event, client }) => {
     if (!event.text?.trim()) return;
     if (!isTestKanaalMsg) logBericht(bijnaam, event.text);
 
+    // ── Stille Missie detectie ────────────────────────────────────────────────
+    if (!isTestKanaalMsg && event.channel === process.env.SLACK_CHANNEL_ID) {
+      const missie = loadMissie();
+      if (missie?.status === 'actief') {
+        // Verlopen missie opruimen
+        if (Date.now() > new Date(missie.verloopt).getTime()) {
+          await verlopenMissie(client);
+        } else if (missie.type === 'woord' && event.user === missie.userId) {
+          // Detecteer het sleutelwoord in bericht van het doelwit
+          if (event.text.toLowerCase().includes(missie.sleutelwoord)) {
+            await vollooiMissie(client, event.channel, missie);
+          }
+        } else if (missie.type === 'discussie') {
+          if (event.user === missie.userId && !missie.triggerTs) {
+            // Doelwit stuurde eerste bericht — start tellen
+            if (!event.text.toLowerCase().includes(missie.verboden)) {
+              missie.triggerTs = event.ts;
+              saveMissie(missie);
+            }
+          } else if (missie.triggerTs && event.user !== missie.userId) {
+            // Andere leden reageren na het triggerbericht
+            missie.geteld = (missie.geteld || 0) + 1;
+            if (missie.geteld >= missie.minReacties) {
+              await vollooiMissie(client, event.channel, missie);
+            } else {
+              saveMissie(missie);
+            }
+          }
+        }
+      }
+    }
+
     // ── Vrijdag-streak bijhouden ──────────────────────────────────────────────
     // Elk bericht van een bekend lid op vrijdag telt als deelname voor de streak.
     if (!isTestKanaalMsg && members[event.user] && !event.thread_ts) {
@@ -3833,9 +4033,19 @@ app.event('message', async ({ event, client }) => {
 
 app.event('reaction_added', async ({ event, client }) => {
   try {
-    if (event.reaction !== 'lekker_kroketje') return;
     if (event.item.channel !== process.env.SLACK_CHANNEL_ID) return;
     if (event.user === event.item_user) return;
+
+    // ── Stille Missie: emoji-detectie ──────────────────────────────────────
+    const missie = loadMissie();
+    if (missie?.status === 'actief' && missie.type === 'reactie') {
+      if (event.reaction === missie.emoji && event.item_user === missie.userId) {
+        await vollooiMissie(client, event.item.channel, missie);
+        return;
+      }
+    }
+
+    if (event.reaction !== 'lekker_kroketje') return;
     // Skip als de ontvanger niet in members staat (bijv. reactie op een bot-bericht)
     const members = loadMembers();
     if (!members[event.item_user]) return;
@@ -4581,6 +4791,7 @@ const BACKUP_BESTANDEN = [
   'scores.json', 'members.json', 'verbanning.json', 'achievements.json',
   'streaks.json', 'stemmen.json', 'allianties.json', 'geleKaarten.json',
   'vergrijpen.json', 'weekgebeurtenissen.json', 'eerGegeven.json',
+  'verdacht.json', 'missie.json',
 ];
 
 function maakBackup() {
