@@ -3388,7 +3388,7 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
     const isRateLimit = error?.status === 429 || error?.error?.error?.code === 'rate_limit_exceeded';
     const bericht = isRateLimit
       ? '⚜️ _De Kroket God heeft zijn daglimiet bereikt. Probeer het morgen opnieuw._'
-      : '⚜️ _De Hoge Frituurraad is momenteel in beraad. Probeer het later opnieuw._';
+      : '⚜️ _De frituurinstallatie is tijdelijk overbelast. Probeer het later opnieuw._';
     await respond({ text: bericht, response_type: 'ephemeral' });
   }
 });
