@@ -307,15 +307,26 @@ function genereerMissie() {
 async function vollooiMissie(client, channelId, missie) {
   missie.status = 'voltooid';
   saveMissie(missie);
-  await pasScoreAanMetCheck(client, missie.userId, 3);
+
+  const deelnemers = missie.deelnemers || [missie.userId];
+  const allMembers = loadMembers();
+
+  // Ken 3 punten toe aan alle deelnemers
+  for (const uid of deelnemers) {
+    await pasScoreAanMetCheck(client, uid, 3);
+  }
+
+  const namen = deelnemers.map(id => allMembers[id]?.bijnaam || id).join(' & ');
+  const teamZin = deelnemers.length > 1 ? `Het alliantie-koppel ${namen} heeft samen` : `${missie.bijnaam} heeft`;
+
   const tekst = await kroketResponse(
-    `De stille missie van ${missie.bijnaam} is voltooid. De opdracht: "${missie.beschrijving}". ` +
-    `Kondig dit plechtig aan — 3 kroketpunten worden toegekend als bewijs van vakmanschap. ` +
-    `De missie was geheim; nu is het moment van onthulling. Geen inleidingszin.`,
-    400, false
+    `${teamZin} de stille missie voltooid. De opdracht: "${missie.beschrijving}". ` +
+    `Kondig dit plechtig aan — elk lid ontvangt 3 kroketpunten als bewijs van vakmanschap en samenwerking. ` +
+    `De missie was geheim; nu is het moment van grote onthulling. Geen inleidingszin.`,
+    450, false
   );
   await postToChannel(client, channelId, tekst);
-  logGebeurtenis('achievement', missie.userId, `${missie.bijnaam} voltooide een stille missie`);
+  logGebeurtenis('achievement', missie.userId, `${namen} voltooide een stille missie`);
 }
 
 async function verlopenMissie(client) {
@@ -2086,7 +2097,8 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
         { cmd: 'geef [naam] een kroket-therapiesessie', uitleg: 'lid opgezocht — diagnose, behandelplan, prognose' },
         { cmd: 'onthul de naam van mijn spirit-kroket', uitleg: 'willekeurige selectie uit lijst van 10 kroketvarianten' },
         { cmd: 'complot',                uitleg: 'koppelt recente berichten aan complottheorie + verdachtheidsscores (driften bij elke aanroep)' },
-        { cmd: 'missie',                 uitleg: 'geeft willekeurig lid privé een stille opdracht — 3 punten bij voltooiing, bot monitort het kanaal' },
+        { cmd: 'missie',                 uitleg: 'status van jouw actieve missie + voortgang — cryptisch als er geen missie is' },
+        { cmd: 'missie starten',         uitleg: '(admin) wijs een stille missie toe aan willekeurig lid + alliantie-partner' },
       ];
 
       const regels = ['🕵️ *ALLE KROKET PROMPTS*', '_Typ achter `/kroketgod`_', ''];
@@ -2317,25 +2329,69 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
       return;
     }
 
-    // ── Stille Missie — geeft willekeurig lid een privémissie
+    // ── Stille Missie — status check of cryptische respons
     if (input === 'missie') {
       const huidig = loadMissie();
-      if (huidig?.status === 'actief') {
-        await respond({ text: `_Er loopt al een actieve missie voor ${huidig.bijnaam}. Wacht tot die voltooid of verlopen is._`, response_type: 'ephemeral' });
+
+      // Check of de aanvrager deelnemer is van de actieve missie
+      const isDeelnemer = huidig?.status === 'actief' &&
+        (huidig.deelnemers || [huidig.userId]).includes(command.user_id);
+
+      if (isDeelnemer) {
+        // Toon status + voortgang aan de deelnemer
+        let voortgang;
+        if (huidig.type === 'woord') {
+          voortgang = huidig.gevonden ? '✅ Sleutelwoord gevonden — voltooiing wordt verwerkt.' : `⏳ Sleutelwoord *"${huidig.sleutelwoord}"* nog niet gedetecteerd.`;
+        } else if (huidig.type === 'discussie') {
+          voortgang = `⏳ ${huidig.geteld || 0}/${huidig.minReacties} reacties van andere leden${huidig.triggerTs ? '' : ' (discussie nog niet gestart)'}.`;
+        } else if (huidig.type === 'reactie') {
+          voortgang = huidig.ontvangen ? '✅ Reactie ontvangen — voltooiing wordt verwerkt.' : `⏳ Wachten op 🥒 reactie van een ander lid op uw bericht.`;
+        }
+        const verlooptTijd = new Date(huidig.verloopt).toLocaleTimeString('nl-NL', { timeZone: 'Europe/Amsterdam', hour: '2-digit', minute: '2-digit' });
+        const teamZin = (huidig.deelnemers || []).length > 1 ? `\n*Team:* ${(huidig.deelnemers || []).map(id => loadMembers()[id]?.bijnaam || id).join(' & ')}` : '';
+        await respond({
+          text: `⚜️ *STILLE MISSIE — STATUS* ⚜️\n\n*Opdracht:*\n${huidig.beschrijving}${teamZin}\n\n*Voortgang:*\n${voortgang}\n\n_Verloopt om ${verlooptTijd}. Spreek hier niet over._`,
+          response_type: 'ephemeral',
+        });
         return;
       }
 
-      const kandidaten = Object.entries(loadMembers()).filter(([id]) => !isVerbannen(id));
+      // Geen actieve missie voor deze gebruiker → cryptische respons
+      const cryptischeTekst = huidig?.status === 'actief'
+        ? await kroketResponse(`De Kroket God heeft een missie uitstaan in het kanaal. Reageer cryptisch: er wordt iets bewogen dat jou niet aangaat. Max 2 zinnen. Geen inleidingszin.`, 120, false)
+        : await kroketResponse(`Iemand vraagt of er missies zijn. Er zijn geen actieve missies. Reageer als de Kroket God — cryptisch, mysterieus, geen bevestiging of ontkenning. Max 2 zinnen. Geen inleidingszin.`, 120, false);
+      await respond({ text: schoonOutput(cryptischeTekst), response_type: 'ephemeral' });
+      return;
+    }
+
+    // ── Stille Missie starten — alleen voor beheerder
+    if (input === 'missie starten' && command.user_id === 'U08ALFNQB1V') {
+      const huidig = loadMissie();
+      if (huidig?.status === 'actief') {
+        await respond({ text: `_Er loopt al een actieve missie voor ${(huidig.deelnemers || [huidig.userId]).map(id => loadMembers()[id]?.bijnaam || id).join(' & ')}. Gebruik /kroketgod missie om de voortgang te zien._`, response_type: 'ephemeral' });
+        return;
+      }
+
+      const allMembers = loadMembers();
+      const kandidaten = Object.entries(allMembers).filter(([id]) => !isVerbannen(id));
       if (!kandidaten.length) {
         await respond({ text: '_Geen beschikbare leden voor een missie._', response_type: 'ephemeral' });
         return;
       }
+
+      // Kies een willekeurig doelwit
       const [doelwitId, doelwitLid] = kandidaten[Math.floor(Math.random() * kandidaten.length)];
       const missieData = genereerMissie();
+
+      // Bepaal alle deelnemers: doelwit + eventuele alliantie-partner
+      const deelnemers = [doelwitId];
+      const partnerId = getAlliantiePartner(doelwitId);
+      if (partnerId && !isVerbannen(partnerId)) deelnemers.push(partnerId);
 
       const nieuweM = {
         userId: doelwitId,
         bijnaam: doelwitLid.bijnaam,
+        deelnemers,
         type: missieData.type,
         beschrijving: missieData.beschrijving,
         sleutelwoord: missieData.sleutelwoord || null,
@@ -2343,6 +2399,8 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
         verboden: missieData.verboden || null,
         minReacties: missieData.minReacties || null,
         geteld: 0,
+        gevonden: false,
+        ontvangen: false,
         triggerTs: null,
         gestart: new Date().toISOString(),
         verloopt: new Date(Date.now() + 24 * 3600_000).toISOString(),
@@ -2350,21 +2408,28 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
       };
       saveMissie(nieuweM);
 
-      // Stuur missie privé naar het doelwit
-      await client.chat.postEphemeral({
-        channel: command.channel_id,
-        user: doelwitId,
-        text: `⚜️ *STILLE MISSIE* ⚜️\n\nDe Kroket God heeft u persoonlijk uitverkoren.\n\n*Uw opdracht:*\n${missieData.beschrijving}\n\n_Succesvol voltooid: 3 kroketpunten. Verloopt over 24 uur. Spreek hier niet over._`,
-      });
+      // Stuur missie privé naar alle deelnemers
+      const teamNamen = deelnemers.map(id => allMembers[id]?.bijnaam || id).join(' & ');
+      const teamZin = deelnemers.length > 1 ? `\n\n_U voert deze missie uit als alliantie met ${deelnemers.map(id => allMembers[id]?.bijnaam).filter(Boolean).join(' & ')}_` : '';
+      for (const uid of deelnemers) {
+        try {
+          await client.chat.postEphemeral({
+            channel: command.channel_id,
+            user: uid,
+            text: `⚜️ *STILLE MISSIE* ⚜️\n\nDe Kroket God heeft u uitverkoren.${teamZin}\n\n*Uw opdracht:*\n${missieData.beschrijving}\n\n_Succesvol voltooid: 3 kroketpunten elk. Verloopt over 24 uur. Spreek hier niet over._`,
+          });
+        } catch (_) {}
+      }
 
-      // Publiek: aankondiging dat er een missie is uitgedeeld — zonder te onthullen aan wie
+      // Publieke aankondiging zonder hints
       const aankondiging = await kroketResponse(
-        `De Kroket God heeft zojuist in stilte een geheime missie uitgedeeld aan één lid van de Illuminati. ` +
-        `Niemand weet aan wie. Niemand weet wat. Observeer. Wacht. ` +
-        `Kondig dit mysterieus aan — zonder enige hint over de ontvanger of de opdracht. Geen inleidingszin.`,
-        250, false
+        `De Kroket God heeft zojuist in stilte een geheime missie uitgedeeld. ` +
+        `Niemand weet aan wie. Niemand weet wat. De frituurwalm hangt zwaar. ` +
+        `Kondig dit mysterieus aan. Geen inleidingszin.`,
+        200, false
       );
       await postToChannel(client, command.channel_id, aankondiging);
+      await respond({ text: `_Missie gestart voor ${teamNamen}. Type /kroketgod missie om de voortgang te zien._`, response_type: 'ephemeral' });
       return;
     }
 
@@ -3919,23 +3984,27 @@ app.event('message', async ({ event, client }) => {
     if (!isTestKanaalMsg && event.channel === process.env.SLACK_CHANNEL_ID) {
       const missie = loadMissie();
       if (missie?.status === 'actief') {
+        const deelnemers = missie.deelnemers || [missie.userId];
+
         // Verlopen missie opruimen
         if (Date.now() > new Date(missie.verloopt).getTime()) {
           await verlopenMissie(client);
-        } else if (missie.type === 'woord' && event.user === missie.userId) {
-          // Detecteer het sleutelwoord in bericht van het doelwit
+        } else if (missie.type === 'woord' && deelnemers.includes(event.user)) {
+          // Detecteer het sleutelwoord in bericht van een deelnemer
           if (event.text.toLowerCase().includes(missie.sleutelwoord)) {
+            missie.gevonden = true;
+            saveMissie(missie);
             await vollooiMissie(client, event.channel, missie);
           }
         } else if (missie.type === 'discussie') {
-          if (event.user === missie.userId && !missie.triggerTs) {
-            // Doelwit stuurde eerste bericht — start tellen
+          if (deelnemers.includes(event.user) && !missie.triggerTs) {
+            // Deelnemer stuurde eerste bericht zonder verboden woord — start tellen
             if (!event.text.toLowerCase().includes(missie.verboden)) {
               missie.triggerTs = event.ts;
               saveMissie(missie);
             }
-          } else if (missie.triggerTs && event.user !== missie.userId) {
-            // Andere leden reageren na het triggerbericht
+          } else if (missie.triggerTs && !deelnemers.includes(event.user)) {
+            // Andere leden (niet de deelnemers) reageren
             missie.geteld = (missie.geteld || 0) + 1;
             if (missie.geteld >= missie.minReacties) {
               await vollooiMissie(client, event.channel, missie);
@@ -4039,7 +4108,13 @@ app.event('reaction_added', async ({ event, client }) => {
     // ── Stille Missie: emoji-detectie ──────────────────────────────────────
     const missie = loadMissie();
     if (missie?.status === 'actief' && missie.type === 'reactie') {
-      if (event.reaction === missie.emoji && event.item_user === missie.userId) {
+      const deelnemers = missie.deelnemers || [missie.userId];
+      // Reactie op bericht van een deelnemer, van iemand die GEEN deelnemer is
+      if (event.reaction === missie.emoji &&
+          deelnemers.includes(event.item_user) &&
+          !deelnemers.includes(event.user)) {
+        missie.ontvangen = true;
+        saveMissie(missie);
         await vollooiMissie(client, event.item.channel, missie);
         return;
       }
