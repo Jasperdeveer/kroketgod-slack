@@ -1391,6 +1391,12 @@ const UIT_KARAKTER_PATRONEN = [
   /\b(I|you|your|we|they)\b.*\bkroket\b/i,
   /getuige aanwezig zijn.*frituur/i,
   /wanneer een klacht wordt ingediend.*getuige/i,
+  // Verboden vage formuleringen — ook in output filteren
+  /in beraad (nemen|gaan)/i,
+  /\bde (hoge )?frituurraad (zal|neemt?) dit in beraad\b/i,
+  /dit verdient nadere overweging/i,
+  /de raad bestudeert de zaak/i,
+  /\bzal dit niet vergeten\b/i,
 ];
 
 // Detecteert prompt-injectie in de INPUT — iemand die probeert het karakter te overschrijven.
