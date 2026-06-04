@@ -47,7 +47,10 @@ app.error(async ({ error }) => {
   console.error('⚡ Bolt global error:', error?.message || error);
 });
 
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+// timeout + maxRetries:0 — de groq-sdk doet standaard 2 interne retries op 429/5xx, wat onder
+// quota-druk latentie én quota-verbruik verdrievoudigt. Onze eigen fallbackketen vangt fouten al
+// op, dus interne retries zijn contraproductief; korte timeout voorkomt vastlopers.
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY, timeout: 15000, maxRetries: 0 });
 
 const ALLOWED_CHANNELS = (process.env.ALLOWED_CHANNELS || 'kroket-illuminati').split(',');
 // Testkanalen: verbanning wordt hier genegeerd zodat testen altijd werkt
@@ -1627,7 +1630,9 @@ async function callGemini({ model, messages, max_tokens, temperature }) {
         temperature,
         reasoning_effort: 'low',
       }),
-      timeout: 60000,
+      // Korte timeout: een gratis-tier Gemini die binnen 15s niets teruggeeft komt niet meer;
+      // liever doorrouteren dan per key 60s blokkeren (× keys = minuten → bot onbereikbaar).
+      timeout: 15000,
     });
     if (response.ok) {
       geminiKeyCooldownTot.delete(key); // weer gezond → uit cooldown halen
@@ -1954,12 +1959,24 @@ async function _draaiModellen(berichten, maxTokens = 400, niveau = 'slim') {
     .filter(m => niveau === 'slim' || m.tier !== 'zwaar')
     .filter(m => m.beschikbaar);
 
+  // Globale deadline: één bericht mag nooit eindeloos alle providers aflopen (anders stapelen
+  // trage requests op en wordt de bot onbereikbaar). Na KETEN_DEADLINE_MS stoppen we met nieuwe
+  // schakels en vallen we terug op de statische fallback — behalve de laatste (snelle, goedkope)
+  // schakel, die proberen we altijd nog één keer.
+  const KETEN_DEADLINE_MS = 35_000;
+  const deadline = Date.now() + KETEN_DEADLINE_MS;
+
   let laatsteFout;
   for (let i = 0; i < modellen.length; i++) {
     const model = modellen[i];
     const isLaatsteModel = i === modellen.length - 1;
     // Sla een net-ge429'de provider over (behalve de laatste schakel — die proberen we altijd).
     if (!isLaatsteModel && Date.now() < (providerCooldownTot.get(model.provider) || 0)) {
+      continue;
+    }
+    // Deadline overschreden? Sla resterende schakels over (behalve de laatste) en bail naar fallback.
+    if (!isLaatsteModel && Date.now() > deadline) {
+      console.warn('⚠️ Keten-deadline overschreden — stop met verdere providers, fallback.');
       continue;
     }
     let laatste;
@@ -2202,7 +2219,8 @@ OUTPUT: Return ONLY the image prompt as plain text. No quotes, no explanation.`,
           contents: [{ parts: [{ text: beeldPrompt }] }],
           generationConfig: { responseModalities: ['IMAGE', 'TEXT'] },
         }),
-        timeout: 90000,
+        // 45s per key (× keys door de rotatie) — bound de totale wachttijd op beeldgeneratie.
+        timeout: 45000,
       });
       if (resp.ok) {
         const data = await resp.json();
@@ -5679,6 +5697,9 @@ let _rejectionReset  = Date.now();
 
 process.on('uncaughtException', async (err) => {
   console.error('💥 Uncaught exception:', err);
+  // Forceer exit na max 3s, ook als de Slack-post hangt (anders zombie-proces dat pm2 niet
+  // herstart). unref() zodat deze timer zelf het proces niet kunstmatig in leven houdt.
+  setTimeout(() => process.exit(1), 3000).unref();
   try {
     await app.client.chat.postMessage({
       channel: process.env.SLACK_CHANNEL_ID,
@@ -5708,6 +5729,8 @@ process.on('unhandledRejection', (reason) => {
 
 async function gracefulShutdown(signaal) {
   console.log(`🛑 ${signaal} ontvangen — graceful shutdown...`);
+  // Forceer exit na max 5s, ook als app.stop() of een cron-stop blijft hangen.
+  setTimeout(() => process.exit(0), 5000).unref();
   isReady = false;
   // Stop alle geplande cron-taken
   for (const taak of geplandeCrons) {
