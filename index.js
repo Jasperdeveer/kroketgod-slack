@@ -4431,6 +4431,16 @@ app.event('app_mention', async ({ event, client }) => {
         const thread_ts = event.thread_ts || (event.parent_user_id ? event.ts : undefined);
         await stuurMop(client, event.channel);
         return; // stuurMop post zelf, geen verdere verwerking nodig
+      } else if (input.trim().split(/\s+/).length === 1 && Math.random() < 0.35) {
+        // Kortaf-grap: bij een neutrale mention van één woord (bv. "kroket") reageert de Kroket God
+        // soms juist heel droog en kort — alle goddelijke ceremonie, dan gewoon "OK". Geen LLM-call.
+        const KORTAF = ['OK', 'Genoteerd.', 'Mwah.', 'Hm.', 'Prima.', 'Aanvaard.', 'Zo zij het.',
+          'Akkoord.', 'Vermeld.', 'Juist.', ':thumbsup::skin-tone-3:', ':ok_hand::skin-tone-3:',
+          ':pinched_fingers::skin-tone-3:', '👍', 'k', 'Begrepen.'];
+        const kort = KORTAF[Math.floor(Math.random() * KORTAF.length)];
+        const thread_ts = event.thread_ts || (event.parent_user_id ? event.ts : undefined);
+        await postToChannel(client, event.channel, kort, { thread_ts });
+        return;
       } else {
         // Neutrale gesprekstak — geen oordeel, gewoon meepraten. Multi-turn: de instructie
         // gaat als systemExtra mee, het bericht zelf zit al als user-beurt in de historie.
@@ -5741,6 +5751,38 @@ planCron('0 16 * * 1-5', async () => {
 
 // Dagelijks om 03:15 — na de pm2 herstart (03:00) zodat data stabiel is
 planCron('15 3 * * *', maakBackup, { timezone: 'Europe/Amsterdam' });
+
+// ── Quota-monitor ────────────────────────────────────────────────────────────
+// Logt elke 15 min hoe vol de providers zitten, zodat je in de pm2-logs ziet wanneer limieten
+// vollopen/resetten i.p.v. te gokken. Groq via een minimale probe (eigen dag-quota is enorm, dit
+// is verwaarloosbaar); Gemini via de cooldown-state (verbruikt zelf geen quota).
+async function logQuotaStatus() {
+  try {
+    if (process.env.GROQ_API_KEY) {
+      const r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${process.env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: 'llama-3.3-70b-versatile', messages: [{ role: 'user', content: 'hi' }], max_tokens: 1 }),
+        timeout: 10000,
+      });
+      const h = r.headers;
+      console.log(`📊 Groq 70b — requests ${h.get('x-ratelimit-remaining-requests')}/${h.get('x-ratelimit-limit-requests')} (reset ${h.get('x-ratelimit-reset-requests')}), tokens ${h.get('x-ratelimit-remaining-tokens')}/${h.get('x-ratelimit-limit-tokens')} per min (reset ${h.get('x-ratelimit-reset-tokens')})`);
+    }
+  } catch (e) { console.warn('📊 Groq quota-check faalde:', e.message); }
+
+  // Gemini: hoeveel keys staan momenteel in cooldown (op hun limiet)? Geen quota-verbruik.
+  const keys = geminiKeys();
+  if (keys.length) {
+    const nu = Date.now();
+    const tot = keys.map(k => geminiKeyCooldownTot.get(k) || 0);
+    const vrij = tot.filter(t => t <= nu).length;
+    const eerstvrij = vrij > 0 ? 0 : Math.round((Math.min(...tot) - nu) / 1000);
+    console.log(`📊 Gemini — ${vrij}/${keys.length} keys vrij${vrij === 0 ? `, eerstvolgende over ~${eerstvrij}s` : ''}`);
+  }
+}
+planCron('*/15 * * * *', logQuotaStatus, { timezone: 'Europe/Amsterdam' });
+// Eén keer kort na opstart, zodat je meteen een meting hebt (en bij elke herstart).
+setTimeout(() => logQuotaStatus().catch(() => {}), 15000);
 
 // ── Crashdetectie ──────────────────────────────────────────────────────────────
 // Vangt onverwachte uitzonderingen op en herstart via PM2.
