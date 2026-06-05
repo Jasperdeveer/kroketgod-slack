@@ -2710,19 +2710,18 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
       return;
     }
 
-    // DM-bediening: in een Direct Message begint channel_id met 'D' — sommige commando's mogen daar
+    // DM's zijn UITGESCHAKELD: de Kroket God houdt geen privé-audiënties. Het draait om het
+    // gezamenlijke plezier in het genootschap — en privé-antwoorden kosten onnodig credits.
     const isDM = command.channel_id?.startsWith('D');
-    const DM_TOEGESTAAN = ['biecht', 'orakel', 'dossier', 'ranglijst', 'prompts', 'kroketprompts'];
     const eersteWoord = input.split(' ')[0];
-
     const isTestKanaalCmd = isTestKanaalCheck(command.channel_id, command.channel_name);
 
-    if (!ALLOWED_CHANNELS.includes(command.channel_name) && !isTestKanaalCmd && !isDM) {
-      await respond('De Kroket God spreekt alleen in de gewijde kanalen. Begeef u daarheen.');
+    if (isDM) {
+      await respond('De Kroket God houdt geen privé-audiënties. Zijn woord klinkt enkel in het genootschap — begeef u naar het gewijde kanaal.');
       return;
     }
-    if (isDM && !DM_TOEGESTAAN.includes(eersteWoord)) {
-      await respond(`In dit privé-gehoor antwoordt de Kroket God enkel op: ${DM_TOEGESTAAN.join(', ')}.`);
+    if (!ALLOWED_CHANNELS.includes(command.channel_name) && !isTestKanaalCmd) {
+      await respond('De Kroket God spreekt alleen in de gewijde kanalen. Begeef u daarheen.');
       return;
     }
 
