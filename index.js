@@ -744,6 +744,26 @@ function vraagNaarLedenData(tekst) {
   ].some(kw => lower.includes(kw));
 }
 
+// Woorden die als commando/verzoek bedoeld zijn — daar mag de kortaf-grap NIET op vuren.
+const KORTAF_UITGESLOTEN = new Set([
+  'hoelang', 'weer', 'feitje', 'mop', 'grap', 'quiz', 'orakel', 'dossier', 'prompts',
+  'kroketprompts', 'help', 'missie', 'complot', 'biecht', 'beroep', 'uitbreken', 'eer',
+  'straf', 'klacht', 'rechtbank', 'stem', 'alliantie', 'ranglijst', 'score', 'stand',
+  'leden', 'status', 'overzicht', 'gebod', 'geboden',
+]);
+
+// Mag de kortaf-grap ("OK"/emoji) afgaan? Alleen bij een casual één-woord-mention — NIET bij een
+// commando, data-verzoek of vraag (dan verdient de volgeling een echt antwoord).
+function magKortafGrap(input) {
+  const t = (input || '').trim();
+  if (t.split(/\s+/).length !== 1) return false;        // alleen exact één woord
+  if (t.includes('?')) return false;                    // een vraag verdient een antwoord
+  const woord = t.toLowerCase().replace(/[^a-zà-ÿ]/g, ''); // strip leestekens/cijfers
+  if (!woord || KORTAF_UITGESLOTEN.has(woord)) return false;
+  if (vraagNaarLedenData(input)) return false;          // data-verzoek (ranglijst/score/…)
+  return true;
+}
+
 // Detecteert of het bericht gaat over het Gepanneerde Rijk
 const RIJKS_TREFWOORDEN = [
   'rijk', 'gepanneerd', 'frietopia', 'frituurreich', 'kroketreich', 'visioen',
@@ -4629,7 +4649,7 @@ app.event('app_mention', async ({ event, client }) => {
         const thread_ts = event.thread_ts || (event.parent_user_id ? event.ts : undefined);
         await stuurMop(client, event.channel);
         return; // stuurMop post zelf, geen verdere verwerking nodig
-      } else if (input.trim().split(/\s+/).length === 1 && Math.random() < instelling('kortafKans')) {
+      } else if (magKortafGrap(input) && Math.random() < instelling('kortafKans')) {
         // Kortaf-grap: bij een neutrale mention van één woord (bv. "kroket") reageert de Kroket God
         // soms juist heel droog en kort — alle goddelijke ceremonie, dan gewoon "OK". Geen LLM-call.
         const KORTAF = ['OK', 'Genoteerd.', 'Mwah.', 'Hm.', 'Prima.', 'Aanvaard.', 'Zo zij het.',
