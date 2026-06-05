@@ -1602,11 +1602,16 @@ async function callGemini({ model, messages, max_tokens, temperature }) {
     throw err;
   }
 
-  // Sla keys over die net 429 gaven (per-key cooldown). Staat álles in cooldown, dan tóch alle
-  // keys proberen — beter een trage poging dan helemaal geen antwoord.
+  // Sla keys over die net 429 gaven (per-key cooldown). Staat ÁLLES in cooldown (alle keys op hun
+  // dag-quota), dan Gemini in z'n geheel skippen i.p.v. elk bericht 3 dode keys af te gaan (~1,5s
+  // verspild per bericht). De cooldown verloopt vanzelf, dus elke ~5 min wordt er weer één getest.
   const nu = Date.now();
-  const beschikbaar = keys.filter(key => (geminiKeyCooldownTot.get(key) || 0) <= nu);
-  const teProberen = beschikbaar.length > 0 ? beschikbaar : keys;
+  const teProberen = keys.filter(key => (geminiKeyCooldownTot.get(key) || 0) <= nu);
+  if (teProberen.length === 0) {
+    const err = new Error('Alle Gemini-keys in cooldown (dag-quota op) — Gemini overgeslagen');
+    err.status = 429; err.skip = true;
+    throw err;
+  }
 
   let laatsteFout;
   // Roteer over de keys: bij rate limit/quota (429) of serverfout (5xx) de volgende key proberen.
