@@ -6130,6 +6130,10 @@ const DASHBOARD_HTML = `<!doctype html><html lang="nl"><head>
   #instellingen{margin-bottom:16px}
   .setgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px}
   .lbl{font-size:12px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px}
+  .info{display:inline-block;width:15px;height:15px;line-height:14px;text-align:center;border-radius:50%;border:1px solid var(--gold2);color:var(--gold);font-size:10px;font-weight:700;font-style:italic;cursor:help;margin-left:5px;position:relative;vertical-align:middle;text-transform:none;letter-spacing:0}
+  .info:hover{background:var(--gold2);color:#1a1208}
+  .info:hover::after{content:attr(data-tip);position:absolute;left:50%;bottom:150%;transform:translateX(-50%);width:240px;max-width:70vw;background:#16100a;color:var(--txt);border:1px solid var(--gold2);border-radius:8px;padding:8px 11px;font-size:12px;font-weight:400;font-style:normal;line-height:1.45;text-align:left;box-shadow:0 8px 22px rgba(0,0,0,.55);z-index:20;white-space:normal}
+  .info:hover::before{content:"";position:absolute;left:50%;bottom:150%;transform:translate(-50%,99%);border:6px solid transparent;border-top-color:var(--gold2);z-index:20}
   .tog{display:block;padding:3px 0;font-size:14px;cursor:pointer}.tog input{vertical-align:middle;margin-right:6px;accent-color:var(--amber)}
   .numl{display:block;font-size:14px;margin:3px 0}.numl input{width:58px;background:#16100a;color:var(--txt);border:1px solid var(--line);border-radius:6px;padding:3px 6px;margin:0 4px}
   select,textarea{width:100%;background:#16100a;color:var(--txt);border:1px solid var(--line);border-radius:8px;padding:7px 9px;font:inherit}
@@ -6174,6 +6178,7 @@ function esc(s){return String(s==null?'':s).replace(/[&<>]/g,function(c){return 
 function dur(s){s=Math.max(0,s|0);var d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60);if(d>0)return d+'d '+h+'u';if(h>0)return h+'u '+m+'m';if(m>0)return m+'m';return s+'s';}
 function pct(a,b){a=parseFloat(a);b=parseFloat(b);if(!b||isNaN(a)||isNaN(b))return 0;return Math.max(0,Math.min(100,Math.round(a/b*100)));}
 function card(title,inner){return '<div class="card"><h2>'+title+'</h2>'+inner+'</div>';}
+function tip(t){return ' <span class="info" data-tip="'+String(t).replace(/"/g,'&quot;')+'" onclick="event.preventDefault()">i</span>';}
 function render(d){
   document.getElementById('status').className='pill '+(d.bot.status==='online'?'on':'off');
   document.getElementById('status').textContent=d.bot.status;
@@ -6188,14 +6193,14 @@ function render(d){
     var note=!p.actief?'<span class="muted">geen key</span>':(p.cooldown>0?'<span class="muted">cooldown '+dur(p.cooldown)+'</span>':'<span style="color:var(--green)">vrij</span>');
     return '<div class="prov"><span><span class="dot '+cls+'"></span>'+esc(p.naam)+'<span class="tier">'+p.tier+'</span></span>'+note+'</div>';
   }).join('');
-  html+=card('LLM-providers',pr);
+  html+=card('LLM-providers'+tip('De keten van taalmodellen, van slim naar simpel. Bij een fout/limiet valt de bot door naar het volgende. Groen = vrij, goud = even in cooldown (limiet), grijs = geen key. Tier: zwaar = slim+schaars, middel = degelijk, licht = snel+dom.'),pr);
   // Gemini keys
   var gk=d.llm.geminiKeys.map(function(k){return '<div class="prov"><span><span class="dot '+(k.vrij?'ok':'cool')+'"></span>Gemini-key #'+k.nr+'</span>'+(k.vrij?'<span style="color:var(--green)">vrij</span>':'<span class="muted">vrij over '+dur(k.resetOver)+'</span>')+'</div>';}).join('')||'<span class="muted">geen keys</span>';
   var g=d.llm.groq;
   var gq='';
   if(g){gq='<div style="margin-top:10px"><div class="muted">Groq 70B — requests '+g.reqRemaining+'/'+g.reqLimit+' (reset '+g.reqReset+')</div><div class="bar"><i style="width:'+pct(g.reqRemaining,g.reqLimit)+'%"></i></div>'
     +'<div class="muted" style="margin-top:6px">tokens '+g.tokRemaining+'/'+g.tokLimit+' p/min (reset '+g.tokReset+')</div><div class="bar"><i style="width:'+pct(g.tokRemaining,g.tokLimit)+'%"></i></div></div>';}
-  html+=card('Gemini-keys & Groq-quota',gk+gq);
+  html+=card('Gemini-keys & Groq-quota'+tip('Gemini draait op meerdere keys die roteren; bij een limiet (429) gaat een key kort in cooldown. Groq toont de live rate-limit: hoeveel requests per dag en tokens per minuut er nog over zijn voordat het vol is.'),gk+gq);
   // Ranglijst
   var rl=d.stats.ranglijst.slice(0,12).map(function(r,i){return '<tr><td>'+(i+1)+'. '+esc(r.naam)+'</td><td class="num">'+r.score+'</td></tr>';}).join('')||'<tr><td class="muted">nog geen scores</td></tr>';
   html+=card('Ranglijst',' <table><tr><th>Volgeling</th><th class="num">Punten</th></tr>'+rl+'</table>');
@@ -6221,16 +6226,25 @@ var ingesteld=false;
 function renderInstellingen(d){
   var s=d.instellingen;
   var moods=['<option value="">— automatisch —</option>'].concat(d.stemmingOpties.map(function(m){return '<option value="'+m+'"'+(s.stemmingOverride===m?' selected':'')+'>'+m+'</option>';})).join('');
-  function chk(id,v,l){return '<label class="tog"><input type="checkbox" id="'+id+'"'+(v?' checked':'')+'> '+l+'</label>';}
-  function num(id,v,l){return '<label class="numl">'+l+' <input type="number" min="0" max="100" id="'+id+'" value="'+Math.round(v*100)+'">%</label>';}
+  function chk(id,v,l,t){return '<label class="tog"><input type="checkbox" id="'+id+'"'+(v?' checked':'')+'> '+l+(t?tip(t):'')+'</label>';}
+  function num(id,v,l,t){return '<label class="numl">'+l+(t?tip(t):'')+' <input type="number" min="0" max="100" id="'+id+'" value="'+Math.round(v*100)+'">%</label>';}
   var provs=d.providerOpties.map(function(p){return '<label class="tog"><input type="checkbox" data-prov="'+p+'"'+(s.providerUit.indexOf(p)>=0?' checked':'')+'> '+p+'</label>';}).join('');
   var html='<div class="card"><h2>⚙️ Instellingen <span id="i_status" class="muted" style="font-weight:400;text-transform:none;margin-left:8px"></span></h2><div class="setgrid">'
-    +'<div><div class="lbl">Dagstemming</div><select id="i_stemming">'+moods+'</select></div>'
-    +'<div><div class="lbl">Modi</div>'+chk('i_stil',s.stilModus,'Stil-modus (mute)')+chk('i_weekend',s.weekendRust,'Weekend-rust')+chk('i_test',s.alleenTestkanaal,'Alleen testkanaal')+chk('i_spaar',s.spaarstand,'Spaarstand (licht)')+'</div>'
-    +'<div><div class="lbl">Providers uit</div>'+provs+'</div>'
-    +'<div><div class="lbl">Kansen</div>'+num('i_kortaf',s.kortafKans,'Kortaf-grap')+num('i_warrig',s.warrigKans,'Warrig')+num('i_vrijdag',s.vrijdagAppendKans,'Vrijdag-append')+'</div>'
+    +'<div><div class="lbl">Dagstemming'+tip('De dagelijkse bui die alle reacties kleurt. Automatisch kiest elke dag een vaste stemming op basis van de datum; of kies er zelf een. Werkt direct na opslaan.')+'</div><select id="i_stemming">'+moods+'</select></div>'
+    +'<div><div class="lbl">Modi</div>'
+      +chk('i_stil',s.stilModus,'Stil-modus (mute)','De Kroket God reageert nergens meer op, behalve in het testkanaal. Handig bij onderhoud.')
+      +chk('i_weekend',s.weekendRust,'Weekend-rust','Aan = rust in het weekend (geen reacties). Uit = reageert ook in het weekend.')
+      +chk('i_test',s.alleenTestkanaal,'Alleen testkanaal','Reageert uitsluitend in het testkanaal (bruin-schaap), om te testen zonder het hoofdkanaal te storen.')
+      +chk('i_spaar',s.spaarstand,'Spaarstand (licht)','Forceert het lichte, goedkope model en slaat Gemini en Cerebras over. Bespaart schaarse quota, iets lagere kwaliteit.')
     +'</div>'
-    +'<div class="lbl" style="margin-top:12px">Decreet van de dag (extra instructie in de system prompt)</div>'
+    +'<div><div class="lbl">Providers uit'+tip('Vink een LLM-provider aan om hem tijdelijk uit de antwoord-keten te halen, bv. bij een storing. Er blijft altijd minstens een werkend model over.')+'</div>'+provs+'</div>'
+    +'<div><div class="lbl">Kansen</div>'
+      +num('i_kortaf',s.kortafKans,'Kortaf-grap','Kans dat de Kroket God op een mention van een enkel woord (bv. kroket) heel droog antwoordt met OK of een emoji, i.p.v. een tirade.')
+      +num('i_warrig',s.warrigKans,'Warrig','Kans dat een reactie het warrige formaat krijgt: de Kroket God dwaalt af alsof hij te lang in de frituurwalm stond.')
+      +num('i_vrijdag',s.vrijdagAppendKans,'Vrijdag-append','Kans dat er een aftelling tot het heilige vrijdagmoment (12:00) aan een reactie wordt geplakt.')
+    +'</div>'
+    +'</div>'
+    +'<div class="lbl" style="margin-top:12px">Decreet van de dag'+tip('Vrije tekst die als extra instructie in de system prompt wordt geinjecteerd. Geef de Kroket God een tijdelijk thema, bv. spreek vandaag uitsluitend in haiku. Werkt direct na opslaan.')+'</div>'
     +'<textarea id="i_decreet" rows="2" placeholder="bv. Vandaag spreekt de Kroket God uitsluitend in haiku.">'+esc(s.decreetVanDeDag)+'</textarea>'
     +'<div style="margin-top:12px"><button class="btn gold" data-save>💾 Opslaan</button>'
     +'<button class="btn" data-actie="kroketVanDeDag">🥖 Kroket vd dag</button>'
