@@ -89,6 +89,28 @@ const app = new App({
       },
     },
     {
+      // Bericht namens de Kroket God: vertaal naar tone of voice (vertaal:true) of plaats (false).
+      path: '/api/verkondig',
+      method: ['POST'],
+      handler: async (req, res) => {
+        try {
+          const { tekst, kanaal, vertaal } = await leesBody(req);
+          if (vertaal) {
+            const verkondiging = await vertaalNaarKroketGod(tekst);
+            res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+            res.end(JSON.stringify({ ok: true, verkondiging }));
+          } else {
+            const bericht = await plaatsVerkondiging(tekst, kanaal);
+            res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+            res.end(JSON.stringify({ ok: true, bericht }));
+          }
+        } catch (err) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, error: err.message }));
+        }
+      },
+    },
+    {
       // Centrale Kroket God-afbeelding voor het dashboard (leg kroketgod.png in de projectmap).
       path: '/kroketgod.png',
       method: ['GET'],
@@ -6102,6 +6124,27 @@ async function bouwDashboardData() {
 }
 
 // Voert een actieknop van het dashboard uit.
+// Herschrijft een gewone boodschap in de tone of voice van de Kroket God (1 LLM-call, geen post).
+async function vertaalNaarKroketGod(tekst) {
+  const schoon = (tekst || '').trim();
+  if (!schoon) throw new Error('Lege boodschap');
+  const prompt = `Een boodschap moet worden verkondigd aan het genootschap. Herschrijf de volgende tekst ` +
+    `volledig in jouw eigen stijl en tone of voice — behoud de kern en betekenis, maar maak er een ` +
+    `dramatische, gezaghebbende Kroket God-verkondiging van. Tekst: "${schoon}". Geen inleidingszin.`;
+  return schoonOutput(await kroketResponse(prompt, 450, false));
+}
+
+// Plaatst een (al herschreven) tekst namens de Kroket God in het gekozen kanaal.
+async function plaatsVerkondiging(tekst, kanaalKeuze) {
+  const schoon = (tekst || '').trim();
+  if (!schoon) throw new Error('Lege boodschap');
+  const kanaal = kanaalKeuze === 'test'
+    ? ([...TEST_KANAAL_IDS][0] || process.env.SLACK_CHANNEL_ID)
+    : process.env.SLACK_CHANNEL_ID;
+  await postToChannel(app.client, kanaal, schoon);
+  return kanaalKeuze === 'test' ? 'Verkondigd in het testkanaal.' : 'Verkondigd in het hoofdkanaal.';
+}
+
 async function voerDashboardActie(actie) {
   switch (actie) {
     case 'resetCooldowns':
@@ -6283,10 +6326,17 @@ function renderInstellingen(d){
     +'<button class="btn" data-actie="quizStarten">🧠 Quiz</button>'
     +'<button class="btn" data-actie="quizOnthul">📖 Onthul</button>'
     +'<button class="btn" data-actie="resetCooldowns">♻️ Reset cooldowns</button>'
-    +'<button class="btn" data-actie="ververseQuota">📊 Ververs quota</button></div></div>';
+    +'<button class="btn" data-actie="ververseQuota">📊 Ververs quota</button></div>'
+    +'<div class="lbl" style="margin-top:16px;border-top:1px solid var(--line);padding-top:13px">📜 Verkondig namens de Kroket God'+tip('Typ je boodschap in gewone taal. Vertaal herschrijft hem in de tone of voice van de Kroket God (kost 1 LLM-call); je kunt het resultaat nog bijschaven. Verkondig plaatst het in het gekozen kanaal (geen extra call).')+'</div>'
+    +'<textarea id="i_v_in" rows="2" placeholder="bv. vergeet niet dat het vrijdag kroketdag is"></textarea>'
+    +'<div style="display:flex;gap:8px;align-items:center;margin-top:6px;flex-wrap:wrap"><select id="i_v_kanaal" style="width:auto"><option value="hoofd">Hoofdkanaal</option><option value="test">Testkanaal</option></select>'
+    +'<button class="btn" data-verkondig="vertaal">✨ Vertaal</button>'
+    +'<button class="btn gold" data-verkondig="post">📜 Verkondig</button></div>'
+    +'<textarea id="i_v_out" rows="3" placeholder="(hier verschijnt de Kroket God-versie — je kunt nog bijschaven voor je verkondigt)" style="margin-top:6px"></textarea>'
+    +'</div>';
   var host=document.getElementById('instellingen');
   host.innerHTML=html;
-  host.onclick=function(e){var b=e.target.closest('button');if(!b)return;if(b.hasAttribute('data-save'))bewaar();else if(b.getAttribute('data-actie'))doeActie(b.getAttribute('data-actie'));};
+  host.onclick=function(e){var b=e.target.closest('button');if(!b)return;if(b.hasAttribute('data-save'))bewaar();else if(b.getAttribute('data-verkondig'))verkondig(b.getAttribute('data-verkondig'));else if(b.getAttribute('data-actie'))doeActie(b.getAttribute('data-actie'));};
   host.oninput=function(e){if(e.target.id==='i_decreetInt'){var p=document.getElementById('i_decreetIntPct');if(p)p.textContent=e.target.value+'%';}};
 }
 function bewaar(){
@@ -6294,6 +6344,19 @@ function bewaar(){
   post('/api/instellingen',{stemmingOverride:document.getElementById('i_stemming').value,stilModus:document.getElementById('i_stil').checked,weekendRust:document.getElementById('i_weekend').checked,alleenTestkanaal:document.getElementById('i_test').checked,spaarstand:document.getElementById('i_spaar').checked,providerUit:uit,kortafKans:(+document.getElementById('i_kortaf').value||0)/100,warrigKans:(+document.getElementById('i_warrig').value||0)/100,vrijdagAppendKans:(+document.getElementById('i_vrijdag').value||0)/100,decreetVanDeDag:document.getElementById('i_decreet').value,decreetIntensiteit:(+document.getElementById('i_decreetInt').value||0)/100},'Opgeslagen');
 }
 function doeActie(a){post('/api/actie',{actie:a},'Uitgevoerd');}
+function verkondig(modus){
+  var st=document.getElementById('i_status');
+  if(modus==='vertaal'){
+    var inp=document.getElementById('i_v_in').value.trim();
+    if(!inp){if(st)st.textContent='Typ eerst een boodschap.';return;}
+    if(st)st.textContent='Vertalen…';
+    fetch('/api/verkondig',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tekst:inp,vertaal:true})}).then(function(r){return r.json();}).then(function(j){if(j.ok){document.getElementById('i_v_out').value=j.verkondiging;if(st)st.textContent='Vertaald ✓ — controleer en klik Verkondig';}else if(st)st.textContent='Fout: '+(j.error||'');}).catch(function(){if(st)st.textContent='Fout';});
+  }else{
+    var out=document.getElementById('i_v_out').value.trim();
+    if(!out){if(st)st.textContent='Klik eerst Vertaal (of typ zelf de Kroket God-tekst in het onderste veld).';return;}
+    post('/api/verkondig',{tekst:out,kanaal:document.getElementById('i_v_kanaal').value,vertaal:false},'Verkondigd');
+  }
+}
 function post(url,body,okmsg){var st=document.getElementById('i_status');if(st)st.textContent='…';fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(function(r){return r.json();}).then(function(j){if(st)st.textContent=(j.ok?((j.bericht||okmsg)+' ✓'):('Fout: '+(j.error||'')));}).catch(function(){if(st)st.textContent='Fout';});}
 function tick(){fetch('/api/stats').then(function(r){return r.json();}).then(function(d){render(d);if(!ingesteld){renderInstellingen(d);ingesteld=true;}}).catch(function(){document.getElementById('status').textContent='offline';document.getElementById('status').className='pill off';});}
 tick();setInterval(tick,15000);
