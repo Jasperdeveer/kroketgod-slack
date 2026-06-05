@@ -32,14 +32,40 @@ const app = new App({
   convoStore: false,
   // Health endpoint op poort 3001 zodat uptime-monitoring de bot kan pingen
   port: 3001,
-  customRoutes: [{
-    path: '/health',
-    method: ['GET'],
-    handler: (req, res) => {
-      res.writeHead(isReady ? 200 : 503, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ status: isReady ? 'ok' : 'starting', ts: Date.now() }));
+  customRoutes: [
+    {
+      path: '/health',
+      method: ['GET'],
+      handler: (req, res) => {
+        res.writeHead(isReady ? 200 : 503, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: isReady ? 'ok' : 'starting', ts: Date.now() }));
+      },
     },
-  }],
+    {
+      // JSON met alle dashboard-data (LLM-status, ranglijst, bans, activiteit, ...).
+      path: '/api/stats',
+      method: ['GET'],
+      handler: async (req, res) => {
+        try {
+          const data = await bouwDashboardData();
+          res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+          res.end(JSON.stringify(data));
+        } catch (err) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: err.message }));
+        }
+      },
+    },
+    {
+      // HTML-dashboard (haalt /api/stats op en ververst zichzelf).
+      path: '/dashboard',
+      method: ['GET'],
+      handler: (req, res) => {
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        res.end(DASHBOARD_HTML);
+      },
+    },
+  ],
 });
 
 // Globale Bolt error handler — vangt errors op die door handlers bubblelen
@@ -5819,6 +5845,7 @@ planCron('15 3 * * *', maakBackup, { timezone: 'Europe/Amsterdam' });
 // Logt elke 15 min hoe vol de providers zitten, zodat je in de pm2-logs ziet wanneer limieten
 // vollopen/resetten i.p.v. te gokken. Groq via een minimale probe (eigen dag-quota is enorm, dit
 // is verwaarloosbaar); Gemini via de cooldown-state (verbruikt zelf geen quota).
+let laatsteGroqQuota = null; // laatste Groq rate-limit-snapshot (voor het dashboard)
 async function logQuotaStatus() {
   try {
     if (process.env.GROQ_API_KEY) {
@@ -5829,6 +5856,11 @@ async function logQuotaStatus() {
         timeout: 10000,
       });
       const h = r.headers;
+      laatsteGroqQuota = {
+        ts: Date.now(),
+        reqRemaining: h.get('x-ratelimit-remaining-requests'), reqLimit: h.get('x-ratelimit-limit-requests'), reqReset: h.get('x-ratelimit-reset-requests'),
+        tokRemaining: h.get('x-ratelimit-remaining-tokens'), tokLimit: h.get('x-ratelimit-limit-tokens'), tokReset: h.get('x-ratelimit-reset-tokens'),
+      };
       console.log(`📊 Groq 70b — requests ${h.get('x-ratelimit-remaining-requests')}/${h.get('x-ratelimit-limit-requests')} (reset ${h.get('x-ratelimit-reset-requests')}), tokens ${h.get('x-ratelimit-remaining-tokens')}/${h.get('x-ratelimit-limit-tokens')} per min (reset ${h.get('x-ratelimit-reset-tokens')})`);
     }
   } catch (e) { console.warn('📊 Groq quota-check faalde:', e.message); }
@@ -5846,6 +5878,163 @@ async function logQuotaStatus() {
 planCron('*/15 * * * *', logQuotaStatus, { timezone: 'Europe/Amsterdam' });
 // Eén keer kort na opstart, zodat je meteen een meting hebt (en bij elke herstart).
 setTimeout(() => logQuotaStatus().catch(() => {}), 15000);
+
+// ── Dashboard (poort 3001) ───────────────────────────────────────────────────
+// Verzamelt alle dashboard-data: bot-status, LLM/provider-status, ranglijst, bans, activiteit.
+async function bouwDashboardData() {
+  // Verse Groq-meting als de snapshot ouder is dan 5 min (anders cache gebruiken).
+  if (!laatsteGroqQuota || Date.now() - laatsteGroqQuota.ts > 5 * 60_000) {
+    try { await logQuotaStatus(); } catch (_) {}
+  }
+  const nu = Date.now();
+  const members = loadMembers();
+  const scores = loadScores();
+  const verbanning = loadVerbanning();
+  const vergrijpen = loadVergrijpen();
+  const kennis = loadKennisbank();
+  const achievements = loadAchievements();
+  const kvdd = loadKroketVanDeDag();
+  const week = loadWeekgebeurtenissen();
+  const naam = (id) => members[id]?.bijnaam || id;
+
+  const ranglijst = Object.entries(scores)
+    .map(([id, score]) => ({ naam: naam(id), score })).sort((a, b) => b.score - a.score);
+  const bans = Object.entries(verbanning)
+    .filter(([, v]) => new Date(v.tot).getTime() > nu)
+    .map(([id, v]) => ({ naam: naam(id), tot: v.tot, reden: v.reden || '' }))
+    .sort((a, b) => new Date(a.tot) - new Date(b.tot));
+  const actieveVergrijpen = Object.entries(vergrijpen)
+    .map(([id, lijst]) => ({ naam: naam(id), aantal: (lijst || []).filter(x => nu - x.ts < VERGRIJP_VENSTER_MS).length }))
+    .filter(x => x.aantal > 0).sort((a, b) => b.aantal - a.aantal);
+
+  const provCooldown = (p) => { const t = providerCooldownTot.get(p) || 0; return t > nu ? Math.round((t - nu) / 1000) : 0; };
+  const keys = geminiKeys();
+  const geminiKeysStatus = keys.map((k, i) => {
+    const t = geminiKeyCooldownTot.get(k) || 0;
+    return { nr: i + 1, vrij: t <= nu, resetOver: t > nu ? Math.round((t - nu) / 1000) : 0 };
+  });
+  const providers = [
+    { naam: 'Gemini 2.5-flash', tier: 'zwaar', actief: keys.length > 0, cooldown: provCooldown('gemini') },
+    { naam: 'Cerebras gpt-oss-120b', tier: 'zwaar', actief: !!process.env.CEREBRAS_API_KEY, cooldown: provCooldown('cerebras') },
+    { naam: 'SambaNova 70B', tier: 'middel', actief: !!process.env.SAMBANOVA_API_KEY, cooldown: provCooldown('sambanova') },
+    { naam: 'Groq 70B', tier: 'middel', actief: !!process.env.GROQ_API_KEY, cooldown: provCooldown('groq') },
+    { naam: 'Cloudflare 70B', tier: 'middel', actief: !!(process.env.CLOUDFLARE_ACCOUNT_ID && process.env.CLOUDFLARE_API_TOKEN), cooldown: provCooldown('cloudflare') },
+    { naam: 'OpenRouter', tier: 'middel', actief: !!process.env.OPENROUTER_API_KEY, cooldown: provCooldown('openrouter') },
+    { naam: 'Groq 8B-instant', tier: 'licht', actief: !!process.env.GROQ_API_KEY, cooldown: provCooldown('groq') },
+  ];
+
+  const stemming = getDagelijkseStemming();
+  return {
+    nu,
+    bot: {
+      status: isReady ? 'online' : 'opstarten',
+      uptimeSec: Math.round(process.uptime()),
+      memMb: Math.round(process.memoryUsage().rss / 1048576),
+      stemming: stemming?.naam || '—',
+      vrijdagSec: secondenTotVrijdagMiddag(),
+      weekend: isNaHeiligMoment(),
+    },
+    llm: { geminiKeys: geminiKeysStatus, providers, groq: laatsteGroqQuota },
+    stats: {
+      leden: Object.keys(members).length,
+      ranglijst,
+      bans,
+      vergrijpen: actieveVergrijpen,
+      kennisbank: Array.isArray(kennis) ? kennis.length : 0,
+      achievements: Object.values(achievements).reduce((n, a) => n + (Array.isArray(a) ? a.length : 0), 0),
+      kroketVanDeDag: kvdd?.naam ? { naam: kvdd.naam, datum: kvdd.datum } : null,
+    },
+    activiteit: (week.events || []).slice(-30).reverse()
+      .map(e => ({ ts: e.ts, type: e.type, naam: e.userId ? naam(e.userId) : null, beschrijving: e.beschrijving })),
+  };
+}
+
+const DASHBOARD_HTML = `<!doctype html><html lang="nl"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kroket God — Dashboard</title>
+<style>
+  :root{--bg:#1a1410;--card:#241c15;--gold:#e0a84e;--gold2:#c98a2e;--txt:#f2e6d2;--dim:#a08c72;--green:#6fbf73;--red:#d76a5a;--line:#3a2e22}
+  *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--txt);font:15px/1.5 -apple-system,Segoe UI,Roboto,sans-serif}
+  header{padding:18px 22px;border-bottom:2px solid var(--gold2);display:flex;flex-wrap:wrap;align-items:center;gap:14px}
+  header h1{margin:0;font-size:20px;color:var(--gold)}header h1 span{opacity:.6}
+  .pill{padding:3px 10px;border-radius:99px;font-size:12px;font-weight:600;background:#2c2218;border:1px solid var(--line)}
+  .pill.on{color:var(--green);border-color:var(--green)}.pill.off{color:var(--red);border-color:var(--red)}
+  main{padding:18px;display:grid;grid-template-columns:repeat(auto-fit,minmax(310px,1fr));gap:16px;max-width:1300px;margin:0 auto}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+  .card h2{margin:0 0 10px;font-size:14px;text-transform:uppercase;letter-spacing:.5px;color:var(--gold)}
+  table{width:100%;border-collapse:collapse}td,th{text-align:left;padding:4px 6px;border-bottom:1px solid var(--line);font-size:14px}
+  th{color:var(--dim);font-weight:600;font-size:12px}tr:last-child td{border-bottom:0}
+  .num{text-align:right;font-variant-numeric:tabular-nums}
+  .prov{display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--line)}.prov:last-child{border:0}
+  .dot{display:inline-block;width:9px;height:9px;border-radius:99px;margin-right:7px;vertical-align:middle}
+  .dot.ok{background:var(--green)}.dot.cool{background:var(--gold)}.dot.off{background:#555}
+  .tier{font-size:11px;color:var(--dim);margin-left:6px}
+  .bar{height:7px;background:#2c2218;border-radius:99px;overflow:hidden;margin-top:3px}.bar i{display:block;height:100%;background:var(--gold)}
+  .feed{max-height:340px;overflow:auto}.feed .row{padding:5px 0;border-bottom:1px solid var(--line);font-size:13px}.feed .row:last-child{border:0}
+  .feed .t{color:var(--dim);font-size:11px}.muted{color:var(--dim)}.big{font-size:26px;color:var(--gold);font-weight:700}
+  footer{text-align:center;color:var(--dim);font-size:12px;padding:14px}
+</style></head><body>
+<header>
+  <h1>⚜️ Kroket God <span>Dashboard</span></h1>
+  <span class="pill" id="status">…</span>
+  <span class="pill" id="uptime"></span>
+  <span class="pill" id="mood"></span>
+  <span class="pill" id="vrijdag"></span>
+  <span class="muted" id="updated" style="margin-left:auto"></span>
+</header>
+<main id="app"><div class="card">Laden…</div></main>
+<footer>Ververst automatisch · <a href="/api/stats" style="color:var(--gold2)">/api/stats</a></footer>
+<script>
+function esc(s){return String(s==null?'':s).replace(/[&<>]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c];});}
+function dur(s){s=Math.max(0,s|0);var d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60);if(d>0)return d+'d '+h+'u';if(h>0)return h+'u '+m+'m';if(m>0)return m+'m';return s+'s';}
+function pct(a,b){a=parseFloat(a);b=parseFloat(b);if(!b||isNaN(a)||isNaN(b))return 0;return Math.max(0,Math.min(100,Math.round(a/b*100)));}
+function card(title,inner){return '<div class="card"><h2>'+title+'</h2>'+inner+'</div>';}
+function render(d){
+  document.getElementById('status').className='pill '+(d.bot.status==='online'?'on':'off');
+  document.getElementById('status').textContent=d.bot.status;
+  document.getElementById('uptime').textContent='uptime '+dur(d.bot.uptimeSec)+' · '+d.bot.memMb+'MB';
+  document.getElementById('mood').textContent='stemming: '+d.bot.stemming;
+  document.getElementById('vrijdag').textContent=d.bot.weekend?'weekend — heilig moment geweest':'vrijdag 12:00 over '+dur(d.bot.vrijdagSec);
+  document.getElementById('updated').textContent='bijgewerkt '+new Date(d.nu).toLocaleTimeString('nl-NL');
+  var html='';
+  // LLM providers
+  var pr=d.llm.providers.map(function(p){
+    var cls=!p.actief?'off':(p.cooldown>0?'cool':'ok');
+    var note=!p.actief?'<span class="muted">geen key</span>':(p.cooldown>0?'<span class="muted">cooldown '+dur(p.cooldown)+'</span>':'<span style="color:var(--green)">vrij</span>');
+    return '<div class="prov"><span><span class="dot '+cls+'"></span>'+esc(p.naam)+'<span class="tier">'+p.tier+'</span></span>'+note+'</div>';
+  }).join('');
+  html+=card('LLM-providers',pr);
+  // Gemini keys
+  var gk=d.llm.geminiKeys.map(function(k){return '<div class="prov"><span><span class="dot '+(k.vrij?'ok':'cool')+'"></span>Gemini-key #'+k.nr+'</span>'+(k.vrij?'<span style="color:var(--green)">vrij</span>':'<span class="muted">vrij over '+dur(k.resetOver)+'</span>')+'</div>';}).join('')||'<span class="muted">geen keys</span>';
+  var g=d.llm.groq;
+  var gq='';
+  if(g){gq='<div style="margin-top:10px"><div class="muted">Groq 70B — requests '+g.reqRemaining+'/'+g.reqLimit+' (reset '+g.reqReset+')</div><div class="bar"><i style="width:'+pct(g.reqRemaining,g.reqLimit)+'%"></i></div>'
+    +'<div class="muted" style="margin-top:6px">tokens '+g.tokRemaining+'/'+g.tokLimit+' p/min (reset '+g.tokReset+')</div><div class="bar"><i style="width:'+pct(g.tokRemaining,g.tokLimit)+'%"></i></div></div>';}
+  html+=card('Gemini-keys & Groq-quota',gk+gq);
+  // Ranglijst
+  var rl=d.stats.ranglijst.slice(0,12).map(function(r,i){return '<tr><td>'+(i+1)+'. '+esc(r.naam)+'</td><td class="num">'+r.score+'</td></tr>';}).join('')||'<tr><td class="muted">nog geen scores</td></tr>';
+  html+=card('Ranglijst',' <table><tr><th>Volgeling</th><th class="num">Punten</th></tr>'+rl+'</table>');
+  // Bans + vergrijpen
+  var bn=d.stats.bans.map(function(b){return '<tr><td>'+esc(b.naam)+'</td><td class="muted">tot '+new Date(b.tot).toLocaleString('nl-NL',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})+'</td></tr>';}).join('')||'<tr><td class="muted">geen actieve verbanningen</td></tr>';
+  var vg=d.stats.vergrijpen.map(function(v){return '<tr><td>'+esc(v.naam)+'</td><td class="num">'+v.aantal+'</td></tr>';}).join('');
+  html+=card('Verbanningen & vergrijpen','<table><tr><th>Verbannen</th><th></th></tr>'+bn+'</table>'+(vg?'<table style="margin-top:8px"><tr><th>Vergrijpen (7d)</th><th class="num">#</th></tr>'+vg+'</table>':''));
+  // Cijfers
+  var k=d.stats;
+  var cijfers='<table>'
+    +'<tr><td>Leden</td><td class="num">'+k.leden+'</td></tr>'
+    +'<tr><td>Kennisbank-entries</td><td class="num">'+k.kennisbank+'</td></tr>'
+    +'<tr><td>Achievements behaald</td><td class="num">'+k.achievements+'</td></tr>'
+    +'<tr><td>Actieve verbanningen</td><td class="num">'+k.bans.length+'</td></tr>'
+    +'</table>'+(k.kroketVanDeDag?'<div style="margin-top:8px" class="muted">Kroket v/d dag: <b style="color:var(--txt)">'+esc(k.kroketVanDeDag.naam)+'</b></div>':'');
+  html+=card('Cijfers',cijfers);
+  // Activiteit
+  var fd=d.activiteit.map(function(e){return '<div class="row"><span class="t">'+new Date(e.ts).toLocaleString('nl-NL',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})+'</span> · <b>'+esc(e.type)+'</b> '+(e.naam?esc(e.naam)+' — ':'')+'<span class="muted">'+esc(e.beschrijving||'')+'</span></div>';}).join('')||'<span class="muted">geen activiteit deze week</span>';
+  html+=card('Activiteit (deze week)','<div class="feed">'+fd+'</div>');
+  document.getElementById('app').innerHTML=html;
+}
+function tick(){fetch('/api/stats').then(function(r){return r.json();}).then(render).catch(function(){document.getElementById('status').textContent='offline';document.getElementById('status').className='pill off';});}
+tick();setInterval(tick,15000);
+</script></body></html>`;
 
 // ── Crashdetectie ──────────────────────────────────────────────────────────────
 // Vangt onverwachte uitzonderingen op en herstart via PM2.
