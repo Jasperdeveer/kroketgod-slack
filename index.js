@@ -57,6 +57,38 @@ const app = new App({
       },
     },
     {
+      // Instellingen aanpassen vanuit het dashboard.
+      path: '/api/instellingen',
+      method: ['POST'],
+      handler: async (req, res) => {
+        try {
+          const patch = await leesBody(req);
+          const nieuw = saveInstellingen(patch);
+          res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+          res.end(JSON.stringify({ ok: true, instellingen: nieuw }));
+        } catch (err) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, error: err.message }));
+        }
+      },
+    },
+    {
+      // Actieknoppen (kroket nu, quiz, cooldowns resetten, quota verversen).
+      path: '/api/actie',
+      method: ['POST'],
+      handler: async (req, res) => {
+        try {
+          const { actie } = await leesBody(req);
+          const bericht = await voerDashboardActie(actie);
+          res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+          res.end(JSON.stringify({ ok: true, bericht }));
+        } catch (err) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, error: err.message }));
+        }
+      },
+    },
+    {
       // HTML-dashboard (haalt /api/stats op en ververst zichzelf).
       path: '/dashboard',
       method: ['GET'],
@@ -275,6 +307,50 @@ function writeJSON(filename, data) {
     const stat = fs.statSync(filePath);
     fileCache.set(filename, { mtimeMs: stat.mtimeMs, data });
   } catch (_) {}
+}
+
+// ── Instellingen (runtime, aanpasbaar via dashboard) ──────────────────────────
+// Worden uit instellingen.json gelezen (met fallback op deze defaults) en door de relevante
+// code-paden uitgelezen. NB: NIET op module-load aanroepen (readJSON heeft fileCache nodig).
+const STANDAARD_INSTELLINGEN = {
+  stemmingOverride: '',        // '' = automatisch (datum-seed); anders een mood-naam
+  stilModus: false,            // bot reageert nergens op (behalve testkanaal)
+  weekendRust: true,           // niet reageren in het weekend
+  alleenTestkanaal: false,     // alleen in bruin-schaap reageren
+  spaarstand: false,           // forceer lichte modellen (spaar Gemini/Cerebras)
+  providerUit: [],             // model-namen die tijdelijk uit de keten zijn
+  kortafKans: 0.35,            // kans op kortaf antwoord bij 1-woord-mention
+  warrigKans: 0.10,            // kans op warrig formaat
+  vrijdagAppendKans: 0.02,     // kans op vrijdag-countdown-append
+  decreetVanDeDag: '',         // vrije tekst die in de system prompt wordt geïnjecteerd
+};
+const loadInstellingen = () => ({ ...STANDAARD_INSTELLINGEN, ...readJSON('instellingen.json', {}) });
+function instelling(key) { return loadInstellingen()[key]; }
+
+// Slaat een (deel-)update van instellingen op, met validatie/typecoercie per sleutel.
+function saveInstellingen(patch) {
+  const nieuw = { ...loadInstellingen() };
+  for (const [k, v] of Object.entries(patch || {})) {
+    if (!(k in STANDAARD_INSTELLINGEN)) continue; // onbekende sleutel negeren
+    const def = STANDAARD_INSTELLINGEN[k];
+    if (typeof def === 'boolean') nieuw[k] = !!v;
+    else if (typeof def === 'number') { const n = Number(v); if (!isNaN(n)) nieuw[k] = Math.max(0, Math.min(1, n)); } // kansen 0–1
+    else if (Array.isArray(def)) nieuw[k] = Array.isArray(v) ? v.filter(x => typeof x === 'string') : def;
+    else nieuw[k] = String(v).slice(0, 2000); // strings (stemmingOverride, decreetVanDeDag)
+  }
+  writeJSON('instellingen.json', nieuw);
+  _systemPromptCache = { key: null, value: null }; // decreet/stemming kan de system prompt raken
+  return nieuw;
+}
+
+// Leest een JSON-body uit een Node http-request (voor de dashboard-POST-endpoints).
+function leesBody(req) {
+  return new Promise((resolve) => {
+    let data = '';
+    req.on('data', (c) => { data += c; if (data.length > 1e6) req.destroy(); });
+    req.on('end', () => { try { resolve(JSON.parse(data || '{}')); } catch { resolve({}); } });
+    req.on('error', () => resolve({}));
+  });
 }
 
 // ── Dynamisch ledenbeheer ──────────────────────────────────────────────────────
@@ -1539,6 +1615,13 @@ const STEMMINGEN = [
 let _dagelijksStemming = { datum: null, stemming: null };
 
 function getDagelijkseStemming() {
+  // Handmatige override via dashboard heeft voorrang.
+  const override = instelling('stemmingOverride');
+  if (override) {
+    const m = STEMMINGEN.find(s => s.naam === override);
+    if (m) return m;
+  }
+
   const parts = new Intl.DateTimeFormat('en-US', {
     timeZone: 'Europe/Amsterdam', year: 'numeric', month: '2-digit', day: '2-digit',
   }).formatToParts(new Date());
@@ -1617,7 +1700,8 @@ function buildSystemPrompt() {
   const ledenJson = JSON.stringify(members);
   const tijd = getTijdContext();
   const stemming = getDagelijkseStemming();
-  const cacheKey = `${ledenJson}|${tijd.dagdeel}|${tijd.dagNaam}|${tijd.seizoen}|${stemming.naam}`;
+  const decreet = (instelling('decreetVanDeDag') || '').trim();
+  const cacheKey = `${ledenJson}|${tijd.dagdeel}|${tijd.dagNaam}|${tijd.seizoen}|${stemming.naam}|${decreet}`;
 
   if (_systemPromptCache.key === cacheKey) return _systemPromptCache.value;
 
@@ -1651,7 +1735,11 @@ function buildSystemPrompt() {
     `De enige bekende leden zijn: ${bijnamen}.`
   );
 
-  const value = `${prompt}\n\nAanvullende ledeninformatie (gebruik subtiel voor personalisering):\n${ledenExtra}${tijdsContext}`;
+  const decreetBlok = decreet
+    ? `\n\nDECREET VAN DE DAG — volg dit extra, bovenop al het bovenstaande (maar blijf volledig in karakter): ${decreet}`
+    : '';
+
+  const value = `${prompt}\n\nAanvullende ledeninformatie (gebruik subtiel voor personalisering):\n${ledenExtra}${tijdsContext}${decreetBlok}`;
 
   _systemPromptCache = { key: cacheKey, value };
   return value;
@@ -1980,6 +2068,8 @@ const PROVIDER_COOLDOWN_MS = 45_000;
 //                       lichtere modellen voor formulematige taken (zegens, begroetingen, bevestigingen).
 // Elk model heeft een `tier`: 'zwaar' = slim+schaars, 'middel' = degelijk, 'licht' = snel+dom.
 async function _draaiModellen(berichten, maxTokens = 400, niveau = 'slim') {
+  // Spaarstand (dashboard): forceer het lichte niveau zodat Gemini/Cerebras gespaard worden.
+  if (niveau === 'slim' && instelling('spaarstand')) niveau = 'licht';
   // Slimme modellen eerst, allemaal gratis tiers. Volgorde:
   // Gemini 2.5 Flash → Cerebras → SambaNova 70B → Groq 70B → Cloudflare 70B → OpenRouter
   // → Groq 8B-instant (dom laatste redmiddel, eigen quota-bucket).
@@ -2056,6 +2146,17 @@ async function _draaiModellen(berichten, maxTokens = 400, niveau = 'slim') {
     // de lichtere schakels. GROQ_API_KEY is verplicht, dus er blijft altijd minstens Groq over.
     .filter(m => niveau === 'slim' || m.tier !== 'zwaar')
     .filter(m => m.beschikbaar);
+
+  // Provider aan/uit (dashboard): filter handmatig uitgezette modellen, maar NOOIT alles — als de
+  // selectie leeg zou worden, negeer de uit-lijst (er moet altijd een werkend model overblijven).
+  const uit = instelling('providerUit') || [];
+  if (uit.length) {
+    const gefilterd = modellen.filter(m => !uit.includes(m.provider));
+    if (gefilterd.length > 0) {
+      modellen.length = 0;
+      modellen.push(...gefilterd);
+    }
+  }
 
   // Globale deadline: één bericht mag nooit eindeloos alle providers aflopen (anders stapelen
   // trage requests op en wordt de bot onbereikbaar). Na KETEN_DEADLINE_MS stoppen we met nieuwe
@@ -2751,8 +2852,8 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
       return;
     }
 
-    // Weekend: Kroket God rust — testkanaal is uitgezonderd
-    if (isWeekendAms() && !isTestKanaalCmd) {
+    // Weekend: Kroket God rust — testkanaal uitgezonderd, uitschakelbaar via dashboard.
+    if (isWeekendAms() && instelling('weekendRust') && !isTestKanaalCmd) {
       await stuurWeekendRustBericht(client, command.channel_id, command.user_id);
       return;
     }
@@ -4234,8 +4335,11 @@ app.event('app_mention', async ({ event, client }) => {
         !ALLOWED_CHANNELS.includes(event.channel_name) &&
         !isTestKanaal) return;
 
-    // Weekend: Kroket God rust — testkanaal is uitgezonderd zodat testen altijd werkt
-    if (isWeekendAms() && !isTestKanaal) {
+    // Dashboard-instellingen: stil-modus en alleen-testkanaal (testkanaal blijft altijd werken).
+    if (!isTestKanaal && (instelling('stilModus') || instelling('alleenTestkanaal'))) return;
+
+    // Weekend: Kroket God rust — testkanaal uitgezonderd, en uitschakelbaar via dashboard.
+    if (isWeekendAms() && instelling('weekendRust') && !isTestKanaal) {
       await stuurWeekendRustBericht(client, event.channel, event.user);
       return;
     }
@@ -4511,7 +4615,7 @@ app.event('app_mention', async ({ event, client }) => {
         const thread_ts = event.thread_ts || (event.parent_user_id ? event.ts : undefined);
         await stuurMop(client, event.channel);
         return; // stuurMop post zelf, geen verdere verwerking nodig
-      } else if (input.trim().split(/\s+/).length === 1 && Math.random() < 0.35) {
+      } else if (input.trim().split(/\s+/).length === 1 && Math.random() < instelling('kortafKans')) {
         // Kortaf-grap: bij een neutrale mention van één woord (bv. "kroket") reageert de Kroket God
         // soms juist heel droog en kort — alle goddelijke ceremonie, dan gewoon "OK". Geen LLM-call.
         const KORTAF = ['OK', 'Genoteerd.', 'Mwah.', 'Hm.', 'Prima.', 'Aanvaard.', 'Zo zij het.',
@@ -4539,7 +4643,7 @@ app.event('app_mention', async ({ event, client }) => {
     }
 
     // 10% kans: vraag expliciet om warrig formaat
-    if (Math.random() < 0.10) prompt += ' Gebruik het warrige formaat.';
+    if (Math.random() < instelling('warrigKans')) prompt += ' Gebruik het warrige formaat.';
 
     // Injecteer echte ledendata als de vraag ernaar vraagt — voorkomt hallucinatie
     if (input && vraagNaarLedenData(input)) {
@@ -4561,8 +4665,8 @@ app.event('app_mention', async ({ event, client }) => {
     } else {
       tekst = await kroketResponse(prompt);
     }
-    // 2% kans: voeg een wiskundig correcte vrijdag-countdown toe
-    if (Math.random() < 0.02) {
+    // Kans (instelbaar): voeg een wiskundig correcte vrijdag-countdown toe
+    if (Math.random() < instelling('vrijdagAppendKans')) {
       const countdown = await maakVrijdagCountdownZin();
       if (countdown) tekst += `\n\n${countdown}`;
     }
@@ -4622,8 +4726,9 @@ app.event('message', async ({ event, client }) => {
     // Filter alle bot-berichten: bot_id, bot_profile, of bot_message subtype
     if (event.bot_id || event.bot_profile || event.subtype === 'bot_message') return;
 
-    // Weekend: geen geautomatiseerde berichtreacties — testkanaal uitgezonderd
-    if (isWeekendAms() && !isTestKanaalMsg) return;
+    // Weekend: geen geautomatiseerde berichtreacties — testkanaal uitgezonderd, uitschakelbaar.
+    // (Stil-modus/alleen-testkanaal worden in de mention-handler afgevangen; hier alleen loggen.)
+    if (isWeekendAms() && instelling('weekendRust') && !isTestKanaalMsg) return;
     if (event.subtype && !['file_share', 'thread_broadcast'].includes(event.subtype)) return;
     if (!event.user) return;
 
@@ -5914,17 +6019,20 @@ async function bouwDashboardData() {
     return { nr: i + 1, vrij: t <= nu, resetOver: t > nu ? Math.round((t - nu) / 1000) : 0 };
   });
   const providers = [
-    { naam: 'Gemini 2.5-flash', tier: 'zwaar', actief: keys.length > 0, cooldown: provCooldown('gemini') },
-    { naam: 'Cerebras gpt-oss-120b', tier: 'zwaar', actief: !!process.env.CEREBRAS_API_KEY, cooldown: provCooldown('cerebras') },
-    { naam: 'SambaNova 70B', tier: 'middel', actief: !!process.env.SAMBANOVA_API_KEY, cooldown: provCooldown('sambanova') },
-    { naam: 'Groq 70B', tier: 'middel', actief: !!process.env.GROQ_API_KEY, cooldown: provCooldown('groq') },
-    { naam: 'Cloudflare 70B', tier: 'middel', actief: !!(process.env.CLOUDFLARE_ACCOUNT_ID && process.env.CLOUDFLARE_API_TOKEN), cooldown: provCooldown('cloudflare') },
-    { naam: 'OpenRouter', tier: 'middel', actief: !!process.env.OPENROUTER_API_KEY, cooldown: provCooldown('openrouter') },
-    { naam: 'Groq 8B-instant', tier: 'licht', actief: !!process.env.GROQ_API_KEY, cooldown: provCooldown('groq') },
+    { naam: 'Gemini 2.5-flash', provider: 'gemini', tier: 'zwaar', actief: keys.length > 0, cooldown: provCooldown('gemini') },
+    { naam: 'Cerebras gpt-oss-120b', provider: 'cerebras', tier: 'zwaar', actief: !!process.env.CEREBRAS_API_KEY, cooldown: provCooldown('cerebras') },
+    { naam: 'SambaNova 70B', provider: 'sambanova', tier: 'middel', actief: !!process.env.SAMBANOVA_API_KEY, cooldown: provCooldown('sambanova') },
+    { naam: 'Groq 70B', provider: 'groq', tier: 'middel', actief: !!process.env.GROQ_API_KEY, cooldown: provCooldown('groq') },
+    { naam: 'Cloudflare 70B', provider: 'cloudflare', tier: 'middel', actief: !!(process.env.CLOUDFLARE_ACCOUNT_ID && process.env.CLOUDFLARE_API_TOKEN), cooldown: provCooldown('cloudflare') },
+    { naam: 'OpenRouter', provider: 'openrouter', tier: 'middel', actief: !!process.env.OPENROUTER_API_KEY, cooldown: provCooldown('openrouter') },
+    { naam: 'Groq 8B-instant', provider: 'groq', tier: 'licht', actief: !!process.env.GROQ_API_KEY, cooldown: provCooldown('groq') },
   ];
 
   const stemming = getDagelijkseStemming();
   return {
+    instellingen: loadInstellingen(),
+    stemmingOpties: STEMMINGEN.map(s => s.naam),
+    providerOpties: [...new Set(providers.map(p => p.provider))],
     nu,
     bot: {
       status: isReady ? 'online' : 'opstarten',
@@ -5949,6 +6057,29 @@ async function bouwDashboardData() {
   };
 }
 
+// Voert een actieknop van het dashboard uit.
+async function voerDashboardActie(actie) {
+  switch (actie) {
+    case 'resetCooldowns':
+      geminiKeyCooldownTot.clear(); providerCooldownTot.clear();
+      return 'Cooldowns gewist.';
+    case 'ververseQuota':
+      await logQuotaStatus();
+      return 'Quota ververst.';
+    case 'kroketVanDeDag':
+      await voerKroketVanDeDagUit(app.client);
+      return 'Kroket van de dag gepost.';
+    case 'quizStarten':
+      await genereerEnPostQuiz(app.client);
+      return 'Quiz gestart.';
+    case 'quizOnthul':
+      await onthulQuiz(app.client);
+      return 'Quiz onthuld.';
+    default:
+      throw new Error('Onbekende actie');
+  }
+}
+
 const DASHBOARD_HTML = `<!doctype html><html lang="nl"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Kroket God — Dashboard</title>
@@ -5959,7 +6090,16 @@ const DASHBOARD_HTML = `<!doctype html><html lang="nl"><head>
   header h1{margin:0;font-size:20px;color:var(--gold)}header h1 span{opacity:.6}
   .pill{padding:3px 10px;border-radius:99px;font-size:12px;font-weight:600;background:#2c2218;border:1px solid var(--line)}
   .pill.on{color:var(--green);border-color:var(--green)}.pill.off{color:var(--red);border-color:var(--red)}
-  main{padding:18px;display:grid;grid-template-columns:repeat(auto-fit,minmax(310px,1fr));gap:16px;max-width:1300px;margin:0 auto}
+  main{padding:18px;max-width:1300px;margin:0 auto}
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(310px,1fr));gap:16px}
+  #instellingen{margin-bottom:16px}
+  .setgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px}
+  .lbl{font-size:12px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px}
+  .tog{display:block;padding:3px 0;font-size:14px;cursor:pointer}.tog input{vertical-align:middle;margin-right:6px}
+  .numl{display:block;font-size:14px;margin:3px 0}.numl input{width:58px;background:#1a1410;color:var(--txt);border:1px solid var(--line);border-radius:6px;padding:3px 6px;margin:0 4px}
+  select,textarea{width:100%;background:#1a1410;color:var(--txt);border:1px solid var(--line);border-radius:8px;padding:7px 9px;font:inherit}
+  .btn{background:#2c2218;color:var(--txt);border:1px solid var(--line);border-radius:8px;padding:7px 12px;font:inherit;cursor:pointer;margin:3px 2px}
+  .btn:hover{border-color:var(--gold2)}.btn.gold{background:var(--gold2);color:#1a1410;border-color:var(--gold);font-weight:600}
   .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
   .card h2{margin:0 0 10px;font-size:14px;text-transform:uppercase;letter-spacing:.5px;color:var(--gold)}
   table{width:100%;border-collapse:collapse}td,th{text-align:left;padding:4px 6px;border-bottom:1px solid var(--line);font-size:14px}
@@ -5982,7 +6122,7 @@ const DASHBOARD_HTML = `<!doctype html><html lang="nl"><head>
   <span class="pill" id="vrijdag"></span>
   <span class="muted" id="updated" style="margin-left:auto"></span>
 </header>
-<main id="app"><div class="card">Laden…</div></main>
+<main><div id="instellingen"></div><div class="cards" id="stats"><div class="card">Laden…</div></div></main>
 <footer>Ververst automatisch · <a href="/api/stats" style="color:var(--gold2)">/api/stats</a></footer>
 <script>
 function esc(s){return String(s==null?'':s).replace(/[&<>]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c];});}
@@ -6030,9 +6170,40 @@ function render(d){
   // Activiteit
   var fd=d.activiteit.map(function(e){return '<div class="row"><span class="t">'+new Date(e.ts).toLocaleString('nl-NL',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})+'</span> · <b>'+esc(e.type)+'</b> '+(e.naam?esc(e.naam)+' — ':'')+'<span class="muted">'+esc(e.beschrijving||'')+'</span></div>';}).join('')||'<span class="muted">geen activiteit deze week</span>';
   html+=card('Activiteit (deze week)','<div class="feed">'+fd+'</div>');
-  document.getElementById('app').innerHTML=html;
+  document.getElementById('stats').innerHTML=html;
 }
-function tick(){fetch('/api/stats').then(function(r){return r.json();}).then(render).catch(function(){document.getElementById('status').textContent='offline';document.getElementById('status').className='pill off';});}
+var ingesteld=false;
+function renderInstellingen(d){
+  var s=d.instellingen;
+  var moods=['<option value="">— automatisch —</option>'].concat(d.stemmingOpties.map(function(m){return '<option value="'+m+'"'+(s.stemmingOverride===m?' selected':'')+'>'+m+'</option>';})).join('');
+  function chk(id,v,l){return '<label class="tog"><input type="checkbox" id="'+id+'"'+(v?' checked':'')+'> '+l+'</label>';}
+  function num(id,v,l){return '<label class="numl">'+l+' <input type="number" min="0" max="100" id="'+id+'" value="'+Math.round(v*100)+'">%</label>';}
+  var provs=d.providerOpties.map(function(p){return '<label class="tog"><input type="checkbox" data-prov="'+p+'"'+(s.providerUit.indexOf(p)>=0?' checked':'')+'> '+p+'</label>';}).join('');
+  var html='<div class="card"><h2>⚙️ Instellingen <span id="i_status" class="muted" style="font-weight:400;text-transform:none;margin-left:8px"></span></h2><div class="setgrid">'
+    +'<div><div class="lbl">Dagstemming</div><select id="i_stemming">'+moods+'</select></div>'
+    +'<div><div class="lbl">Modi</div>'+chk('i_stil',s.stilModus,'Stil-modus (mute)')+chk('i_weekend',s.weekendRust,'Weekend-rust')+chk('i_test',s.alleenTestkanaal,'Alleen testkanaal')+chk('i_spaar',s.spaarstand,'Spaarstand (licht)')+'</div>'
+    +'<div><div class="lbl">Providers uit</div>'+provs+'</div>'
+    +'<div><div class="lbl">Kansen</div>'+num('i_kortaf',s.kortafKans,'Kortaf-grap')+num('i_warrig',s.warrigKans,'Warrig')+num('i_vrijdag',s.vrijdagAppendKans,'Vrijdag-append')+'</div>'
+    +'</div>'
+    +'<div class="lbl" style="margin-top:12px">Decreet van de dag (extra instructie in de system prompt)</div>'
+    +'<textarea id="i_decreet" rows="2" placeholder="bv. Vandaag spreekt de Kroket God uitsluitend in haiku.">'+esc(s.decreetVanDeDag)+'</textarea>'
+    +'<div style="margin-top:12px"><button class="btn gold" data-save>💾 Opslaan</button>'
+    +'<button class="btn" data-actie="kroketVanDeDag">🥖 Kroket vd dag</button>'
+    +'<button class="btn" data-actie="quizStarten">🧠 Quiz</button>'
+    +'<button class="btn" data-actie="quizOnthul">📖 Onthul</button>'
+    +'<button class="btn" data-actie="resetCooldowns">♻️ Reset cooldowns</button>'
+    +'<button class="btn" data-actie="ververseQuota">📊 Ververs quota</button></div></div>';
+  var host=document.getElementById('instellingen');
+  host.innerHTML=html;
+  host.onclick=function(e){var b=e.target.closest('button');if(!b)return;if(b.hasAttribute('data-save'))bewaar();else if(b.getAttribute('data-actie'))doeActie(b.getAttribute('data-actie'));};
+}
+function bewaar(){
+  var uit=[];document.querySelectorAll('[data-prov]').forEach(function(c){if(c.checked)uit.push(c.getAttribute('data-prov'));});
+  post('/api/instellingen',{stemmingOverride:document.getElementById('i_stemming').value,stilModus:document.getElementById('i_stil').checked,weekendRust:document.getElementById('i_weekend').checked,alleenTestkanaal:document.getElementById('i_test').checked,spaarstand:document.getElementById('i_spaar').checked,providerUit:uit,kortafKans:(+document.getElementById('i_kortaf').value||0)/100,warrigKans:(+document.getElementById('i_warrig').value||0)/100,vrijdagAppendKans:(+document.getElementById('i_vrijdag').value||0)/100,decreetVanDeDag:document.getElementById('i_decreet').value},'Opgeslagen');
+}
+function doeActie(a){post('/api/actie',{actie:a},'Uitgevoerd');}
+function post(url,body,okmsg){var st=document.getElementById('i_status');if(st)st.textContent='…';fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(function(r){return r.json();}).then(function(j){if(st)st.textContent=(j.ok?((j.bericht||okmsg)+' ✓'):('Fout: '+(j.error||'')));}).catch(function(){if(st)st.textContent='Fout';});}
+function tick(){fetch('/api/stats').then(function(r){return r.json();}).then(function(d){render(d);if(!ingesteld){renderInstellingen(d);ingesteld=true;}}).catch(function(){document.getElementById('status').textContent='offline';document.getElementById('status').className='pill off';});}
 tick();setInterval(tick,15000);
 </script></body></html>`;
 
