@@ -868,12 +868,20 @@ const VRIJDAG_EENHEDEN = [
 async function maakVrijdagCountdownZin() {
   const sec = secondenTotVrijdagMiddag();
   if (sec <= 0) return null;
-  const gekozen = [...VRIJDAG_EENHEDEN].sort(() => Math.random() - 0.5).slice(0, 3);
-  const getallen = gekozen.map(e => `${(sec / e.duur).toFixed(1)} × ${e.label}`).join(' | ');
+  const uurTekst = sec >= 3600 ? `ongeveer ${Math.round(sec / 3600)} uur` : `minder dan een uur`;
+  // Alleen eenheden die minstens 1× HEEL passen, en altijd als heel getal (geen 0,3 × of 8,3 ×).
+  const passend = VRIJDAG_EENHEDEN
+    .map(e => ({ label: e.label, aantal: Math.floor(sec / e.duur) }))
+    .filter(e => e.aantal >= 1);
+  const gekozen = [...passend].sort(() => Math.random() - 0.5).slice(0, 3);
+  const getallen = gekozen.map(e => `${e.aantal} × ${e.label}`).join(' | ');
+  const opdracht = getallen
+    ? `Begin met de mededeling dat het nog ${uurTekst} is tot vrijdagmiddag 12:00 (het heilige frituurmoment). ` +
+      `Verwerk DAARNA deze wiskundig exacte HELE aantallen in een grappige vergelijking — het zijn hele getallen, ` +
+      `verander ze ABSOLUUT NIET en gebruik ze letterlijk zoals gegeven: ${getallen}.`
+    : `Meld op grappige wijze dat het nog ${uurTekst} is tot vrijdagmiddag 12:00, het heilige frituurmoment.`;
   return kroketResponse(
-    `Verwerk de volgende wiskundig exacte getallen in één grappige zin over hoelang het nog duurt tot vrijdagmiddag 12:00. ` +
-    `De getallen zijn berekend door een wiskundige functie — verander ze ABSOLUUT NIET, gebruik ze letterlijk zoals gegeven. ` +
-    `Schrijf in de stijl van de Kroket God. Max 2 zinnen. Geen inleidingszin. Gegevens: ${getallen}.`,
+    `${opdracht} Schrijf in de stijl van de Kroket God. Max 2-3 zinnen. Geen inleidingszin.`,
     200, false
   );
 }
