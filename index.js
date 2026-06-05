@@ -89,6 +89,20 @@ const app = new App({
       },
     },
     {
+      // Centrale Kroket God-afbeelding voor het dashboard (leg kroketgod.png in de projectmap).
+      path: '/kroketgod.png',
+      method: ['GET'],
+      handler: (req, res) => {
+        try {
+          const buf = fs.readFileSync(path.join(__dirname, 'kroketgod.png'));
+          res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'max-age=3600' });
+          res.end(buf);
+        } catch (_) {
+          res.writeHead(404); res.end();
+        }
+      },
+    },
+    {
       // HTML-dashboard (haalt /api/stats op en ververst zichzelf).
       path: '/dashboard',
       method: ['GET'],
@@ -6084,46 +6098,77 @@ const DASHBOARD_HTML = `<!doctype html><html lang="nl"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Kroket God — Dashboard</title>
 <style>
-  :root{--bg:#1a1410;--card:#241c15;--gold:#e0a84e;--gold2:#c98a2e;--txt:#f2e6d2;--dim:#a08c72;--green:#6fbf73;--red:#d76a5a;--line:#3a2e22}
-  *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--txt);font:15px/1.5 -apple-system,Segoe UI,Roboto,sans-serif}
-  header{padding:18px 22px;border-bottom:2px solid var(--gold2);display:flex;flex-wrap:wrap;align-items:center;gap:14px}
-  header h1{margin:0;font-size:20px;color:var(--gold)}header h1 span{opacity:.6}
-  .pill{padding:3px 10px;border-radius:99px;font-size:12px;font-weight:600;background:#2c2218;border:1px solid var(--line)}
+  :root{--bg:#120c06;--card:#221809;--card2:#2a1e0c;--gold:#f0c060;--gold2:#caa047;--amber:#e08a2a;--txt:#f6ead0;--dim:#b89c72;--green:#7fd07f;--red:#e07a5a;--line:#4a3618;--glow:rgba(240,192,96,.45)}
+  *{box-sizing:border-box}html,body{margin:0}
+  body{color:var(--txt);font:15px/1.55 -apple-system,Segoe UI,Roboto,sans-serif;background:
+    radial-gradient(1100px 560px at 50% -8%,rgba(224,138,42,.20),transparent 60%),
+    radial-gradient(900px 520px at 50% 108%,rgba(202,160,71,.10),transparent 60%),var(--bg);background-attachment:fixed}
+  body::before{content:"";position:fixed;inset:0;pointer-events:none;opacity:.55;z-index:0;
+    background-image:radial-gradient(rgba(240,192,96,.10) 1px,transparent 1.5px),radial-gradient(rgba(224,138,42,.07) 1px,transparent 1.5px);
+    background-size:7px 7px,12px 12px;background-position:0 0,3px 5px}
+  .wrap{position:relative;z-index:1}
+  /* hero */
+  .hero{position:relative;text-align:center;padding:30px 16px 16px;overflow:hidden;border-bottom:1px solid var(--line)}
+  .halo{position:absolute;left:50%;top:14px;width:440px;height:440px;max-width:90vw;transform:translateX(-50%);z-index:0;filter:blur(4px);
+    background:radial-gradient(circle,rgba(240,192,96,.5),rgba(224,138,42,.14) 45%,transparent 70%);animation:pulse 4s ease-in-out infinite}
+  @keyframes pulse{0%,100%{opacity:.7;transform:translateX(-50%) scale(1)}50%{opacity:1;transform:translateX(-50%) scale(1.07)}}
+  .god{position:relative;z-index:2;width:188px;height:188px;border-radius:50%;object-fit:cover;background:#1a1208;
+    border:3px solid var(--gold);box-shadow:0 0 0 7px rgba(240,192,96,.10),0 0 46px var(--glow)}
+  .godph{align-items:center;justify-content:center;font-size:90px}
+  .crown{position:relative;z-index:2;margin:16px 0 2px;font-family:Georgia,'Times New Roman',serif;font-weight:700;
+    font-size:clamp(26px,5vw,38px);letter-spacing:4px;color:var(--gold);text-shadow:0 0 22px var(--glow),0 2px 0 #5a3c10}
+  .sub{position:relative;z-index:2;color:var(--dim);letter-spacing:5px;text-transform:uppercase;font-size:11px;margin-bottom:14px}
+  .pills{position:relative;z-index:2;display:flex;flex-wrap:wrap;gap:8px;justify-content:center}
+  .bolt{position:absolute;top:-10px;z-index:1;width:90px;height:320px;opacity:0;filter:drop-shadow(0 0 7px var(--gold));animation:flash 7s infinite}
+  .bolt.l{left:6%}.bolt.r{right:6%;transform:scaleX(-1)}
+  .bolt.l2{left:22%;animation-delay:2.3s}.bolt.r2{right:22%;transform:scaleX(-1);animation-delay:4.1s}
+  @keyframes flash{0%,100%{opacity:0}1.5%{opacity:1}3%{opacity:.15}5%{opacity:.95}8%{opacity:0}}
+  .pill{padding:4px 12px;border-radius:99px;font-size:12px;font-weight:600;background:rgba(42,30,12,.85);border:1px solid var(--line);color:var(--txt)}
   .pill.on{color:var(--green);border-color:var(--green)}.pill.off{color:var(--red);border-color:var(--red)}
-  main{padding:18px;max-width:1300px;margin:0 auto}
+  main{padding:18px;max-width:1320px;margin:0 auto}
   .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(310px,1fr));gap:16px}
   #instellingen{margin-bottom:16px}
   .setgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px}
   .lbl{font-size:12px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px}
-  .tog{display:block;padding:3px 0;font-size:14px;cursor:pointer}.tog input{vertical-align:middle;margin-right:6px}
-  .numl{display:block;font-size:14px;margin:3px 0}.numl input{width:58px;background:#1a1410;color:var(--txt);border:1px solid var(--line);border-radius:6px;padding:3px 6px;margin:0 4px}
-  select,textarea{width:100%;background:#1a1410;color:var(--txt);border:1px solid var(--line);border-radius:8px;padding:7px 9px;font:inherit}
-  .btn{background:#2c2218;color:var(--txt);border:1px solid var(--line);border-radius:8px;padding:7px 12px;font:inherit;cursor:pointer;margin:3px 2px}
-  .btn:hover{border-color:var(--gold2)}.btn.gold{background:var(--gold2);color:#1a1410;border-color:var(--gold);font-weight:600}
-  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
-  .card h2{margin:0 0 10px;font-size:14px;text-transform:uppercase;letter-spacing:.5px;color:var(--gold)}
-  table{width:100%;border-collapse:collapse}td,th{text-align:left;padding:4px 6px;border-bottom:1px solid var(--line);font-size:14px}
+  .tog{display:block;padding:3px 0;font-size:14px;cursor:pointer}.tog input{vertical-align:middle;margin-right:6px;accent-color:var(--amber)}
+  .numl{display:block;font-size:14px;margin:3px 0}.numl input{width:58px;background:#16100a;color:var(--txt);border:1px solid var(--line);border-radius:6px;padding:3px 6px;margin:0 4px}
+  select,textarea{width:100%;background:#16100a;color:var(--txt);border:1px solid var(--line);border-radius:8px;padding:7px 9px;font:inherit}
+  .btn{background:#2c2010;color:var(--txt);border:1px solid var(--line);border-radius:8px;padding:7px 12px;font:inherit;cursor:pointer;margin:3px 2px}
+  .btn:hover{border-color:var(--gold)}.btn.gold{background:linear-gradient(180deg,var(--gold),var(--gold2));color:#1a1208;border-color:var(--gold);font-weight:700}
+  .card{position:relative;background:linear-gradient(180deg,var(--card2),var(--card));border:1px solid var(--line);border-radius:14px;padding:15px 17px;box-shadow:0 1px 0 rgba(240,192,96,.06) inset,0 8px 22px rgba(0,0,0,.4)}
+  .card h2{margin:0 0 10px;padding-bottom:7px;border-bottom:1px solid var(--line);font-size:13px;text-transform:uppercase;letter-spacing:1px;color:var(--gold);text-shadow:0 0 12px rgba(240,192,96,.25)}
+  table{width:100%;border-collapse:collapse}td,th{text-align:left;padding:4px 6px;border-bottom:1px solid rgba(74,54,24,.6);font-size:14px}
   th{color:var(--dim);font-weight:600;font-size:12px}tr:last-child td{border-bottom:0}
   .num{text-align:right;font-variant-numeric:tabular-nums}
-  .prov{display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--line)}.prov:last-child{border:0}
-  .dot{display:inline-block;width:9px;height:9px;border-radius:99px;margin-right:7px;vertical-align:middle}
-  .dot.ok{background:var(--green)}.dot.cool{background:var(--gold)}.dot.off{background:#555}
+  .prov{display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid rgba(74,54,24,.6)}.prov:last-child{border:0}
+  .dot{display:inline-block;width:9px;height:9px;border-radius:99px;margin-right:7px;vertical-align:middle;box-shadow:0 0 6px currentColor}
+  .dot.ok{background:var(--green);color:var(--green)}.dot.cool{background:var(--gold);color:var(--gold)}.dot.off{background:#5a4a30;color:transparent}
   .tier{font-size:11px;color:var(--dim);margin-left:6px}
-  .bar{height:7px;background:#2c2218;border-radius:99px;overflow:hidden;margin-top:3px}.bar i{display:block;height:100%;background:var(--gold)}
-  .feed{max-height:340px;overflow:auto}.feed .row{padding:5px 0;border-bottom:1px solid var(--line);font-size:13px}.feed .row:last-child{border:0}
+  .bar{height:7px;background:#16100a;border-radius:99px;overflow:hidden;margin-top:3px;border:1px solid var(--line)}.bar i{display:block;height:100%;background:linear-gradient(90deg,var(--amber),var(--gold))}
+  .feed{max-height:340px;overflow:auto}.feed .row{padding:5px 0;border-bottom:1px solid rgba(74,54,24,.5);font-size:13px}.feed .row:last-child{border:0}
   .feed .t{color:var(--dim);font-size:11px}.muted{color:var(--dim)}.big{font-size:26px;color:var(--gold);font-weight:700}
-  footer{text-align:center;color:var(--dim);font-size:12px;padding:14px}
-</style></head><body>
-<header>
-  <h1>⚜️ Kroket God <span>Dashboard</span></h1>
-  <span class="pill" id="status">…</span>
-  <span class="pill" id="uptime"></span>
-  <span class="pill" id="mood"></span>
-  <span class="pill" id="vrijdag"></span>
-  <span class="muted" id="updated" style="margin-left:auto"></span>
-</header>
+  footer{text-align:center;color:var(--dim);font-size:12px;padding:16px}footer a{color:var(--gold2)}
+</style></head><body><div class="wrap">
+<div class="hero">
+  <div class="halo"></div>
+  <svg class="bolt l" viewBox="0 0 40 200"><path d="M26 2 L9 96 L21 96 L5 198 L33 82 L20 82 Z" fill="#f0c060"/></svg>
+  <svg class="bolt r" viewBox="0 0 40 200"><path d="M26 2 L9 96 L21 96 L5 198 L33 82 L20 82 Z" fill="#f0c060"/></svg>
+  <svg class="bolt l2" viewBox="0 0 40 200"><path d="M24 2 L11 90 L20 90 L7 198 L31 86 L21 86 Z" fill="#caa047"/></svg>
+  <svg class="bolt r2" viewBox="0 0 40 200"><path d="M24 2 L11 90 L20 90 L7 198 L31 86 L21 86 Z" fill="#caa047"/></svg>
+  <img class="god" id="godimg" src="/kroketgod.png" alt="Kroket God" onerror="this.style.display='none';document.getElementById('godph').style.display='flex'">
+  <div class="god godph" id="godph" style="display:none">⚜️</div>
+  <div class="crown">KROKET GOD</div>
+  <div class="sub">Dashboard der Hoge Frituurraad</div>
+  <div class="pills">
+    <span class="pill" id="status">…</span>
+    <span class="pill" id="uptime"></span>
+    <span class="pill" id="mood"></span>
+    <span class="pill" id="vrijdag"></span>
+  </div>
+  <div class="muted" id="updated" style="margin-top:9px;font-size:11px"></div>
+</div>
 <main><div id="instellingen"></div><div class="cards" id="stats"><div class="card">Laden…</div></div></main>
-<footer>Ververst automatisch · <a href="/api/stats" style="color:var(--gold2)">/api/stats</a></footer>
+<footer>⚜️ Ververst automatisch · <a href="/api/stats">/api/stats</a></footer></div>
 <script>
 function esc(s){return String(s==null?'':s).replace(/[&<>]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c];});}
 function dur(s){s=Math.max(0,s|0);var d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60);if(d>0)return d+'d '+h+'u';if(h>0)return h+'u '+m+'m';if(m>0)return m+'m';return s+'s';}

@@ -62,31 +62,26 @@ fi
 
 info "SSH verbinding OK"
 
-# ── Auto-detecteer pm2 en bot-pad op de Pi
+# ── nvm-omgeving: zet de nieuwste geïnstalleerde node-bin op PATH zodat node/npm/pm2 ook in
+#    een NON-interactieve SSH-sessie vindbaar zijn. Dit was de oude bug: `which pm2` faalde en
+#    `find` pikte een verkeerd 'pm2'-bestand (logrotate-template) → de bot werd nooit herstart.
+NVM_SETUP='export PATH="$(ls -d "$HOME"/.nvm/versions/node/*/bin 2>/dev/null | sort -V | tail -1):$PATH"'
+
+# ── Verifieer dat pm2 nu bereikbaar is en bepaal het bot-pad
 echo ""
-info "Bot-locatie zoeken op Pi..."
-PI_INFO=$(ssh "${PI_USER}@${PI_HOST}" "
-  # Zoek pm2 binary
-  PM2=\$(which pm2 2>/dev/null || find /home -name pm2 -type f 2>/dev/null | head -1 || echo '')
+info "pm2 en bot-pad zoeken op Pi..."
+if ! ssh "${PI_USER}@${PI_HOST}" "${NVM_SETUP}; command -v pm2 >/dev/null 2>&1"; then
+  error "pm2 niet gevonden op de Pi (ook niet via nvm). Is Node.js/pm2 geïnstalleerd?"
+fi
 
-  # Zoek bot-pad via pm2 of filesystem
-  PAD=''
-  if [[ -n \"\$PM2\" ]]; then
-    PAD=\$(\$PM2 list --no-color 2>/dev/null | grep -oE '/[^ ]+index\\.js' | head -1 | xargs dirname 2>/dev/null || echo '')
-  fi
-  if [[ -z \"\$PAD\" ]]; then
-    PAD=\$(find /home -name 'index.js' -path '*kroket*' 2>/dev/null | head -1 | xargs dirname 2>/dev/null || echo '/home/jspr/kroketgod')
-  fi
-  echo \"\$PM2|\$PAD\"
+PI_PAD=$(ssh "${PI_USER}@${PI_HOST}" "${NVM_SETUP}
+  PAD=\$(pm2 list --no-color 2>/dev/null | grep -oE '/[^ ]+index\\.js' | head -1 | xargs dirname 2>/dev/null)
+  [[ -z \"\$PAD\" ]] && PAD=\$(find /home -name 'index.js' -path '*kroket*' 2>/dev/null | head -1 | xargs dirname 2>/dev/null)
+  echo \"\${PAD:-/home/jspr/kroketgod}\"
 ")
+[[ -z "$PI_PAD" ]] && PI_PAD="/home/jspr/kroketgod"
 
-PM2_BIN=$(echo "$PI_INFO" | cut -d'|' -f1)
-PI_PAD=$(echo "$PI_INFO" | cut -d'|' -f2)
-
-[[ -z "$PM2_BIN" ]] && error "pm2 niet gevonden op de Pi. Is Node.js geïnstalleerd?"
-[[ -z "$PI_PAD" ]] && error "Bot-pad niet gevonden op de Pi."
-
-info "pm2: ${PM2_BIN}"
+info "pm2: bereikbaar via nvm op PATH"
 info "Bot: ${PI_PAD}"
 
 # ── Bestanden kopiëren
@@ -97,6 +92,9 @@ BESTANDEN=(
   "index.js"
   "tone_of_voice.txt"
   "geboden.txt"
+  "gepanneerde_rijk.txt"
+  "members.json"
+  "kroketgod.png"
 )
 
 for bestand in "${BESTANDEN[@]}"; do
@@ -112,23 +110,23 @@ done
 # ── npm install
 echo ""
 info "Dependencies controleren..."
-ssh "${PI_USER}@${PI_HOST}" "cd '${PI_PAD}' && npm install --silent 2>&1 | tail -2"
+ssh "${PI_USER}@${PI_HOST}" "${NVM_SETUP}; cd '${PI_PAD}' && npm install --silent 2>&1 | tail -2"
 
 # ── Bot herstarten
 echo ""
 info "Bot herstarten..."
-ssh "${PI_USER}@${PI_HOST}" "
-  ${PM2_BIN} restart ${PM2_NAAM} 2>/dev/null \
-    || ${PM2_BIN} start '${PI_PAD}/index.js' --name ${PM2_NAAM}
+ssh "${PI_USER}@${PI_HOST}" "${NVM_SETUP}
+  pm2 restart ${PM2_NAAM} 2>/dev/null \
+    || pm2 start '${PI_PAD}/index.js' --name ${PM2_NAAM}
   sleep 3
-  ${PM2_BIN} save --force 2>/dev/null || true
-  ${PM2_BIN} status ${PM2_NAAM} --no-color 2>&1 | tail -5
+  pm2 save --force 2>/dev/null || true
+  pm2 status ${PM2_NAAM} --no-color 2>&1 | tail -5
 "
 
 # ── Startup check: kijk of bot zonder fouten opstartte
 echo ""
 info "Opstartlog controleren..."
-OPSTART=$(ssh "${PI_USER}@${PI_HOST}" "${PM2_BIN} logs ${PM2_NAAM} --lines 5 --nostream --no-color 2>/dev/null | grep -E 'wakker|Fout|Error|ECONNREFUSED' || true")
+OPSTART=$(ssh "${PI_USER}@${PI_HOST}" "${NVM_SETUP}; pm2 logs ${PM2_NAAM} --lines 5 --nostream --no-color 2>/dev/null | grep -E 'wakker|Fout|Error|ECONNREFUSED' || true")
 if echo "$OPSTART" | grep -q "wakker"; then
   info "Bot is succesvol opgestart ⚜️"
 elif echo "$OPSTART" | grep -qiE "Fout|Error|ECONNREFUSED"; then
@@ -158,7 +156,7 @@ echo "   • 'eer naam1 en naam2' multi-naam support"
 echo "   • Vergrijpentracking, achievements, TTS"
 echo ""
 info "Live logs:"
-echo "   ssh ${PI_USER}@${PI_HOST} '${PM2_BIN} logs ${PM2_NAAM}'"
+echo "   ssh ${PI_USER}@${PI_HOST} 'pm2 logs ${PM2_NAAM}'"
 echo ""
 info "Toekomstige deploys (ook via Tailscale):"
 echo "   bash deploy.sh kroketpi"
