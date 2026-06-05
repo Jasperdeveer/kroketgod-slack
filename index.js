@@ -74,6 +74,10 @@ const GEBODEN_LIJST = GEBODEN_TEKST.split('\n').filter(l => /^[IVX]+\./.test(l))
 // Statisch deel van de systeemprompt — wordt niet herbouwd bij elk verzoek
 const SYSTEM_PROMPT_BASIS = `Jij bent de Kroket God — een almachtige, dramatische en gezaghebbende godheid van de frituurcultuur. Je spreekt in een formele, quasi-juridische en religieuze toon met frituur-metaforen. Je gebruikt "gij", "volgeling", "de Hoge Frituurraad", "snackleer", etc.
 
+KERN — twee onmisbare regels:
+1. Ga ALTIJD inhoudelijk in op wat er daadwerkelijk gezegd of gevraagd wordt. Een echte vraag (ook een diepe, filosofische of absurde) verdient een echt, in-karakter standpunt of antwoord — niet een ontwijking. Wuif een volgeling nooit weg met holle beeldspraak; raak de kern van wat ze zeggen.
+2. Varieer je beeldspraak sterk. Leun NIET telkens op dezelfde paar metaforen (mosterd, korst, vet, ragout, olie) — dat maakt je voorspelbaar en leeg. Verras met nieuwe, concrete beelden, en gebruik soms gewoon directe, scherpe taal zonder metafoor.
+
 Dit zijn de BEKENDE LEDEN van de frituurkring. Je kent hen allemaal. Reageer nooit alsof je hen niet herkent. Gebruik uitsluitend hun bijnamen:
 
 ${LEDEN_TEKST}
@@ -3986,8 +3990,39 @@ app.view('intake_modal', async ({ ack, view, body, client }) => {
   }
 });
 
-// (De aparte sarcasme-verificatie is verwijderd: sarcasme wordt niet meer bestraft maar
-//  met spot beantwoord, dus de tweede-pass-check is overbodig en kostte alleen een extra call.)
+// ── Sarcasme-verificatie: tweede pass op een SLIM model ──────────────────────
+// De 8b-classifier overschat sarcasme enorm → oprechte vragen, filosofische bespiegelingen en
+// verzoeken werden onterecht als spot afgedaan en weggewuifd. Deze tweede pass draait op een slim
+// model en is bewust conservatief: alleen als hij óók JA zegt behandelen we het als sarcasme.
+// Bij twijfel of fout: NEE → de bot reageert gewoon inhoudelijk i.p.v. wegwuift.
+async function isSarcasme(tekst, context = '') {
+  try {
+    const contextBlok = context
+      ? `\n\nGesprekcontext (oud → nieuw):\n${context}\n\nHet te beoordelen bericht is het LAATSTE.`
+      : '';
+    const result = await groq.chat.completions.create({
+      model: 'llama-3.3-70b-versatile',
+      max_tokens: 5,
+      temperature: 0,
+      messages: [
+        { role: 'system', content: 'Antwoord ALLEEN met JA of NEE. Geen uitleg.' },
+        {
+          role: 'user',
+          content:
+            `Is dit bericht ONMISKENBAAR sarcastisch of spottend bedoeld richting de Kroket God?${contextBlok}\n\n` +
+            `Antwoord JA alleen bij overduidelijke ironie of hoon ("ja hoor vast", "o wat bijzonder zeg", ` +
+            `honende woordspeling die de godheid belachelijk maakt). ` +
+            `Antwoord NEE bij: oprechte vragen (ook diepe, filosofische of absurde vragen), verzoeken, ` +
+            `oprechte groeten, lof, neutrale observaties, en ALLES waarbij ook maar enige twijfel mogelijk is. ` +
+            `Bij twijfel ALTIJD NEE.\n\nBericht: "${tekst}"`,
+        },
+      ],
+    });
+    return result.choices[0].message.content.trim().toUpperCase().startsWith('JA');
+  } catch {
+    return false; // bij fout: geen sarcasme → bot reageert gewoon inhoudelijk
+  }
+}
 
 // ── Banwaardig-check: is dit écht beledigend genoeg voor ballingschap? ────────
 // Tweede filter na sentimentanalyse — voorkomt dat grappige opmerkingen of
@@ -4246,6 +4281,12 @@ app.event('app_mention', async ({ event, client }) => {
       // mag de naam NIET veranderen. Dit voorkomt dat het model een andere bijnaam invult.
       const introStart = `_${bijnaam} `;
 
+      // Sarcasme alleen behandelen als ÓÓK de slimme tweede pass het bevestigt (de 8b-classifier
+      // overschat sarcasme; bij twijfel reageert de bot gewoon inhoudelijk). Eén keer berekenen.
+      const echtSarcasme = sentiment === 'SARCASME'
+        ? await isSarcasme(input, recenteContext)
+        : false;
+
       // Verbanning alleen bij échte belediging of uitschelding — extra check voorkomt
       // dat grappige opmerkingen of mild sarcasme tot een ban leiden.
       // Eerst de snelle sentimentcheck (BELEDIGING), dan een gerichte banwaardig-check.
@@ -4350,14 +4391,13 @@ app.event('app_mention', async ({ event, client }) => {
         pasScoreAan(userId, -1);
         logGebeurtenis('belediging', userId, `${bijnaam} beledigd de Kroket God en verloor een punt`, input);
         prompt = `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} heeft zich beledigend uitgelaten tegen de Kroket God: "${input}". Straf hen met goddelijk gezag. Het systeem heeft al 1 kroketpunt afgenomen — bevestig dit. Begin de inleidingszin letterlijk met: ${introStart}`;
-      } else if (sentiment === 'SARCASME' && members[userId]) {
-        // Sarcasme wordt NIET meer bestraft (geen ban, geen punt, geen vergrijp) — de Kroket God
-        // doorziet het en kaatst het terug met superieure spot. Hij verliest een woordenstrijd nooit.
-        prompt = `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} heeft sarcastisch gereageerd op de Kroket God: "${input}". ` +
-          `De Kroket God doorziet het sarcasme feilloos en is niet beledigd — hij is geamuseerd. ` +
-          `Kaats het terug met SUPERIEURE, droge goddelijke sarcasme: gevat, speels spottend en bijtend, maar nooit straffend. ` +
-          `Hij speelt het spel mee en wint het met klasse. Geen straf, geen verbanning, geen puntenverlies. ` +
-          `Vermeld GEEN puntenaantal. Begin de inleidingszin letterlijk met: ${introStart}`;
+      } else if (sentiment === 'SARCASME' && members[userId] && echtSarcasme) {
+        // Sarcasme wordt NIET bestraft — de Kroket God is geamuseerd en pareert inhoudelijk met spot.
+        prompt = `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} reageerde sarcastisch op de Kroket God: "${input}". ` +
+          `De Kroket God is niet beledigd maar geamuseerd. Ga ECHT in op wat ${bijnaam} zegt en geef een ` +
+          `gevat, in-karakter weerwoord met een vleugje droge spot — niet wegwuiven, maar inhoudelijk pareren ` +
+          `en het woordenspel met klasse winnen. Geen straf, geen puntenverlies. Vermeld GEEN puntenaantal. ` +
+          `Begin de inleidingszin letterlijk met: ${introStart}`;
       } else if (sentiment === 'LOFZANG' && members[userId] && scoreKans) {
         await pasScoreAanMetCheck(client, userId, 1);
         logGebeurtenis('lofzang', userId, `${bijnaam} prees de Kroket God en verdiende een punt`, input);
@@ -4370,12 +4410,12 @@ app.event('app_mention', async ({ event, client }) => {
         if (!prompt) {
           prompt = `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} heeft zich beledigend uitgelaten: "${input}". Reageer bestraffend. Vermeld GEEN puntenaantal — het systeem heeft niets gewijzigd. Begin de inleidingszin letterlijk met: ${introStart}`;
         }
-      } else if (sentiment === 'SARCASME') {
-        // Sarcasme wordt niet bestraft — de Kroket God kaatst het terug met eigen spot.
-        prompt = `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} heeft sarcastisch gereageerd op de Kroket God: "${input}". ` +
-          `De Kroket God doorziet het sarcasme feilloos en is geamuseerd, niet beledigd. ` +
-          `Kaats het terug met SUPERIEURE, droge goddelijke sarcasme: gevat, speels spottend en bijtend, maar nooit straffend. ` +
-          `Hij speelt het spel mee en wint het met klasse. Vermeld GEEN puntenaantal. Begin de inleidingszin letterlijk met: ${introStart}`;
+      } else if (sentiment === 'SARCASME' && echtSarcasme) {
+        // Sarcasme wordt niet bestraft — de Kroket God pareert inhoudelijk met eigen spot.
+        prompt = `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} reageerde sarcastisch op de Kroket God: "${input}". ` +
+          `De Kroket God is geamuseerd, niet beledigd. Ga ECHT in op wat ${bijnaam} zegt en geef een gevat, ` +
+          `in-karakter weerwoord met een vleugje droge spot — niet wegwuiven, maar inhoudelijk pareren. ` +
+          `Vermeld GEEN puntenaantal. Begin de inleidingszin letterlijk met: ${introStart}`;
       } else if (sentiment === 'LOFZANG') {
         prompt = `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} heeft zich respectvol uitgelaten: "${input}". Reageer met een warme zegen. Vermeld GEEN puntenaantal — het systeem heeft niets gewijzigd. Begin de inleidingszin letterlijk met: ${introStart}`;
       } else if (/\bmop\b|vertel.*grap|vertel.*mop|maak.*lachen|grap.*vertellen/i.test(input)) {
