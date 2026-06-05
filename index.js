@@ -1651,8 +1651,16 @@ async function callGemini({ model, messages, max_tokens, temperature }) {
     const errorText = await response.text();
     laatsteFout = new Error(`Gemini ${response.status}: ${errorText.substring(0, 200)}`);
     laatsteFout.status = response.status;
-    // Bij 429 deze key even in cooldown zetten zodat we 'm niet elk bericht opnieuw bevragen.
-    if (response.status === 429) geminiKeyCooldownTot.set(key, Date.now() + GEMINI_KEY_COOLDOWN_MS);
+    // Bij 429 deze key in cooldown zetten. Gemini noemt zelf een retry-delay in de body
+    // (vaak ~60s = per-minuut RPM-limiet, GEEN dag-quota) — respecteer die i.p.v. een vaste
+    // 5-min cooldown, zodat een key die over een minuut weer mag niet onnodig 5 min wegvalt.
+    // Geclampt op [20s, 10min]; niet-parsebaar → de default.
+    if (response.status === 429) {
+      const m = errorText.match(/retry[^0-9]*([\d.]+)\s*s/i);
+      const retryMs = m ? Math.round(parseFloat(m[1]) * 1000) : GEMINI_KEY_COOLDOWN_MS;
+      const cooldownMs = Math.min(Math.max(retryMs, 20_000), 10 * 60_000);
+      geminiKeyCooldownTot.set(key, Date.now() + cooldownMs);
+    }
     // Alleen doorrouteren naar de volgende key bij quota/rate-limit of tijdelijke serverfout.
     const roteerbaar = response.status === 429 || response.status >= 500;
     if (!roteerbaar || i === teProberen.length - 1) throw laatsteFout;
