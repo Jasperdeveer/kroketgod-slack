@@ -832,6 +832,19 @@ function secondenTotVrijdagMiddag() {
   return Math.max(0, dagenTot * 86400 + DOEL - secondenVandaag);
 }
 
+// True tijdens het weekend-venster: vrijdag VANAF 12:00 t/m zondag. In dat venster is het heilige
+// frituurmoment net voltrokken — dan geen aftelling naar volgende week, maar een weekendgroet.
+function isNaHeiligMoment() {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Europe/Amsterdam', weekday: 'short', hour: 'numeric', hour12: false,
+  }).formatToParts(new Date());
+  const wd  = parts.find(p => p.type === 'weekday')?.value;
+  const uur = parseInt(parts.find(p => p.type === 'hour')?.value);
+  if (wd === 'Sat' || wd === 'Sun') return true;
+  if (wd === 'Fri' && uur >= 12) return true;
+  return false;
+}
+
 const VRIJDAG_EENHEDEN = [
   { label: 'seconden',                                                          duur: 1 },
   { label: 'minuten',                                                           duur: 60 },
@@ -866,6 +879,17 @@ const VRIJDAG_EENHEDEN = [
 ];
 
 async function maakVrijdagCountdownZin() {
+  // Vrijdagmiddag/weekend: het heilige moment is voltrokken — geen aftelling naar volgende week,
+  // maar een weekendgroet.
+  if (isNaHeiligMoment()) {
+    return kroketResponse(
+      `Het heilige frituurmoment van vrijdag 12:00 is voor deze week VOLTROKKEN. ` +
+      `Verkondig kort en met goddelijke voldoening dat het moment is geweest en dat de volgeling nu ` +
+      `mag rusten en genieten van het weekend — de volgende cyclus naar de frituur komt vanzelf. ` +
+      `Max 2 zinnen. Geen inleidingszin.`,
+      200, false
+    );
+  }
   const sec = secondenTotVrijdagMiddag();
   if (sec <= 0) return null;
   const uurTekst = sec >= 3600 ? `ongeveer ${Math.round(sec / 3600)} uur` : `minder dan een uur`;
