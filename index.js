@@ -339,6 +339,7 @@ const STANDAARD_INSTELLINGEN = {
   warrigKans: 0.10,            // kans op warrig formaat
   vrijdagAppendKans: 0.02,     // kans op vrijdag-countdown-append
   decreetVanDeDag: '',         // vrije tekst die in de system prompt wordt geïnjecteerd
+  decreetIntensiteit: 0.5,     // hoe sterk het decreet doorgevoerd wordt (0 = vleugje, 1 = obsessie)
 };
 const loadInstellingen = () => ({ ...STANDAARD_INSTELLINGEN, ...readJSON('instellingen.json', {}) });
 function instelling(key) { return loadInstellingen()[key]; }
@@ -1737,7 +1738,8 @@ function buildSystemPrompt() {
   const tijd = getTijdContext();
   const stemming = getDagelijkseStemming();
   const decreet = (instelling('decreetVanDeDag') || '').trim();
-  const cacheKey = `${ledenJson}|${tijd.dagdeel}|${tijd.dagNaam}|${tijd.seizoen}|${stemming.naam}|${decreet}`;
+  const decreetInt = Math.max(0, Math.min(1, Number(instelling('decreetIntensiteit')) || 0));
+  const cacheKey = `${ledenJson}|${tijd.dagdeel}|${tijd.dagNaam}|${tijd.seizoen}|${stemming.naam}|${decreet}|${decreetInt.toFixed(2)}`;
 
   if (_systemPromptCache.key === cacheKey) return _systemPromptCache.value;
 
@@ -1771,8 +1773,14 @@ function buildSystemPrompt() {
     `De enige bekende leden zijn: ${bijnamen}.`
   );
 
+  // Heftigheid van het decreet bepaalt hoe sterk de bot het doorvoert.
+  const decreetSterkte =
+    decreetInt >= 0.8 ? 'Dit is je ABSOLUTE OBSESSIE vandaag: laat ELKE reactie er volledig van doordrenkt zijn en wijk er nooit van af'
+    : decreetInt >= 0.55 ? 'Laat dit duidelijk en consequent doorklinken in je reacties, bovenop al het bovenstaande'
+    : decreetInt >= 0.3 ? 'Laat je hier merkbaar door kleuren waar het natuurlijk past'
+    : 'Houd dit losjes in je achterhoofd — slechts een vleugje, en alleen wanneer het echt past';
   const decreetBlok = decreet
-    ? `\n\nDECREET VAN DE DAG — volg dit extra, bovenop al het bovenstaande (maar blijf volledig in karakter): ${decreet}`
+    ? `\n\nDECREET VAN DE DAG: ${decreet}\n(${decreetSterkte}. Blijf altijd volledig in karakter.)`
     : '';
 
   const value = `${prompt}\n\nAanvullende ledeninformatie (gebruik subtiel voor personalisering):\n${ledenExtra}${tijdsContext}${decreetBlok}`;
@@ -6268,6 +6276,8 @@ function renderInstellingen(d){
     +'</div>'
     +'<div class="lbl" style="margin-top:12px">Decreet van de dag'+tip('Vrije tekst die als extra instructie in de system prompt wordt geinjecteerd. Geef de Kroket God een tijdelijk thema, bv. spreek vandaag uitsluitend in haiku. Werkt direct na opslaan.')+'</div>'
     +'<textarea id="i_decreet" rows="2" placeholder="bv. Vandaag spreekt de Kroket God uitsluitend in haiku.">'+esc(s.decreetVanDeDag)+'</textarea>'
+    +'<div class="lbl" style="margin-top:10px">Heftigheid van het decreet'+tip('Hoe sterk de Kroket God het decreet doorvoert: links = subtiele vleug, rechts = absolute obsessie die elke reactie doordrenkt.')+' <span id="i_decreetIntPct" class="muted" style="text-transform:none;font-weight:400">'+Math.round(s.decreetIntensiteit*100)+'%</span></div>'
+    +'<input type="range" min="0" max="100" id="i_decreetInt" value="'+Math.round(s.decreetIntensiteit*100)+'" style="width:100%;accent-color:var(--amber)">'
     +'<div style="margin-top:12px"><button class="btn gold" data-save>💾 Opslaan</button>'
     +'<button class="btn" data-actie="kroketVanDeDag">🥖 Kroket vd dag</button>'
     +'<button class="btn" data-actie="quizStarten">🧠 Quiz</button>'
@@ -6277,10 +6287,11 @@ function renderInstellingen(d){
   var host=document.getElementById('instellingen');
   host.innerHTML=html;
   host.onclick=function(e){var b=e.target.closest('button');if(!b)return;if(b.hasAttribute('data-save'))bewaar();else if(b.getAttribute('data-actie'))doeActie(b.getAttribute('data-actie'));};
+  host.oninput=function(e){if(e.target.id==='i_decreetInt'){var p=document.getElementById('i_decreetIntPct');if(p)p.textContent=e.target.value+'%';}};
 }
 function bewaar(){
   var uit=[];document.querySelectorAll('[data-prov]').forEach(function(c){if(c.checked)uit.push(c.getAttribute('data-prov'));});
-  post('/api/instellingen',{stemmingOverride:document.getElementById('i_stemming').value,stilModus:document.getElementById('i_stil').checked,weekendRust:document.getElementById('i_weekend').checked,alleenTestkanaal:document.getElementById('i_test').checked,spaarstand:document.getElementById('i_spaar').checked,providerUit:uit,kortafKans:(+document.getElementById('i_kortaf').value||0)/100,warrigKans:(+document.getElementById('i_warrig').value||0)/100,vrijdagAppendKans:(+document.getElementById('i_vrijdag').value||0)/100,decreetVanDeDag:document.getElementById('i_decreet').value},'Opgeslagen');
+  post('/api/instellingen',{stemmingOverride:document.getElementById('i_stemming').value,stilModus:document.getElementById('i_stil').checked,weekendRust:document.getElementById('i_weekend').checked,alleenTestkanaal:document.getElementById('i_test').checked,spaarstand:document.getElementById('i_spaar').checked,providerUit:uit,kortafKans:(+document.getElementById('i_kortaf').value||0)/100,warrigKans:(+document.getElementById('i_warrig').value||0)/100,vrijdagAppendKans:(+document.getElementById('i_vrijdag').value||0)/100,decreetVanDeDag:document.getElementById('i_decreet').value,decreetIntensiteit:(+document.getElementById('i_decreetInt').value||0)/100},'Opgeslagen');
 }
 function doeActie(a){post('/api/actie',{actie:a},'Uitgevoerd');}
 function post(url,body,okmsg){var st=document.getElementById('i_status');if(st)st.textContent='…';fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(function(r){return r.json();}).then(function(j){if(st)st.textContent=(j.ok?((j.bericht||okmsg)+' ✓'):('Fout: '+(j.error||'')));}).catch(function(){if(st)st.textContent='Fout';});}
