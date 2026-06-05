@@ -5433,85 +5433,66 @@ async function voerKroketVanDeDagUit(client) {
   const kanaal = process.env.SLACK_CHANNEL_ID;
   const gisteren = loadKroketVanDeDag();
 
-  // ── Stap 1: uitslag van gisteren — winnaar van het A/B-duel ───────────────
-  if (gisteren.ts && gisteren.naamA && gisteren.naamB) {
-    let stemA = 0, stemB = 0;
-    try {
-      const res = await client.reactions.get({ channel: kanaal, timestamp: gisteren.ts, full: true });
-      const reacties = res.message?.reactions || [];
-      stemA = reacties.find(r => r.name === 'one')?.count || 0;
-      stemB = reacties.find(r => r.name === 'two')?.count || 0;
-      if (stemA > 0) stemA--; // bot's eigen reactie eraf
-      if (stemB > 0) stemB--;
-    } catch (_) {}
-
-    const totaal = stemA + stemB;
-    const gelijk = stemA === stemB;
-    const winnaar = stemA >= stemB ? gisteren.naamA : gisteren.naamB;
-    const verliezer = stemA >= stemB ? gisteren.naamB : gisteren.naamA;
-
-    const uitslagPrompt = `Geen inleidingszin. Verkondig de officiële uitslag van het Kroket van de Dag-duel.
-De twee kandidaten waren:
-1) "${gisteren.naamA}"
-2) "${gisteren.naamB}"
-Stemresultaat: ${stemA} stemmen voor 1 en ${stemB} stemmen voor 2 (totaal ${totaal}).${gelijk ? ' Het was gelijkspel — de Kroket God heeft zelf de beslissende stem uitgebracht.' : ''}
-De winnaar en officiële Kroket van de Dag is: "${winnaar}".
-Kroon de winnaar plechtig en stuur de verliezer ("${verliezer}") met één droge zin terug naar de snack-hel.
-Gebruik het decreet-formaat. Maximaal 5 regels hoofdtekst.`;
-
-    const uitslagTekst = schoonOutput(await kroketResponse(uitslagPrompt, 350, false));
-    await postToChannel(client, kanaal, uitslagTekst);
-    voegKennisToe('kroket-uitslag', `Duel "${gisteren.naamA}" (${stemA}) vs "${gisteren.naamB}" (${stemB}) — winnaar: "${winnaar}"`, 'Kroket van de Dag');
-  } else if (gisteren.ts && gisteren.naam) {
-    // Legacy-formaat (krokant/slap) — eenmalige overgang, kondig de oude uitslag nog netjes aan.
+  // ── Stap 1: uitslag van gisteren — krokant of slap korstje ────────────────
+  if (gisteren.ts && gisteren.naam) {
     let krokant = 0, slap = 0;
     try {
       const res = await client.reactions.get({ channel: kanaal, timestamp: gisteren.ts, full: true });
       const reacties = res.message?.reactions || [];
       krokant = reacties.find(r => r.name === 'bread')?.count || 0;
       slap    = reacties.find(r => r.name === 'skull')?.count || 0;
-      if (krokant > 0) krokant--;
+      if (krokant > 0) krokant--; // bot's eigen reactie eraf
       if (slap > 0)    slap--;
     } catch (_) {}
-    const totaal = krokant + slap;
-    const goedgekeurd = krokant > slap;
-    const uitslagTekst = schoonOutput(await kroketResponse(
-      `Geen inleidingszin. Verkondig de uitslag van de Kroket van de Dag stemming. De kroket: "${gisteren.naam}". ` +
-      `Resultaat: ${krokant}x krokant, ${slap}x slap korstje (totaal ${totaal}). ` +
-      `Oordeel: ${goedgekeurd ? 'TOEGELATEN tot de frituur' : 'AFGEKEURD — terug naar de snack-hel'}. ` +
-      `Eén droge slotzin. Decreet-formaat, max 5 regels.`, 350, false));
+
+    const totaal     = krokant + slap;
+    const goedgekeurd = krokant >= slap;
+    const percentageKrokant = totaal > 0 ? Math.round((krokant / totaal) * 100) : 0;
+
+    const uitslagPrompt = `Geen inleidingszin. Verkondig de officiële uitslag van de Kroket van de Dag-stemming.
+De kroket in kwestie: "${gisteren.naam}".
+Stemresultaat: ${krokant}x 🥖 Krokant en ${slap}x 💀 Slap korstje (totaal: ${totaal} stemmen, ${percentageKrokant}% krokant).
+Officieel oordeel: ${goedgekeurd ? 'KROKANT — toegelaten tot de frituur' : 'SLAP KORSTJE — teruggestuurd naar de snack-hel'}.
+Sluit af met maximaal één droge zin als goddelijke conclusie over dit collectieve oordeel.
+Gebruik het decreet- of spoedmelding-formaat. Maximaal 5 regels hoofdtekst.`;
+
+    const uitslagTekst = schoonOutput(await kroketResponse(uitslagPrompt, 350, false));
     await postToChannel(client, kanaal, uitslagTekst);
+    voegKennisToe('kroket-uitslag', `"${gisteren.naam}" ${goedgekeurd ? 'krokant (toegelaten)' : 'slap korstje (afgekeurd)'} — ${krokant}x krokant, ${slap}x slap`, 'Kroket van de Dag');
   }
 
-  // ── Stap 2: twee nieuwe kandidaten genereren (een echte keuze) ────────────
+  // ── Stap 2: nieuwe kroket genereren — een gek maar ECHT eetbaar twijfelgeval ─
   const eerdereNamen = (gisteren.geschiedenis || []).slice(-10).join(', ');
-  const kroketSystemBericht = 'Je bent een creatieve schrijver die absurde, niet-bestaande Nederlandse kroketvarianten verzint. Je geeft ALTIJD exact het gevraagde formaat terug — niets meer, niets minder. Geen uitleg, geen preamble, geen vragen.';
+  const kroketSystemBericht = 'Je bent een creatieve schrijver die gewaagde, niet-bestaande maar ÉCHT eetbare Nederlandse kroketvarianten verzint. Je geeft ALTIJD exact het gevraagde formaat terug — niets meer, niets minder. Geen uitleg, geen preamble, geen vragen.';
   const kroketInstructie =
-    `Verzin TWEE volledig verschillende, niet-bestaande kroketsoorten die ALLEBEI intrigerend of verleidelijk zijn — geen duidelijke 'goede' en 'slechte', maar een ECHTE keuze tussen twee aantrekkelijke of bizarre opties waar je oprecht over kunt twijfelen.` +
+    `Verzin één niet-bestaande maar ÉCHT eetbare kroketsoort: een gewaagde, gekke combinatie van bestaande gerechten, keukens of smaken waarvan je oprecht NIET weet of het briljant of een ramp is — een echt twijfelgeval voor de stemming "krokant of slap korstje".\n\n` +
+    `HARDE REGELS:\n` +
+    `- Het moet écht eetbaar en voorstelbaar zijn. ABSOLUUT GEEN gif, dood, ziekte, "op eigen risico", bedorven, gevaarlijke of niet-eetbare ingrediënten — dan is het geen keuze maar een grap.\n` +
+    `- Wel wild en onverwacht: combineer bestaande gerechten/keukens op een verrassende manier (denk aan: kapsalon-kroket, sushi-kroket, stroopwafel-met-oude-kaas, ramen-kroket, speculaas-brie, pindakaas-sambal-banaan).\n` +
+    `- De twijfel zit in de gedurfde SMAAKCOMBINATIE, niet in gevaar.` +
     (eerdereNamen ? ` Gebruik GEEN van deze namen: ${eerdereNamen}.` : '') +
-    `\n\nGeef PRECIES dit terug:\nNAAM 1: [absurde kroketnaam, max 6 woorden]\nBESCHRIJVING 1: [twee droge, grappige zinnen]\nNAAM 2: [absurde kroketnaam, max 6 woorden]\nBESCHRIJVING 2: [twee droge, grappige zinnen]`;
+    `\n\nGeef PRECIES dit terug:\nNAAM: [grappige naam voor de combinatie, max 6 woorden]\nBESCHRIJVING: [twee droge, grappige zinnen die de combinatie beschrijven en oprechte twijfel oproepen of dit krokant-waardig is of een slap korstje]`;
 
   const KROKET_FALLBACKS = [
-    { naam: 'De Boerenkaas-lavendel Dageraadskroket', beschrijving: 'Een ongemakkelijk romige vulling van gerijpte boerenkaas met lavendel, die doet denken aan een kaaswinkel die te dicht bij een parfumerie zit. Verkrijgbaar in één snackbar in Friesland, op verzoek en alleen op dinsdag.' },
-    { naam: 'De Hoisin-stroopwafel Twijfelkroket',    beschrijving: 'Zoet, hartig en principieel onjuist — een vulling van hoisinsaus en gesmolten stroopwafel in een paneerlaag die meer weg heeft van een politiek compromis dan van een snack. Niemand heeft hierom gevraagd.' },
-    { naam: 'De Truffel-kipnugget Machtsgreepkroket', beschrijving: 'Een hybride die niet mocht bestaan: knapperig kipnuggetdeeg om een ragout van witte truffel en sherry. Heeft drie culinaire rechtbanken doorstaan en is bij alle drie vrijgesproken wegens gebrek aan bewijs.' },
-    { naam: 'De Rendang-poffertjes Verzoeningskroket', beschrijving: 'Een diplomatiek wonder van urenlang gestoofde rendang en boterige poffertjes, gevangen in één paneerlaag. Smaakt naar een wapenstilstand die niemand had verwacht maar iedereen nodig had.' },
+    { naam: 'De Kapsalon-kroket', beschrijving: 'Shoarma, friet, knoflooksaus en gesmolten kaas, samengeperst tot één frituurbare eenheid. Hoogstandje van efficiëntie, of een snackbar die instortte tot een bal?' },
+    { naam: 'De Stroopwafel-Oude Kaas Kroket', beschrijving: 'Karamelstroop en scherpe belegen kaas, samen in één korst. Zoet ontmoet zout op een manier die geniaal is, of een ruzie tussen twee smaken die nooit hadden mogen daten.' },
+    { naam: 'De Ramen-kroket', beschrijving: 'Ingedikte ramenbouillon, een lopend eitje en noedels, gevangen in paneer. Comfortabel genie, of een soep die nóg een keer dezelfde fout maakt.' },
+    { naam: 'De Pindakaas-Sambal-Banaan Kroket', beschrijving: 'Romige pindakaas, brandende sambal en zoete banaan — een Surinaamse koortsdroom in korst. Briljant drieluik, of een weddenschap die te ver ging.' },
+    { naam: 'De Speculaas-Brie Kroket', beschrijving: 'Warme kruidige speculaas om een hart van smeltende brie. Kerst in één hap, of een dessert dat per ongeluk in de frituurpan viel.' },
   ];
 
-  const parseerDuo = (raw) => {
-    const m = raw.match(/NAAM\s*1:\s*(.+?)\s*BESCHRIJVING\s*1:\s*([\s\S]+?)\s*NAAM\s*2:\s*(.+?)\s*BESCHRIJVING\s*2:\s*([\s\S]+)/i);
-    if (!m) return null;
-    const schoon = (s) => s.trim().replace(/^[*_]+|[*_]+$/g, '').replace(/\n/g, ' ').trim();
-    const a = { naam: schoon(m[1]), beschrijving: schoon(m[2]) };
-    const b = { naam: schoon(m[3]), beschrijving: schoon(m[4]) };
-    if (a.naam && b.naam && !a.naam.includes('?') && !b.naam.includes('?')
-        && a.naam.length < 80 && b.naam.length < 80
-        && a.beschrijving.length > 10 && b.beschrijving.length > 10
-        && a.naam.toLowerCase() !== b.naam.toLowerCase()) return { a, b };
+  let naam = 'De Mysterieuze Dagkroket';
+  let beschrijving = 'Een gewaagde combinatie waar de frituur nog over twijfelt.';
+
+  const parseerKroketOutput = (raw) => {
+    const naamMatch = raw.match(/NAAM:\s*(.+)/i);
+    const beschMatch = raw.match(/BESCHRIJVING:\s*([\s\S]+)/i);
+    const n = naamMatch?.[1]?.trim().replace(/^[*_]+|[*_]+$/g, '') || '';
+    const b = beschMatch?.[1]?.trim().replace(/\n/g, ' ').replace(/^[*_]+|[*_]+$/g, '') || '';
+    if (n && !n.includes('?') && n.length < 80 && b.length > 10) return { naam: n, beschrijving: b };
     return null;
   };
 
-  let duo = null;
   try {
     const kroketRes = await callGemini({
       model: 'gemini-2.5-flash',
@@ -5519,57 +5500,57 @@ Gebruik het decreet-formaat. Maximaal 5 regels hoofdtekst.`;
         { role: 'system', content: kroketSystemBericht },
         { role: 'user',   content: kroketInstructie },
       ],
-      max_tokens: 300,
+      max_tokens: 200,
       temperature: 1.1,
     });
-    duo = parseerDuo(kroketRes.choices[0]?.message?.content || '');
-    if (!duo) throw new Error('Ongeldig formaat van Gemini');
+    const parsed = parseerKroketOutput(kroketRes.choices[0]?.message?.content || '');
+    if (parsed) { naam = parsed.naam; beschrijving = parsed.beschrijving; }
+    else throw new Error('Ongeldig formaat van Gemini');
   } catch (err) {
-    console.warn('⚠️ Gemini kroket-duo mislukt, probeer Groq:', err.message);
+    console.warn('⚠️ Gemini kroket mislukt, probeer Groq:', err.message);
     try {
       const groqRes = await groq.chat.completions.create({
-        model: 'llama-3.3-70b-versatile', temperature: 1.0, max_tokens: 300,
+        model: 'llama-3.3-70b-versatile', temperature: 1.0, max_tokens: 200,
         messages: [
           { role: 'system', content: kroketSystemBericht },
           { role: 'user',   content: kroketInstructie },
         ],
       });
-      duo = parseerDuo(groqRes.choices[0]?.message?.content || '');
-      if (!duo) throw new Error('Ongeldig formaat van Groq');
+      const parsed = parseerKroketOutput(groqRes.choices[0]?.message?.content || '');
+      if (parsed) { naam = parsed.naam; beschrijving = parsed.beschrijving; }
+      else throw new Error('Ongeldig formaat van Groq');
     } catch (err2) {
-      console.warn('⚠️ Groq kroket-duo mislukt, gebruik fallback:', err2.message);
-      // Twee verschillende fallbacks kiezen
-      const idx1 = Math.floor(Math.random() * KROKET_FALLBACKS.length);
-      let idx2 = Math.floor(Math.random() * KROKET_FALLBACKS.length);
-      if (idx2 === idx1) idx2 = (idx2 + 1) % KROKET_FALLBACKS.length;
-      duo = { a: KROKET_FALLBACKS[idx1], b: KROKET_FALLBACKS[idx2] };
+      console.warn('⚠️ Groq kroket mislukt, gebruik fallback:', err2.message);
+      const fb = KROKET_FALLBACKS[Math.floor(Math.random() * KROKET_FALLBACKS.length)];
+      naam = fb.naam; beschrijving = fb.beschrijving;
     }
   }
 
-  // ── Stap 3: poll-bericht plaatsen — twee kandidaten, 1️⃣ vs 2️⃣ ────────────
+  // ── Stap 3: poll-bericht plaatsen — krokant of slap korstje ───────────────
   const pollTekst =
     `⚜️ KROKET VAN DE DAG ⚜️\n\n` +
-    `De Hoge Frituurraad legt twee kandidaten voor. Slechts één verdient de titel.\n\n` +
-    `1️⃣ *${duo.a.naam}*\n> ${duo.a.beschrijving}\n\n` +
-    `2️⃣ *${duo.b.naam}*\n> ${duo.b.beschrijving}\n\n` +
-    `Stem :one: of :two: — wie wint, wordt morgen gekroond.\n\n` +
+    `*${naam}*\n` +
+    `> ${beschrijving}\n\n` +
+    `Verdient deze de frituur? Stem nu:\n` +
+    `🥖 *Krokant* — deze mag de frituur in\n` +
+    `💀 *Slap korstje* — terug naar de snack-hel\n\n` +
     `— De Almachtige Kroket God :lekker_kroketje:`;
 
   let pollTs = null;
   try {
     const msg = await client.chat.postMessage({ channel: kanaal, text: pollTekst });
     pollTs = msg.ts;
-    await client.reactions.add({ channel: kanaal, timestamp: pollTs, name: 'one' });
-    await client.reactions.add({ channel: kanaal, timestamp: pollTs, name: 'two' });
+    await client.reactions.add({ channel: kanaal, timestamp: pollTs, name: 'bread' });
+    await client.reactions.add({ channel: kanaal, timestamp: pollTs, name: 'skull' });
   } catch (err) {
     console.error('⚠️ Kroket van de dag post mislukt:', err.message);
     return;
   }
 
   // ── Stap 4: opslaan ───────────────────────────────────────────────────────
-  const nieuweGeschiedenis = [...(gisteren.geschiedenis || []), duo.a.naam, duo.b.naam].slice(-30);
-  saveKroketVanDeDag({ ts: pollTs, naamA: duo.a.naam, naamB: duo.b.naam, datum: new Date().toISOString().slice(0, 10), geschiedenis: nieuweGeschiedenis });
-  console.log(`✅ Kroket van de dag-duel: "${duo.a.naam}" vs "${duo.b.naam}"`);
+  const nieuweGeschiedenis = [...(gisteren.geschiedenis || []), naam].slice(-30);
+  saveKroketVanDeDag({ ts: pollTs, naam, beschrijving, datum: new Date().toISOString().slice(0, 10), geschiedenis: nieuweGeschiedenis });
+  console.log(`✅ Kroket van de dag: "${naam}"`);
 }
 
 // Dagelijks om 09:45 op werkdagen — na de andere 09:xx crons
