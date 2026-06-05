@@ -58,7 +58,28 @@ const TEST_KANALEN = ['bruin-schaap'];
 // Runtime-cache van testkanaal IDs — geleerd bij startup en via slash commands.
 // Nodig omdat message/app_mention events in Socket Mode géén channel_name bevatten,
 // alleen een channel ID. Slash commands bevatten wél channel_name én channel_id.
-const TEST_KANAAL_IDS = new Set();
+// PERSISTENT: opgeslagen op disk + uit env (TEST_CHANNEL_IDS), zodat een eenmaal geleerd ID een
+// herstart overleeft. Anders werkt het testkanaal pas weer na een nieuw slash-commando — en faalt
+// het auto-leren via conversations.list/info op missing_scope.
+// Init uit env (altijd beschikbaar); het persistente bestand wordt bij startup ingeladen
+// (laadPersistenteTestKanalen), want readJSON/fileCache zijn hier nog niet geïnitialiseerd.
+const TEST_KANAAL_IDS = new Set(
+  (process.env.TEST_CHANNEL_IDS || '').split(',').map(s => s.trim()).filter(Boolean)
+);
+
+// Voeg een testkanaal-ID toe en bewaar het persistent, zodat het een herstart overleeft.
+function voegTestKanaalToe(channelId) {
+  if (!channelId || TEST_KANAAL_IDS.has(channelId)) return;
+  TEST_KANAAL_IDS.add(channelId);
+  try { writeJSON('test_kanalen.json', [...TEST_KANAAL_IDS]); } catch (_) {}
+}
+
+// Laadt eerder geleerde testkanaal-ID's van disk. Aanroepen ná readJSON/fileCache-definitie.
+function laadPersistenteTestKanalen() {
+  try {
+    for (const id of readJSON('test_kanalen.json', [])) TEST_KANAAL_IDS.add(id);
+  } catch (_) {}
+}
 
 function isTestKanaalCheck(channelId, channelName) {
   return TEST_KANALEN.includes(channelName) || TEST_KANAAL_IDS.has(channelId);
@@ -2435,7 +2456,7 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
 
   // Leer testkanaal IDs dynamisch zodat message/mention events ze ook herkennen
   if (TEST_KANALEN.includes(command.channel_name) && command.channel_id) {
-    TEST_KANAAL_IDS.add(command.channel_id);
+    voegTestKanaalToe(command.channel_id);
   }
 
   const input = vervangNamen(command.text.trim());
@@ -2531,7 +2552,7 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
     // Quiz — admin commando's
     if (input === 'quiz starten' && command.user_id === 'U08ALFNQB1V') {
       await respond({ text: '🧠 Quiz wordt gegenereerd...', response_type: 'ephemeral' });
-      try { await genereerEnPostQuiz(client); }
+      try { await genereerEnPostQuiz(client, command.channel_id); }
       catch (err) { await respond({ text: `❌ ${err.message}`, response_type: 'ephemeral' }); }
       return;
     }
@@ -2546,7 +2567,7 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
     // Kroket van de dag — handmatig triggeren (admin)
     if (input === 'kroket-van-de-dag' && command.user_id === 'U08ALFNQB1V') {
       await respond({ text: '🥖 Kroket van de dag wordt gegenereerd...', response_type: 'ephemeral' });
-      try { await voerKroketVanDeDagUit(client); }
+      try { await voerKroketVanDeDagUit(client, command.channel_id); }
       catch (err) { await respond({ text: `❌ Fout: ${err.message}`, response_type: 'ephemeral' }); }
       return;
     }
@@ -4178,7 +4199,7 @@ app.event('app_mention', async ({ event, client }) => {
         const info = await client.conversations.info({ channel: event.channel });
         const naam = info.channel?.name;
         if (naam && TEST_KANALEN.includes(naam)) {
-          TEST_KANAAL_IDS.add(event.channel);
+          voegTestKanaalToe(event.channel);
           console.log(`🧪 Testkanaal ontdekt via mention: #${naam} → ${event.channel}`);
           isTestKanaal = true;
         }
@@ -4565,7 +4586,7 @@ app.event('message', async ({ event, client }) => {
         const info = await client.conversations.info({ channel: event.channel });
         const naam = info.channel?.name;
         if (naam && TEST_KANALEN.includes(naam)) {
-          TEST_KANAAL_IDS.add(event.channel);
+          voegTestKanaalToe(event.channel);
           console.log(`🧪 Testkanaal ontdekt via bericht: #${naam} → ${event.channel}`);
           isTestKanaalMsg = true;
         }
@@ -5410,7 +5431,7 @@ async function laadTestKanaalIds(client) {
       });
       for (const ch of res.channels || []) {
         if (TEST_KANALEN.includes(ch.name)) {
-          TEST_KANAAL_IDS.add(ch.id);
+          voegTestKanaalToe(ch.id);
           console.log(`🧪 Testkanaal geladen: #${ch.name} → ${ch.id}`);
         }
       }
@@ -5463,12 +5484,15 @@ const loadKroketVanDeDag  = () => readJSON('kroket_van_de_dag.json', {});
 const saveKroketVanDeDag  = (data) => writeJSON('kroket_van_de_dag.json', data);
 
 // Leest de reacties van gisteren's poll en genereert uitslag + nieuw voorstel.
-async function voerKroketVanDeDagUit(client) {
-  const kanaal = process.env.SLACK_CHANNEL_ID;
+async function voerKroketVanDeDagUit(client, channelId = process.env.SLACK_CHANNEL_ID) {
+  const kanaal = channelId;
+  // In een testkanaal: alleen genereren + posten, GEEN gedeelde dagstaat lezen/schrijven
+  // (anders vervuilt een test de echte dagcyclus van het hoofdkanaal).
+  const isTest = isTestKanaalCheck(channelId);
   const gisteren = loadKroketVanDeDag();
 
   // ── Stap 1: uitslag van gisteren — krokant of slap korstje ────────────────
-  if (gisteren.ts && gisteren.naam) {
+  if (!isTest && gisteren.ts && gisteren.naam) {
     let krokant = 0, slap = 0;
     try {
       const res = await client.reactions.get({ channel: kanaal, timestamp: gisteren.ts, full: true });
@@ -5581,10 +5605,12 @@ Gebruik het decreet- of spoedmelding-formaat. Maximaal 5 regels hoofdtekst.`;
     return;
   }
 
-  // ── Stap 4: opslaan ───────────────────────────────────────────────────────
-  const nieuweGeschiedenis = [...(gisteren.geschiedenis || []), naam].slice(-30);
-  saveKroketVanDeDag({ ts: pollTs, naam, beschrijving, datum: new Date().toISOString().slice(0, 10), geschiedenis: nieuweGeschiedenis });
-  console.log(`✅ Kroket van de dag: "${naam}"`);
+  // ── Stap 4: opslaan (niet in een testkanaal — staat van het hoofdkanaal blijft intact) ──
+  if (!isTest) {
+    const nieuweGeschiedenis = [...(gisteren.geschiedenis || []), naam].slice(-30);
+    saveKroketVanDeDag({ ts: pollTs, naam, beschrijving, datum: new Date().toISOString().slice(0, 10), geschiedenis: nieuweGeschiedenis });
+  }
+  console.log(`✅ Kroket van de dag${isTest ? ' (test)' : ''}: "${naam}"`);
 }
 
 // Dagelijks om 09:45 op werkdagen — na de andere 09:xx crons
@@ -5614,8 +5640,8 @@ async function isJuistAntwoord(gegeven, juist, vraag) {
   } catch { return false; }
 }
 
-async function genereerEnPostQuiz(client) {
-  const kanaal = process.env.SLACK_CHANNEL_ID;
+async function genereerEnPostQuiz(client, channelId = process.env.SLACK_CHANNEL_ID) {
+  const kanaal = channelId;
   const bestaande = loadQuiz();
   if (bestaande.ts && !bestaande.afgerond) {
     console.log('⚠️ Actieve quiz aanwezig — eerst onthullen voor een nieuwe.');
@@ -5887,6 +5913,8 @@ process.on('SIGINT',  () => gracefulShutdown('SIGINT'));
   await app.start();
   isReady = true;
   console.log('⚜️ De Kroket God is wakker. Health: http://localhost:3001/health');
-  await laadTestKanaalIds(app.client);
+  laadPersistenteTestKanalen(); // eerder geleerde test-ID's van disk (overleeft herstart)
+  if (TEST_KANAAL_IDS.size > 0) console.log(`🧪 Testkanaal-ID's bekend: ${[...TEST_KANAAL_IDS].join(', ')}`);
+  await laadTestKanaalIds(app.client); // aanvulling via API (kan op missing_scope falen — niet erg)
   await laadNederlandseFeestdagen(); // feestdagen voor Nager.at integratie
 })();
