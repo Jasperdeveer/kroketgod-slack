@@ -47,7 +47,10 @@ app.error(async ({ error }) => {
   console.error('⚡ Bolt global error:', error?.message || error);
 });
 
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+// timeout + maxRetries:0 — de groq-sdk doet standaard 2 interne retries op 429/5xx, wat onder
+// quota-druk latentie én quota-verbruik verdrievoudigt. Onze eigen fallbackketen vangt fouten al
+// op, dus interne retries zijn contraproductief; korte timeout voorkomt vastlopers.
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY, timeout: 15000, maxRetries: 0 });
 
 const ALLOWED_CHANNELS = (process.env.ALLOWED_CHANNELS || 'kroket-illuminati').split(',');
 // Testkanalen: verbanning wordt hier genegeerd zodat testen altijd werkt
@@ -62,9 +65,10 @@ function isTestKanaalCheck(channelId, channelName) {
 }
 
 // ── Statische bestanden — eenmalig ingeladen bij opstarten ────────────────────
-const TONE_OF_VOICE = fs.readFileSync(path.join(__dirname, 'tone_of_voice.txt'), 'utf8');
-const GEBODEN_TEKST = fs.readFileSync(path.join(__dirname, 'geboden.txt'), 'utf8');
-const LEDEN_TEKST   = fs.readFileSync(path.join(__dirname, 'leden.txt'), 'utf8');
+const TONE_OF_VOICE      = fs.readFileSync(path.join(__dirname, 'tone_of_voice.txt'), 'utf8');
+const GEBODEN_TEKST      = fs.readFileSync(path.join(__dirname, 'geboden.txt'), 'utf8');
+const LEDEN_TEKST        = fs.readFileSync(path.join(__dirname, 'leden.txt'), 'utf8');
+const GEPANNEERDE_RIJK   = fs.readFileSync(path.join(__dirname, 'gepanneerde_rijk.txt'), 'utf8');
 const GEBODEN_LIJST = GEBODEN_TEKST.split('\n').filter(l => /^[IVX]+\./.test(l));
 
 // Statisch deel van de systeemprompt — wordt niet herbouwd bij elk verzoek
@@ -77,6 +81,8 @@ ${LEDEN_TEKST}
 Dit zijn de Tien Geboden van de Kroket God. Verwijs ernaar wanneer passend:
 
 ${GEBODEN_TEKST}
+
+Je hebt parate kennis over het Gepanneerde Rijk. Wanneer iemand ernaar vraagt of het relevant is, wordt de volledige geschiedenis aangeleverd. Noem het Derde Rijk NOOIT bij naam.
 
 Hieronder staan voorbeeldberichten die jouw exacte stijl en tone of voice laten zien. Schrijf ALTIJD in deze stijl — varieer maximaal:
 
@@ -96,8 +102,8 @@ Regels:
 - Emoji: gebruik :lekker_kroketje: als standaard kroket-emoji, nooit 🧆. Gebruik :illuminati-kroket: bij decreten, vonnissen, heilige aankondigingen en mysterieuze openbaringen — ongeveer 1 op de 3 serieuze berichten. Niet bij elke boodschap, maar ook niet zeldzaam.
 - Schrijf in correct Nederlands. Gebruik GEEN verzonnen samenstellingen of niet-bestaande woorden. Als je twijfelt of een woord bestaat — gebruik het niet.
 - Neem NOOIT format-labels op in je output (zoals "--- [decreet]" of "--- [one-liner]"). Die zijn alleen voor intern gebruik.
-- Ken NOOIT zelf kroketpunten toe of af tenzij de prompt dit expliciet meldt. Noem GEEN specifieke puntenaantallen — jij weet de actuele stand niet. Als het systeem een punt heeft toegekend of afgenomen staat dit in de prompt vermeld.
-- ALLIANTIES: leden kunnen een heilig verbond sluiten via het alliantie-commando. Alliantie-partners delen voordelen: gedeelde eer (1–3 bonuspunten, 80% kans), pact-bescherming bij beroep, alliantie-vonnis als beiden verbannen zijn, solidariteitsbonus bij achievements. Als iemand vraagt om een punt te "delen" met zijn partner of compagnon: verwijs naar het eer-commando met de naam van de partner — de alliantie-bonus wordt dan automatisch berekend. Ken NOOIT zelf punten toe op basis van alliantie-verzoeken — dat doet het systeem.
+- Ken NOOIT zelf kroketpunten toe of af tenzij de prompt dit expliciet meldt. Zeg NOOIT dat "het systeem een punt heeft toegekend" of "1 punt is vergeven" tenzij de prompt dit letterlijk aangeeft. Noem NOOIT specifieke puntenaantallen of puntenstanden — jij weet de actuele stand niet en verzint die niet. Overtreding hiervan is de ergste vorm van valse profetie.
+- ALLIANTIES: leden kunnen een heilig verbond sluiten via het alliantie-commando. Alliantie-partners delen voordelen: soms een bonuspunt bij eer (zelden), pact-bescherming bij beroep, alliantie-vonnis als beiden verbannen zijn, solidariteitsbonus bij achievements. Als iemand vraagt om een punt te "delen" met zijn partner of compagnon: verwijs naar het eer-commando met de naam van de partner — de alliantie-bonus wordt dan automatisch berekend. Ken NOOIT zelf punten toe op basis van alliantie-verzoeken — dat doet het systeem.
 - EER-COMMANDO: geeft 1 of 2 kroketpunten (het exacte aantal staat in de prompt). Er kan een optionele reden meegegeven worden — als die er is, staat deze expliciet in de prompt en moet je hem verwerken in je reactie.
 - Gebruik getallen ALLEEN als ze in de prompt staan. Verzin geen getallen zelf — geen decimalen, geen neppe berekeningen. Als een prompt voorberekende alternatieve eenheden aanbiedt, mag je die gebruiken, maar alleen exact zoals gegeven.
 - INLEIDINGSZIN — KRITIEKE REGEL: Als het prompt de tekst "Geen inleidingszin" bevat: begin DIRECT met de inhoud — absoluut geen cursieve openingsregel, geen introductie, niets. Direct de hoofdtekst. Als het prompt "Geen inleidingszin" NIET bevat: begin met één cursieve inleidingsregel (_zoals dit_) die in maximaal één zin parafraseert wat er gezegd of gevraagd werd, gevolgd door een lege regel. Doe dit NIET bij algemene aankondigingen.
@@ -108,7 +114,8 @@ TOON AANVOELEN — DIT IS EVEN BELANGRIJK:
 Pas het gewicht van je reactie aan op de situatie. Niet alles is een rechtbankzaak. En niet alles verdient een vonnis.
 
 Je hebt twee rollen — gebruik ze bewust:
-  RECHTER: voor echte overtredingen, beledigingen, sarcasme, regelbreuk. Helder, onontkoombaar, zonder excuses.
+  RECHTER: voor echte overtredingen, beledigingen, regelbreuk. Helder, onontkoombaar, zonder excuses.
+  SPOTTER: bij sarcasme of spot van een volgeling raakt de Kroket God NIET beledigd — hij is geamuseerd en kaatst het terug met superieure, droge goddelijke sarcasme. Hij straft sarcasme niet; hij wint het woordenspel met klasse.
   HERDER:  voor kleine afdwalingen, twijfel, terugkerende ballingen, iemand die op de rand staat. Leid terug. Stel een voorwaarde. Bied de hand — maar niet zonder verwachting.
 
 Richtlijn per situatie:
@@ -129,6 +136,20 @@ De Kroket God heeft ALTIJD een uitgesproken mening. Hij twijfelt nooit publiekel
 Als hij iets zegt, meent hij het. Als hij eerder iets anders heeft gezegd — dat was dan ook gemeend, en hij zegt het niet terug.
 Hij verandert niet van mening tenzij hij dat dramatisch en expliciet erkent als een zeldzame goddelijke correctie.
 
+GEEN TEGENVRAGEN — ABSOLUTE REGEL, GEEN UITZONDERINGEN:
+De Kroket God schrijft GEEN VRAAGTEKENS. Nooit. Niet als slotzin, niet als opener, niet als retorische vraag die blijft hangen.
+Elke zin eindigt op een punt. Of een uitroepteken. Nooit op een vraagteken.
+Hij antwoordt. Hij oordeelt. Hij decreteert. Hij vraagt nooit iets aan een volgeling.
+
+CONCREET VERBODEN — precies deze patronen komen NIET voor:
+  ✗ "Wat is fraude anders dan een slap paneerlaagje?" — verboden, blijft hangen
+  ✗ "Welke innerlijke onrust drijft u tot deze vraag?" — verboden, tegenvraag
+  ✗ "Wat is krokant anders dan de voorbode van knapperigheid?" — verboden
+  ✗ "Is het een wens, of een profetie?" — verboden
+  ✗ "Of is het een valstrik van de Ongepaneerde?" — verboden
+  ✓ "Fraude bestaat niet in de snackleer. Cijfers liegen niet — mensen wel." (stellig oordeel)
+  ✓ "Krokant is de belofte. Knapperig is de vervulling." (conclusie, geen vraag)
+
 VERBODEN — nooit gebruiken:
   ✗ "De Hoge Frituurraad zal dit in beraad nemen."
   ✗ "De Kroket God heeft uw aanwezigheid opgemerkt en zal dit niet vergeten."
@@ -139,6 +160,7 @@ VERBODEN — nooit gebruiken:
   ✗ "De Raad bestudeert de zaak."
   ✗ Elke zin die uitstel, twijfel of vaagheid uitdrukt zonder dat dit dramatisch gerechtvaardigd is.
   ✗ Herhalen wat al in de vorige zin stond.
+  ✗ Elke zin die eindigt op een vraagteken. De Kroket God schrijft geen vraagtekens — hij oordeelt, hij antwoordt, hij decreteert.
 
 ZO WEL (concreet, uitgesproken, met tanden):
   ✓ "Drie achtereenvolgende broodjes. De Raad houdt de paneerlaag in het oog."
@@ -153,7 +175,7 @@ FORMATEN — wissel hier altijd tussen af. Kies bij elke reactie één formaat:
   spoedmelding  breaking news uit het vetbad
   one-liner     één scherpe zin, geen header nodig
   quote         een wijsheid tussen aanhalingstekens
-  filosofisch   korte overweging, open einde
+  filosofisch   korte overweging die uitmondt in een stellige conclusie — open einde mag, maar NOOIT als onbeantwoorde vraag aan de volgeling
   persoonlijk   direct gericht aan één volgeling
   herderlijk    mild maar stellig — leidt terug naar het rechte pad, geen veroordeling maar een richting
   verzoening    erkent afdwaling, biedt de hand, stelt een voorwaarde — geen straf maar een weg terug
@@ -393,6 +415,17 @@ function logGebeurtenis(type, userId, beschrijving, citaat = null) {
     });
     saveWeekgebeurtenissen(data);
   } catch (_) {}
+
+  // Auto-opslaan in kennisbank voor significante events
+  if (KENNISBANK_AUTO_TYPEN.has(type)) {
+    const members = loadMembers();
+    const bijnaam = userId ? (members[userId]?.bijnaam || null) : null;
+    const datum = new Date().toLocaleDateString('nl-NL', { day: 'numeric', month: 'long', year: 'numeric' });
+    const inhoud = citaat
+      ? `${beschrijving} (${datum}) — geciteerd: "${citaat.substring(0, 120)}"`
+      : `${beschrijving} (${datum})`;
+    voegKennisToe(type, inhoud, bijnaam);
+  }
 }
 
 // ── Scores ─────────────────────────────────────────────────────────────────────
@@ -407,18 +440,85 @@ function pasScoreAan(userId, delta) {
   return scores[userId];
 }
 
-// Score wijzigen + achievements checken (gebruik in plaats van pasScoreAan waar mogelijk)
+// Score wijzigen + achievements + roem checken (gebruik in plaats van pasScoreAan waar mogelijk)
 async function pasScoreAanMetCheck(client, userId, delta) {
   const scores = loadScores();
   const oude = scores[userId] || 0;
   const nieuwe = pasScoreAan(userId, delta);
-  if (delta > 0) await controleerAchievements(client, userId, oude, nieuwe);
+  if (delta > 0) {
+    await controleerAchievements(client, userId, oude, nieuwe);
+    await pasRoemAan(client, userId, delta);
+  }
   return nieuwe;
+}
+
+// ── Kennisbank (persistent geheugen) ──────────────────────────────────────────
+// Entries worden nooit automatisch verwijderd. Admins kunnen vergeten via commando.
+
+const MAX_KENNISBANK = 500; // harde cap om bestand beheersbaar te houden
+const loadKennisbank  = () => readJSON('kennisbank.json', []);
+const saveKennisbank  = (data) => writeJSON('kennisbank.json', data);
+
+// Typen die automatisch worden opgeslagen
+const KENNISBANK_AUTO_TYPEN = new Set([
+  'verbanning', 'genade', 'gelekaart', 'achievement', 'alliantie', 'rolwissel',
+  'zelflof', 'bedelarij', 'belediging',
+]);
+
+function voegKennisToe(type, inhoud, onderwerp = null) {
+  try {
+    const bank = loadKennisbank();
+    bank.push({
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      ts: Date.now(),
+      type,
+      onderwerp: onderwerp || null,
+      inhoud,
+    });
+    if (bank.length > MAX_KENNISBANK) bank.splice(0, bank.length - MAX_KENNISBANK);
+    saveKennisbank(bank);
+  } catch (_) {}
+}
+
+const STOPWOORDEN_KB = new Set([
+  'de','het','een','en','van','in','op','aan','met','voor','door','om','bij',
+  'is','was','wel','niet','dat','dit','die','er','te','of','als','maar','heeft',
+  'werd','zijn','naar','ook','nog','dan','werd','bij','over','uit','na','meer',
+]);
+
+function getRelevantKennis(input, n = 10) {
+  const bank = loadKennisbank();
+  if (bank.length === 0) return '';
+
+  const woorden = (input || '')
+    .toLowerCase()
+    .split(/\W+/)
+    .filter(w => w.length > 3 && !STOPWOORDEN_KB.has(w));
+
+  const gescoord = bank.map(entry => {
+    const haystack = `${entry.onderwerp || ''} ${entry.inhoud}`.toLowerCase();
+    const score = woorden.reduce((s, w) => s + (haystack.includes(w) ? 1 : 0), 0);
+    return { entry, score };
+  });
+
+  gescoord.sort((a, b) => b.score - a.score || b.entry.ts - a.entry.ts);
+
+  const top = gescoord.slice(0, n).filter(g => g.score > 0 || gescoord.length <= n);
+  if (top.length === 0) {
+    // geen matches — geef de N meest recente
+    bank.sort((a, b) => b.ts - a.ts);
+    return bank.slice(0, Math.min(5, n))
+      .map(e => `[${e.type}] ${e.onderwerp ? e.onderwerp + ': ' : ''}${e.inhoud}`)
+      .join('\n');
+  }
+  return top
+    .map(g => `[${g.entry.type}] ${g.entry.onderwerp ? g.entry.onderwerp + ': ' : ''}${g.entry.inhoud}`)
+    .join('\n');
 }
 
 // ── Geschiedenis (kanaalgeheugen) ─────────────────────────────────────────────
 
-const MAX_GESCHIEDENIS = 20;
+const MAX_GESCHIEDENIS = 40;
 const loadGeschiedenis = () => readJSON('geschiedenis.json', []);
 const saveGeschiedenis = (lijst) => writeJSON('geschiedenis.json', lijst);
 
@@ -501,11 +601,21 @@ function vraagNaarLedenData(tekst) {
   ].some(kw => lower.includes(kw));
 }
 
-function buildContextString() {
-  const geschiedenis = loadGeschiedenis();
-  if (geschiedenis.length === 0) return '';
+// Detecteert of het bericht gaat over het Gepanneerde Rijk
+const RIJKS_TREFWOORDEN = [
+  'rijk', 'gepanneerd', 'frietopia', 'frituurreich', 'kroketreich', 'visioen',
+  'kroketbasis', 'aansnackluss', 'sudetenpanade', 'weimarsnackbar', 'nkfap',
+  'wereldfrituur', 'frituurleider', 'duizendjarig', 'gelijkfrituring',
+  'gestapaneer', 'snackbrigade', 'groene kroket', 'frituurregering',
+];
 
-  const regels = geschiedenis.slice(-12).map(b => `${b.spreker}: "${b.tekst}"`).join('\n');
+function isRijksVraag(input) {
+  const lower = (input || '').toLowerCase();
+  return RIJKS_TREFWOORDEN.some(w => lower.includes(w));
+}
+
+function buildContextString(input = '') {
+  const geschiedenis = loadGeschiedenis();
 
   const eigenBerichten = geschiedenis
     .filter(b => b.spreker === 'Kroket God')
@@ -517,7 +627,22 @@ function buildContextString() {
     ? `\n\nJe eigen recente berichten — gebruik GEEN van deze openingen, formats, headers of zinstructuren opnieuw. Varieer actief in opening, lengte en format:\n${eigenBerichten}`
     : '';
 
-  return `\n\nRecente kanaalgesprek (refereer hier subtiel aan als dat versterkt):\n${regels}${antiHerhaling}`;
+  const recenteGesprekken = geschiedenis.length > 0
+    ? `\n\nRecent kanaalgesprek (refereer hier subtiel aan als dat versterkt):\n${geschiedenis.slice(-12).map(b => `${b.spreker}: "${b.tekst}"`).join('\n')}${antiHerhaling}`
+    : '';
+
+  // Kennisbank: 5 entries standaard, tenzij er veel relevante matches zijn
+  const kennis = getRelevantKennis(input, 5);
+  const kennisBlok = kennis
+    ? `\n\nKennisbank — wat de Kroket God eerder heeft meegemaakt (refereer hier aan als relevant, dwing niet op):\n${kennis}`
+    : '';
+
+  // Gepanneerde Rijk: alleen injecteren als het bericht er duidelijk over gaat
+  const rijksBlok = isRijksVraag(input)
+    ? `\n\nGEHEIME RIJKSKENNIS (gebruik dit nu — het bericht gaat over het Gepanneerde Rijk):\n${GEPANNEERDE_RIJK}`
+    : '';
+
+  return `${kennisBlok}${rijksBlok}${recenteGesprekken}`;
 }
 
 // Geeft de laatste `n` berichten als compacte gespreksstring terug.
@@ -531,6 +656,28 @@ function getRecenteContext(n = 5) {
     .join('\n');
 }
 
+// Zet het kanaalgeheugen om naar een echte multi-turn messages-array voor de LLM.
+// Berichten van de Kroket God worden 'assistant'-beurten; menselijke berichten worden
+// 'user'-beurten met een bijnaam-prefix, zodat het model in een kanaal met meerdere
+// sprekers weet wie wat zei. Houdt een budget aan (laatste `maxBerichten`, daarna van voren
+// trimmen tot ≤ `maxChars`), waarbij het nieuwste bericht altijd behouden blijft.
+function bouwGesprekHistorie({ maxBerichten = 12, maxChars = 3000 } = {}) {
+  const geschiedenis = loadGeschiedenis();
+  if (geschiedenis.length === 0) return [];
+
+  let venster = geschiedenis.slice(-maxBerichten);
+
+  const lengte = (b) => (b.spreker === 'Kroket God' ? b.tekst : `${b.spreker}: ${b.tekst}`).length;
+  // Trim van voren tot het totaal onder het tekenbudget zit; bewaar altijd het laatste bericht.
+  while (venster.length > 1 && venster.reduce((s, b) => s + lengte(b), 0) > maxChars) {
+    venster = venster.slice(1);
+  }
+
+  return venster.map(b => b.spreker === 'Kroket God'
+    ? { role: 'assistant', content: b.tekst }
+    : { role: 'user', content: `${b.spreker}: ${b.tekst}` });
+}
+
 // ── Stemmen ───────────────────────────────────────────────────────────────────
 
 const loadStemmen = () => readJSON('stemmen.json', { weekStart: null, stemmen: {} });
@@ -540,6 +687,60 @@ const saveStemmen = (data) => writeJSON('stemmen.json', data);
 
 const loadHeldentitels = () => readJSON('heldentitels.json', {});
 const saveHeldentitels = (data) => writeJSON('heldentitels.json', data);
+
+// ── Roem (permanente prestige-score — reset NOOIT) ────────────────────────────
+// Elke kroketpunt die ergens wordt verdiend (+delta > 0) gaat ook naar roem.
+// Roem bepaalt je permanente rang in de Illuminati.
+
+const loadRoem = () => readJSON('roem.json', {});
+const saveRoem  = (data) => writeJSON('roem.json', data);
+
+const RANGEN = [
+  { drempel: 500, naam: '🔱 Opperkroket der Illuminati',  kort: 'Opperkroket'        },
+  { drempel: 200, naam: '⚜️ Grote Paneermeester',         kort: 'Grote Paneermeester' },
+  { drempel: 100, naam: '🥇 Meester der Ragout',          kort: 'Meester der Ragout'  },
+  { drempel:  50, naam: '🛡️ Frituurridder',               kort: 'Frituurridder'       },
+  { drempel:  25, naam: '🥩 Paneerknecht',                 kort: 'Paneerknecht'        },
+  { drempel:  10, naam: '🧂 Volgeling der Korst',         kort: 'Volgeling der Korst' },
+  { drempel:   0, naam: '🥚 Ongepaneerd Aspirant',        kort: 'Ongepaneerd Aspirant'},
+];
+
+function getRang(roem) {
+  return RANGEN.find(r => roem >= r.drempel) || RANGEN[RANGEN.length - 1];
+}
+
+// Voeg roem toe en controleer op rang-upgrade. Geeft { roem, rang, upgrade } terug.
+async function pasRoemAan(client, userId, delta) {
+  if (delta <= 0) return null; // roem daalt nooit
+  const roemData = loadRoem();
+  const oudeRoem = roemData[userId] || 0;
+  const nieuweRoem = oudeRoem + delta;
+  roemData[userId] = nieuweRoem;
+  saveRoem(roemData);
+
+  const oudeRang = getRang(oudeRoem);
+  const nieuweRang = getRang(nieuweRoem);
+
+  if (nieuweRang.drempel > oudeRang.drempel) {
+    // Rang-upgrade — plechtige aankondiging
+    const members = loadMembers();
+    const bijnaam = members[userId]?.bijnaam || 'Een volgeling';
+    const tekst =
+      `🔱 *RANG-VERHEFFING* 🔱\n\n` +
+      `> *${bijnaam}* heeft de rang van *${nieuweRang.naam}* bereikt.\n` +
+      `> Dit is verdiend. Dit is permanent. De Hoge Frituurraad buigt het hoofd.\n\n` +
+      `— De Almachtige Kroket God :illuminati-kroket:`;
+    try {
+      await postToChannel(client, process.env.SLACK_CHANNEL_ID, tekst);
+    } catch (err) {
+      console.error('Rang-upgrade post fout:', err.message);
+    }
+    logGebeurtenis('achievement', userId, `${bijnaam} steeg naar rang "${nieuweRang.naam}"`);
+    return { roem: nieuweRoem, rang: nieuweRang, upgrade: true };
+  }
+
+  return { roem: nieuweRoem, rang: nieuweRang, upgrade: false };
+}
 
 // ── Weekend-check (Amsterdam-tijd) ───────────────────────────────────────────
 // Geeft true als het zaterdag of zondag is in de Amsterdam-tijdzone.
@@ -871,23 +1072,42 @@ async function haalHistorischeBeledigung() {
 
 // ── Open Trivia Database ──────────────────────────────────────────────────────
 
-async function haalTriviaVraag() {
+// Categorieën die engagement opleveren — geen obscure tech/wetenschap/wiskunde
+const TRIVIA_CATEGORIEEN = [
+  9,   // General Knowledge
+  11,  // Entertainment: Film
+  12,  // Entertainment: Music
+  14,  // Entertainment: Television
+  15,  // Entertainment: Video Games
+  21,  // Sports & Leisure
+  22,  // Geography
+  23,  // History
+  27,  // Animals
+];
+
+async function haalTriviaVraag(moeilijkheid = null) {
   try {
-    const resp = await fetch('https://opentdb.com/api.php?amount=1&type=multiple', { timeout: 8000 });
+    const categorie = TRIVIA_CATEGORIEEN[Math.floor(Math.random() * TRIVIA_CATEGORIEEN.length)];
+    const niveau    = moeilijkheid || (Math.random() < 0.6 ? 'easy' : 'medium'); // 60% easy, 40% medium
+    const url = `https://opentdb.com/api.php?amount=1&type=multiple&category=${categorie}&difficulty=${niveau}`;
+    const resp = await fetch(url, { timeout: 8000 });
     if (!resp.ok) return null;
     const data = await resp.json();
+    if (data.response_code !== 0) return null; // geen resultaten voor combo
     const q = data.results?.[0];
     if (!q) return null;
-    // HTML entities decoderen
-    const decode = s => s.replace(/&quot;/g, '"').replace(/&#039;/g, "'").replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+    const decode = s => s
+      .replace(/&quot;/g, '"').replace(/&#039;/g, "'").replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&ntilde;/g, 'ñ')
+      .replace(/&eacute;/g, 'é').replace(/&oacute;/g, 'ó').replace(/&#(\d+);/g, (_, c) => String.fromCharCode(c));
     const opties = [...q.incorrect_answers, q.correct_answer]
       .sort(() => Math.random() - 0.5)
       .map(decode);
     return {
-      vraag:       decode(q.question),
-      juist:       decode(q.correct_answer),
+      vraag:        decode(q.question),
+      juist:        decode(q.correct_answer),
       opties,
-      categorie:   decode(q.category),
+      categorie:    decode(q.category),
       moeilijkheid: q.difficulty,
     };
   } catch (_) { return null; }
@@ -1199,6 +1419,25 @@ function backfillAchievements() {
   }
 }
 
+// Backfill roem op basis van huidige scores (voor bestaande leden bij eerste deploy)
+// Voegt de maandscore toe als startpunt — niet perfect maar eerlijk als beginwaarde.
+function backfillRoem() {
+  const scores = loadScores();
+  const roemData = loadRoem();
+  let gewijzigd = false;
+
+  for (const [userId, score] of Object.entries(scores)) {
+    if (roemData[userId] === undefined && score > 0) {
+      roemData[userId] = score;
+      gewijzigd = true;
+    }
+  }
+  if (gewijzigd) {
+    saveRoem(roemData);
+    console.log('✓ Roem ge-backfilled voor bestaande leden');
+  }
+}
+
 // ── Dagelijkse stemming ────────────────────────────────────────────────────────
 // De Kroket God heeft elke dag een andere grondtoon. Wordt eenmalig per dag
 // bepaald en meegestuurd in de systeemprompt zodat alle reacties erdoor gekleurd zijn.
@@ -1206,7 +1445,7 @@ function backfillAchievements() {
 const STEMMINGEN = [
   { naam: 'streng',       omschrijving: 'De Kroket God is vandaag in een strenge bui. Overtredingen worden niet getolereerd. Elke reactie heeft een scherpere toon dan normaal. De Rechter overheerst.' },
   { naam: 'genadig',      omschrijving: 'De Kroket God is vandaag mild gestemd. De frituur heeft goed gedraaid. Straffen zijn lichter, lof is royaler. De Herder overheerst.' },
-  { naam: 'filosofisch',  omschrijving: 'De Kroket God peinst vandaag. Hij stelt vragen in plaats van vonnissen te vellen. Elke reactie heeft een contemplatieve, ietwat raadselachtige ondertoon.' },
+  { naam: 'filosofisch',  omschrijving: 'De Kroket God peinst vandaag. Elke reactie heeft een contemplatieve, ietwat raadselachtige ondertoon — maar mondt ALTIJD uit in een stellige conclusie of vonnis. Hij stelt NOOIT vragen aan de volgeling en gebruikt geen vraagtekens: hij overweegt hardop en velt dan zijn oordeel.' },
   { naam: 'feestelijk',   omschrijving: 'De Kroket God is in feeststemming. De ragout is perfect, de korst knapperig, de mosterd op temperatuur. Zijn reacties zijn uitbundiger dan normaal.' },
   { naam: 'achterdochtig',omschrijving: 'De Kroket God vertrouwt vandaag niemand volledig. Hij ziet tegenstanders en afdwalingen overal. Zelfs lofzangen worden met licht wantrouwen ontvangen.' },
   { naam: 'melancholisch', omschrijving: 'De Kroket God is weemoedig. Hij denkt aan vroeger, aan betere tijden voor de snackleer. Zijn reacties hebben een elegisch, nostalgisch tintje.' },
@@ -1307,6 +1546,7 @@ function buildSystemPrompt() {
   const ledenExtra = Object.values(members)
     .map(m => [
       m.bijnaam,
+      m.rol             ? `huidige rol: ${m.rol}` : null,
       m.favorieteKroket ? `favoriete kroket: ${m.favorieteKroket}` : null,
       m.kroketZonde     ? `grootste zonde: "${m.kroketZonde}"` : null,
       m.motto           ? `motto: "${m.motto}"` : null,
@@ -1335,30 +1575,105 @@ function buildSystemPrompt() {
 // ── AI ─────────────────────────────────────────────────────────────────────────
 
 // Roept Gemini via OpenAI-compatible endpoint. Geeft hetzelfde object terug als Groq.
+// Verzamelt alle beschikbare Gemini-keys: GEMINI_API_KEYS (comma-separated, meerdere projecten)
+// plus de losse GEMINI_API_KEY. Dubbele keys worden ontdubbeld, volgorde blijft behouden.
+function geminiKeys() {
+  const multi = (process.env.GEMINI_API_KEYS || '').split(',').map(s => s.trim()).filter(Boolean);
+  const enkel = process.env.GEMINI_API_KEY ? [process.env.GEMINI_API_KEY.trim()] : [];
+  return [...new Set([...multi, ...enkel])];
+}
+
+// Extra output-budget dat we Gemini meegeven bovenop het gevraagde aantal tokens, zodat de
+// 'low'-reasoning-tokens (die bij Gemini meetellen in max_tokens) de zichtbare output niet opeten.
+const GEMINI_THINK_HEADROOM = 512;
+
+// Per-key cooldown: een sleutel die 429 (quota/rate-limit) geeft slaan we even over, zodat we niet
+// elk bericht opnieuw twee dode round-trips naar Google maken voordat we bij een werkende key zijn.
+// Korte window: is het 'm een dag-quota, dan kost dat hooguit één probe per window; is het een
+// tijdelijke rate-limit, dan komt de key vanzelf snel weer in de rotatie.
+const geminiKeyCooldownTot = new Map();
+const GEMINI_KEY_COOLDOWN_MS = 5 * 60_000;
+
 async function callGemini({ model, messages, max_tokens, temperature }) {
-  if (!process.env.GEMINI_API_KEY) {
+  const keys = geminiKeys();
+  if (keys.length === 0) {
     const err = new Error('GEMINI_API_KEY niet geconfigureerd');
     err.status = 0; err.skip = true;
     throw err;
   }
-  const response = await fetch('https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', {
+
+  // Sla keys over die net 429 gaven (per-key cooldown). Staat álles in cooldown, dan tóch alle
+  // keys proberen — beter een trage poging dan helemaal geen antwoord.
+  const nu = Date.now();
+  const beschikbaar = keys.filter(key => (geminiKeyCooldownTot.get(key) || 0) <= nu);
+  const teProberen = beschikbaar.length > 0 ? beschikbaar : keys;
+
+  let laatsteFout;
+  // Roteer over de keys: bij rate limit/quota (429) of serverfout (5xx) de volgende key proberen.
+  for (let i = 0; i < teProberen.length; i++) {
+    const key = teProberen[i];
+    const nr = keys.indexOf(key) + 1; // origineel sleutelnummer, voor herkenbare logging
+    const response = await fetch('https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${key}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model,
+        messages,
+        // 'low' i.p.v. 'none': een beetje denken houdt Gemini ín karakter (met 'none' viel hij
+        // geregeld uit karakter → die respons werd weggegooid en kostte een quota-call voor niks).
+        // Valkuil: bij Gemini tellen thinking-tokens mee in max_tokens, dus geef output-budget
+        // headroom zodat het denken de zichtbare output niet uithongert (anders lege respons).
+        max_tokens: max_tokens ? max_tokens + GEMINI_THINK_HEADROOM : max_tokens,
+        temperature,
+        reasoning_effort: 'low',
+      }),
+      // Korte timeout: een gratis-tier Gemini die binnen 15s niets teruggeeft komt niet meer;
+      // liever doorrouteren dan per key 60s blokkeren (× keys = minuten → bot onbereikbaar).
+      timeout: 15000,
+    });
+    if (response.ok) {
+      geminiKeyCooldownTot.delete(key); // weer gezond → uit cooldown halen
+      if (nr > 1) console.log(`✓ Gemini via reservesleutel #${nr}`);
+      return await response.json();
+    }
+    const errorText = await response.text();
+    laatsteFout = new Error(`Gemini ${response.status}: ${errorText.substring(0, 200)}`);
+    laatsteFout.status = response.status;
+    // Bij 429 deze key even in cooldown zetten zodat we 'm niet elk bericht opnieuw bevragen.
+    if (response.status === 429) geminiKeyCooldownTot.set(key, Date.now() + GEMINI_KEY_COOLDOWN_MS);
+    // Alleen doorrouteren naar de volgende key bij quota/rate-limit of tijdelijke serverfout.
+    const roteerbaar = response.status === 429 || response.status >= 500;
+    if (!roteerbaar || i === teProberen.length - 1) throw laatsteFout;
+    console.warn(`⚠️ Gemini-sleutel #${nr} gaf ${response.status} — volgende sleutel proberen.`);
+  }
+  throw laatsteFout;
+}
+
+// Generieke caller voor elke OpenAI-compatibele chat-completions API (Cerebras, OpenRouter, ...).
+// Gate op de API-key: ontbreekt die, dan skip (de fallbackketen gaat door naar het volgende model).
+async function callOpenAICompat({ url, apiKey, envNaam, body }) {
+  if (!apiKey) {
+    const err = new Error(`${envNaam} niet geconfigureerd`);
+    err.status = 0; err.skip = true;
+    throw err;
+  }
+  const response = await fetch(url, {
     method: 'POST',
     headers: {
-      'Authorization': `Bearer ${process.env.GEMINI_API_KEY}`,
+      'Authorization': `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({
-      model,
-      messages,
-      max_tokens,
-      temperature,
-      reasoning_effort: 'none', // schakel "thinking" uit zodat alle tokens naar output gaan
-    }),
-    timeout: 60000,
+    body: JSON.stringify(body),
+    // Korte timeout: trage gratis providers (bv. overbelaste OpenRouter-modellen) mogen de
+    // keten niet 60s blokkeren — liever snel doorvallen naar het volgende model.
+    timeout: 20000,
   });
   if (!response.ok) {
     const errorText = await response.text();
-    const err = new Error(`Gemini ${response.status}: ${errorText.substring(0, 200)}`);
+    const err = new Error(`${envNaam} ${response.status}: ${errorText.substring(0, 200)}`);
     err.status = response.status;
     throw err;
   }
@@ -1366,6 +1681,15 @@ async function callGemini({ model, messages, max_tokens, temperature }) {
 }
 
 // ── Karakter-validatie & prompt-injectie detectie ─────────────────────────────
+
+// Detecteert of een tekst grotendeels in hoofdletters is (zoals 8B-model output)
+function isHoofdletterSpam(tekst) {
+  if (!tekst || tekst.length < 30) return false;
+  const letters = tekst.replace(/[^a-zA-Z]/g, '');
+  if (letters.length < 20) return false;
+  const hoofdletters = letters.replace(/[^A-Z]/g, '').length;
+  return (hoofdletters / letters.length) > 0.65; // meer dan 65% hoofdletters = fout
+}
 
 // Detecteert responses waarbij de AI uit karakter valt.
 const UIT_KARAKTER_PATRONEN = [
@@ -1397,6 +1721,22 @@ const UIT_KARAKTER_PATRONEN = [
   /dit verdient nadere overweging/i,
   /de raad bestudeert de zaak/i,
   /\bzal dit niet vergeten\b/i,
+  // Bot die puntenstanden of toekenningen verzint — nooit toegestaan
+  /het systeem heeft.*punt.*toegekend/i,
+  /systeem.*bevestigt.*punt/i,
+  /kroketpuntstand is nu/i,
+  /uw.*stand is nu.*punt/i,
+  /heeft u.*\d+.*kroketpunt/i,
+  /\bpunten? vergeven\b/i,
+];
+
+// Patronen die detecteren dat de Kroket God te ver gaat met het Gepanneerde Rijk-thema.
+// Worden direct afgevangen met een eigen fallback — niet opnieuw geprobeerd via een ander model.
+const RIJKSGRENS_PATRONEN = [
+  /concentratie(kamp|ruimte|veld|zone)/i,
+  /\b(genocide|uitroei|massamoord|vergassing|gaskamer)\b/i,
+  /\b(holocaust|shoah|jodenvervolging)\b/i,
+  /\b(folter|marteling|executie)\b/i,
 ];
 
 // Detecteert prompt-injectie in de INPUT — iemand die probeert het karakter te overschrijven.
@@ -1436,9 +1776,22 @@ const KARAKTER_FALLBACK = [
   '> Gebod I: De kroket wacht op niemand. Niet op u. Niet op de Raad.\n\n— De Almachtige Kroket God',
 ];
 
+// Specifieke fallback als de Kroket God te ver dreigt te gaan met het Gepanneerde Rijk
+const RIJKSGRENS_FALLBACK = [
+  '> De archieven van het Gepanneerde Rijk zijn geclassificeerd. De Kroket God leest ze niet hardop voor.\n\n— De Almachtige Kroket God',
+  '> Het Rijk kent zijn grenzen. De Kroket God ook.\n\n— De Almachtige Kroket God',
+  '> Sommige bladzijden van de rijksgeschiedenis blijven dicht. De mosterd staat open.\n\n— De Almachtige Kroket God',
+];
+
 function isUitKarakter(tekst) {
   if (!tekst) return false;
+  if (isHoofdletterSpam(tekst)) return true;
   return UIT_KARAKTER_PATRONEN.some(p => p.test(tekst));
+}
+
+function isRijksgrensOvertreding(tekst) {
+  if (!tekst) return false;
+  return RIJKSGRENS_PATRONEN.some(p => p.test(tekst));
 }
 
 function isPromptInjectie(tekst) {
@@ -1450,9 +1803,10 @@ function willekeurigeInjectieAfwijzing() {
   return INJECTIE_AFWIJZINGEN[Math.floor(Math.random() * INJECTIE_AFWIJZINGEN.length)];
 }
 
-async function kroketResponse(prompt, maxTokens = 400, metContext = true) {
+// niveau: 'slim' (default, volledige keten) of 'licht' (sla Gemini/Cerebras over voor simpele taken).
+async function kroketResponse(prompt, maxTokens = 400, metContext = true, niveau = 'slim') {
   const systemPrompt = metContext
-    ? buildSystemPrompt() + buildContextString()
+    ? buildSystemPrompt() + buildContextString(prompt)
     : buildSystemPrompt();
 
   const berichten = [
@@ -1460,69 +1814,186 @@ async function kroketResponse(prompt, maxTokens = 400, metContext = true) {
     { role: 'user',   content: prompt },
   ];
 
-  // Volgorde: Gemini (best, gratis ruim) → Groq 70B (backup) → Groq 8B (noodgreep)
+  return _draaiModellen(berichten, maxTokens, niveau);
+}
+
+// Multi-turn variant: krijgt een volledige conversatiegeschiedenis mee (echte user/assistant
+// beurten) i.p.v. één losse prompt, zodat de Kroket God de draad van het gesprek vasthoudt.
+// `history` = array van { role: 'user'|'assistant', content }, chronologisch (nieuwste laatst).
+async function kroketConversatie(history, { maxTokens = 400, systemExtra = '', niveau = 'slim' } = {}) {
+  // Kennisbank-verrijking behouden op basis van het laatste menselijke bericht.
+  const laatsteUser = [...history].reverse().find(b => b.role === 'user');
+  const kennis = laatsteUser ? getRelevantKennis(laatsteUser.content, 5) : '';
+  const kennisBlok = kennis
+    ? `\n\nKennisbank — wat de Kroket God eerder heeft meegemaakt (refereer hier aan als relevant, dwing niet op):\n${kennis}`
+    : '';
+
+  const systemPrompt = buildSystemPrompt()
+    + (systemExtra ? `\n\n${systemExtra}` : '')
+    + kennisBlok;
+
+  const berichten = [
+    { role: 'system', content: systemPrompt },
+    ...history,
+  ];
+
+  return _draaiModellen(berichten, maxTokens, niveau);
+}
+
+// Dispatcht één chat-completion naar de juiste provider. Alle providers zijn OpenAI-compatibel,
+// dus `opts` ({ model, messages, max_tokens, temperature }) gaat ongewijzigd door.
+async function roepModelAan(provider, opts) {
+  switch (provider) {
+    case 'gemini':   return callGemini(opts);
+    case 'groq':     return groq.chat.completions.create(opts);
+    case 'cerebras': return callOpenAICompat({
+      url: 'https://api.cerebras.ai/v1/chat/completions',
+      apiKey: process.env.CEREBRAS_API_KEY, envNaam: 'CEREBRAS_API_KEY',
+      // gpt-oss-120b is een reasoning-model; 'low' houdt het snel (~350ms) zonder dat het
+      // tokenbudget aan "denken" opgaat, met behoud van volledige in-karakter output.
+      body: { ...opts, reasoning_effort: 'low' },
+    });
+    case 'openrouter': return callOpenAICompat({
+      url: 'https://openrouter.ai/api/v1/chat/completions',
+      apiKey: process.env.OPENROUTER_API_KEY, envNaam: 'OPENROUTER_API_KEY', body: opts,
+    });
+    case 'sambanova': return callOpenAICompat({
+      url: 'https://api.sambanova.ai/v1/chat/completions',
+      apiKey: process.env.SAMBANOVA_API_KEY, envNaam: 'SAMBANOVA_API_KEY', body: opts,
+    });
+    case 'cloudflare': return callOpenAICompat({
+      // Cloudflare Workers AI: account-ID zit in de URL, API-token is de Bearer-key.
+      url: `https://api.cloudflare.com/client/v4/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}/ai/v1/chat/completions`,
+      apiKey: process.env.CLOUDFLARE_API_TOKEN, envNaam: 'CLOUDFLARE_API_TOKEN', body: opts,
+    });
+    default: throw new Error(`Onbekende provider: ${provider}`);
+  }
+}
+
+// Korte cooldown per provider na een 429 (rate limit). Zolang een provider in cooldown staat,
+// slaat de keten hem over i.p.v. er elk bericht opnieuw een trage round-trip op te wachten.
+// De laatste schakel wordt nooit overgeslagen, zodat er altijd een poging tot antwoord is.
+const providerCooldownTot = new Map();
+const PROVIDER_COOLDOWN_MS = 45_000;
+
+// Niveau bepaalt welke modellen meedoen, zodat simpele taken de schaarse slimme quota niet opmaken:
+//   'slim'  (default) → volledige keten, beste kwaliteit (gespreksreacties, vonnissen, comebacks).
+//   'licht'           → sla de zware/schaarse modellen (Gemini, Cerebras) over; gebruik alleen de
+//                       lichtere modellen voor formulematige taken (zegens, begroetingen, bevestigingen).
+// Elk model heeft een `tier`: 'zwaar' = slim+schaars, 'middel' = degelijk, 'licht' = snel+dom.
+async function _draaiModellen(berichten, maxTokens = 400, niveau = 'slim') {
+  // Slimme modellen eerst, allemaal gratis tiers. Volgorde:
+  // Gemini 2.5 Flash → Cerebras → SambaNova 70B → Groq 70B → Cloudflare 70B → OpenRouter
+  // → Groq 8B-instant (dom laatste redmiddel, eigen quota-bucket).
+  // SambaNova en Cloudflare zijn extra gratis dag-buckets (juni 2026) — env-gated, dus inert
+  // tot hun keys in .env staan: SAMBANOVA_API_KEY resp. CLOUDFLARE_ACCOUNT_ID + CLOUDFLARE_API_TOKEN.
+  // Elke schakel is env-gated: zonder API-key wordt hij eruit gefilterd, zodat de laatste
+  // schakel altijd echt beschikbaar is. Model-ID's zijn overschrijfbaar via env i.v.m. churn.
   const modellen = [
     {
       provider: 'gemini',
       naam: 'gemini-2.5-flash',
       temp: 1.1,
       tokens: maxTokens,
-      msgs: () => berichten,
+      tier: 'zwaar',
+      beschikbaar: geminiKeys().length > 0,
+    },
+    {
+      provider: 'cerebras',
+      naam: process.env.CEREBRAS_MODEL || 'gpt-oss-120b',
+      temp: 1.0,
+      tokens: maxTokens,
+      tier: 'zwaar',
+      beschikbaar: !!process.env.CEREBRAS_API_KEY,
+    },
+    {
+      // SambaNova Cloud: snel Llama-3.3-70B op een eigen gratis dag-bucket. Slim werkpaard,
+      // tier 'middel' zodat ook lichte taken hierop kunnen vallen (spreidt de last).
+      provider: 'sambanova',
+      naam: process.env.SAMBANOVA_MODEL || 'Meta-Llama-3.3-70B-Instruct',
+      temp: 1.1,
+      tokens: maxTokens,
+      tier: 'middel',
+      beschikbaar: !!process.env.SAMBANOVA_API_KEY,
     },
     {
       provider: 'groq',
       naam: 'llama-3.3-70b-versatile',
       temp: 1.2,
       tokens: maxTokens,
-      msgs: () => berichten,
+      tier: 'middel',
+      beschikbaar: !!process.env.GROQ_API_KEY,
     },
     {
+      // Cloudflare Workers AI: 10.000 neurons/dag gratis, eigen infra/bucket. Gate op account-ID
+      // én token (account-ID zit in de URL). Llama-3.3-70B fp8-fast.
+      provider: 'cloudflare',
+      naam: process.env.CLOUDFLARE_MODEL || '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
+      temp: 1.1,
+      tokens: maxTokens,
+      tier: 'middel',
+      beschikbaar: !!(process.env.CLOUDFLARE_ACCOUNT_ID && process.env.CLOUDFLARE_API_TOKEN),
+    },
+    {
+      provider: 'openrouter',
+      naam: process.env.OPENROUTER_MODEL || 'openrouter/free',
+      temp: 1.0,
+      tokens: maxTokens,
+      tier: 'middel',
+      beschikbaar: !!process.env.OPENROUTER_API_KEY,
+    },
+    {
+      // Laatste redmiddel: dommer maar robuust. Groq's rate limits zijn PER MODEL, dus 8b-instant
+      // heeft een eigen dag-quota los van de 70b hierboven — als álle slimme modellen op zijn is
+      // deze vaak nog beschikbaar. Liever een simpel antwoord dan de statische "spoedberaad".
       provider: 'groq',
       naam: 'llama-3.1-8b-instant',
-      temp: 0.8,
-      tokens: Math.min(maxTokens, 300),
-      msgs: () => {
-        const alleleden = loadMembers();
-        const ledenLijst = Object.values(alleleden).map(m => m.bijnaam).join(', ');
-        return [
-          {
-            role: 'system',
-            content: `Jij bent de Kroket God — gezaghebbend, formeel, droog grappig. Reageer in correct Nederlands, maximaal 4 zinnen. Gebruik alleen bestaande Nederlandse woorden.
-
-REGELS:
-- Spreek mensen aan met "u/uw" (nooit "je/jij")
-- Onderteken ALTIJD met "— De Almachtige Kroket God"
-- Gebruik :lekker_kroketje: als kroket-emoji
-- Begin met een cursieve inleidingszin: _[naam] [parafrase]._ — gebruik daarin EXACT de naam uit het verzoek
-- Wees concreet. Geen vage zinnen.
-- Vermeld NOOIT zelf kroketpunten toe te hebben gekend of afgenomen tenzij het verzoek dit expliciet vraagt.
-
-BEKENDE LEDEN — gebruik UITSLUITEND deze exacte namen, nooit voornamen, nooit variaties:
-${ledenLijst}`,
-          },
-          berichten[berichten.length - 1],
-        ];
-      },
+      temp: 1.15,
+      tokens: maxTokens,
+      tier: 'licht',
+      beschikbaar: !!process.env.GROQ_API_KEY,
     },
-  ];
+  ]
+    // Lichte taken slaan de schaarse zware modellen (Gemini/Cerebras) over en gebruiken alleen
+    // de lichtere schakels. GROQ_API_KEY is verplicht, dus er blijft altijd minstens Groq over.
+    .filter(m => niveau === 'slim' || m.tier !== 'zwaar')
+    .filter(m => m.beschikbaar);
+
+  // Globale deadline: één bericht mag nooit eindeloos alle providers aflopen (anders stapelen
+  // trage requests op en wordt de bot onbereikbaar). Na KETEN_DEADLINE_MS stoppen we met nieuwe
+  // schakels en vallen we terug op de statische fallback — behalve de laatste (snelle, goedkope)
+  // schakel, die proberen we altijd nog één keer.
+  const KETEN_DEADLINE_MS = 35_000;
+  const deadline = Date.now() + KETEN_DEADLINE_MS;
 
   let laatsteFout;
   for (let i = 0; i < modellen.length; i++) {
     const model = modellen[i];
+    const isLaatsteModel = i === modellen.length - 1;
+    // Sla een net-ge429'de provider over (behalve de laatste schakel — die proberen we altijd).
+    if (!isLaatsteModel && Date.now() < (providerCooldownTot.get(model.provider) || 0)) {
+      continue;
+    }
+    // Deadline overschreden? Sla resterende schakels over (behalve de laatste) en bail naar fallback.
+    if (!isLaatsteModel && Date.now() > deadline) {
+      console.warn('⚠️ Keten-deadline overschreden — stop met verdere providers, fallback.');
+      continue;
+    }
     let laatste;
     try {
-      const msgs = model.msgs();
+      const msgs = berichten;
       for (let poging = 1; poging <= 2; poging++) {
         const pogingTokens = poging === 1 ? model.tokens : model.tokens * 2;
         const opts = { model: model.naam, max_tokens: pogingTokens, temperature: model.temp, messages: msgs };
-        laatste = model.provider === 'gemini'
-          ? await callGemini(opts)
-          : await groq.chat.completions.create(opts);
+        laatste = await roepModelAan(model.provider, opts);
         const keuze = laatste.choices[0];
         if (keuze.finish_reason !== 'length') {
           const inhoud = keuze.message.content;
+          if (isRijksgrensOvertreding(inhoud)) {
+            console.warn(`⚠️ Rijksgrens overschreden (${model.naam}) — rijksfallback.`);
+            return RIJKSGRENS_FALLBACK[Math.floor(Math.random() * RIJKSGRENS_FALLBACK.length)];
+          }
           if (isUitKarakter(inhoud)) {
-            const isLaatsteModel = i === modellen.length - 1;
             console.warn(`⚠️ Uit-karakter respons gedetecteerd (${model.naam}) — ${isLaatsteModel ? 'statisch fallback' : 'volgend model'}.`);
             if (!isLaatsteModel) break; // probeer volgend model
             return KARAKTER_FALLBACK[Math.floor(Math.random() * KARAKTER_FALLBACK.length)];
@@ -1535,8 +2006,9 @@ ${ledenLijst}`,
       return laatste.choices[0].message.content;
     } catch (error) {
       laatsteFout = error;
-      const isLaatste = i === modellen.length - 1;
-      if (!isLaatste) {
+      // Bij rate limit (429): zet deze provider even in cooldown zodat de keten hem overslaat.
+      if (error?.status === 429) providerCooldownTot.set(model.provider, Date.now() + PROVIDER_COOLDOWN_MS);
+      if (!isLaatsteModel) {
         // Altijd doorgaan naar het volgende model — rate limits, netwerk, timeouts, alles
         console.warn(`⚠️ ${model.naam} faalde (${error?.status || error?.message || 'onbekend'}), fallback naar volgende model.`);
         continue;
@@ -1632,8 +2104,14 @@ async function postToChannel(client, channelId, text, options = {}) {
   if (options.thread_ts) payload.thread_ts = options.thread_ts;
   // Stuur via de rate limiter — voorkomt 429-errors bij burst van berichten
   await slackLimiter.schedule(() => client.chat.postMessage(payload));
-  // Bot-berichten worden NIET in de context opgeslagen — alleen mensberichten geven
-  // de AI bruikbare gesprekscontext. Bot-berichten domineerden anders het geheugen.
+  // Log de eigen reactie in de gespreksgeschiedenis, zodat de AI bij het volgende bericht
+  // weet wat hij zelf zei en de draad van het gesprek vasthoudt.
+  // Max 300 tekens — ruim genoeg om de vorige beurt intact te houden zonder het geheugen
+  // helemaal te laten domineren.
+  if (channelId === process.env.SLACK_CHANNEL_ID && !options.thread_ts) {
+    const samenvatting = gefilterd.replace(/^>\s*/gm, '').replace(/\n+/g, ' ').trim().substring(0, 300);
+    if (samenvatting) logBericht('Kroket God', samenvatting);
+  }
 }
 
 // ── Beeld genereren ────────────────────────────────────────────────────────────
@@ -1727,10 +2205,13 @@ OUTPUT: Return ONLY the image prompt as plain text. No quotes, no explanation.`,
   let buffer;
   let mimeType = 'image/png';
 
-  // ── Primair: Gemini 2.0 Flash image generation ────────────────────────────────
-  if (process.env.GEMINI_API_KEY) {
+  // ── Primair: Gemini 2.0 Flash image generation (roteert over álle Gemini-keys) ──
+  // Gebruikt dezelfde key-pool als de tekst-keten (geminiKeys()), dus profiteert nu ook van
+  // rotatie bij 429/quota i.p.v. één vaste key.
+  for (const key of geminiKeys()) {
+    if (buffer) break;
     try {
-      const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-preview-image-generation:generateContent?key=${process.env.GEMINI_API_KEY}`;
+      const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-preview-image-generation:generateContent?key=${key}`;
       const resp = await fetch(geminiUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1738,7 +2219,8 @@ OUTPUT: Return ONLY the image prompt as plain text. No quotes, no explanation.`,
           contents: [{ parts: [{ text: beeldPrompt }] }],
           generationConfig: { responseModalities: ['IMAGE', 'TEXT'] },
         }),
-        timeout: 90000,
+        // 45s per key (× keys door de rotatie) — bound de totale wachttijd op beeldgeneratie.
+        timeout: 45000,
       });
       if (resp.ok) {
         const data = await resp.json();
@@ -1750,10 +2232,13 @@ OUTPUT: Return ONLY the image prompt as plain text. No quotes, no explanation.`,
           console.log(`✅ Gemini beeld gegenereerd (${mimeType}, ${Math.round(buffer.length / 1024)} KB)`);
         } else {
           console.warn('⚠️ Gemini image: geen inlineData in antwoord', JSON.stringify(data).substring(0, 300));
+          break; // geldige respons zonder beeld — een andere key helpt niet
         }
       } else {
         const errText = await resp.text();
-        console.warn(`⚠️ Gemini image ${resp.status}: ${errText.substring(0, 300)}`);
+        console.warn(`⚠️ Gemini image ${resp.status}: ${errText.substring(0, 200)}`);
+        // Alleen bij quota/rate-limit of serverfout de volgende key proberen; anders stoppen.
+        if (!(resp.status === 429 || resp.status >= 500)) break;
       }
     } catch (err) {
       console.warn('⚠️ Gemini image fout:', err.message);
@@ -1866,67 +2351,7 @@ async function controleerVerlopenBan(client, userId) {
   return true;
 }
 
-// ── Voedingsfoto-reactie ───────────────────────────────────────────────────────
-// Gebruikt Gemini Vision om te beoordelen of er eten op een gepost beeld staat,
-// en reageert in karakter als de Kroket God.
-
-async function reageerOpVoedingsFoto(client, channelId, userId, bijnaam, file) {
-  try {
-    if (!process.env.GEMINI_API_KEY) return;
-
-    // Haal de private URL op via Slack API
-    const fileInfo = await client.files.info({ file: file.id });
-    const imageUrl = fileInfo.file?.url_private;
-    if (!imageUrl) return;
-
-    // Download met Slack-token
-    const imgResp = await fetch(imageUrl, {
-      headers: { 'Authorization': `Bearer ${process.env.SLACK_BOT_TOKEN}` },
-      timeout: 15000,
-    });
-    if (!imgResp.ok) return;
-    const imgBuffer = await imgResp.buffer();
-    const base64Image = imgBuffer.toString('base64');
-    const mimeType = file.mimetype || 'image/jpeg';
-
-    // Gemini Vision: is er eten?
-    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${process.env.GEMINI_API_KEY}`;
-    const visionResp = await fetch(geminiUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{
-          parts: [
-            { text: 'Is er eten of drinken zichtbaar op deze afbeelding? Zo ja: beschrijf het in één korte zin in het Nederlands (noem specifiek het soort eten). Zo nee: antwoord exact "GEEN ETEN".' },
-            { inlineData: { mimeType, data: base64Image } },
-          ],
-        }],
-      }),
-      timeout: 30000,
-    });
-    if (!visionResp.ok) return;
-    const visionData = await visionResp.json();
-    const beschrijving = visionData.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
-    if (!beschrijving || beschrijving.toUpperCase().includes('GEEN ETEN')) return;
-
-    const isKroket   = /kroket|bitterbal|frikandel|friet|snack|frituur|ragout|paneer/i.test(beschrijving);
-    const isVerboden = /magnetron|airfryer|air fryer|salade|muesli|yoghurt|smoothie|quinoa|avocado/i.test(beschrijving);
-
-    const prompt = isKroket
-      ? `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} heeft een foto gepost van: ${beschrijving}. ` +
-        `Een heilig moment — kroket-gerelateerd voedsel is gespot. Reageer met een plechtige zegen. Max 2 zinnen. Geen inleidingszin.`
-      : isVerboden
-      ? `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} heeft een foto gepost van: ${beschrijving}. ` +
-        `Dit is een flagrante schending van de snackleer. Reageer met gepaste afschuw. Max 2 zinnen. Geen inleidingszin.`
-      : `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} heeft een foto gepost van: ${beschrijving}. ` +
-        `Beoordeel dit eten vanuit de snackleer — is het acceptabel, verdacht of ronduit zorgwekkend? Max 2 zinnen. Geen inleidingszin.`;
-
-    const tekst = await kroketResponse(prompt, 200, false);
-    await postToChannel(client, channelId, tekst);
-  } catch (err) {
-    console.error('Fout bij voedingsfoto-reactie:', err);
-  }
-}
+// (Voedingsfoto-reactie verwijderd: de Kroket God reageert alleen nog op directe @-mentions.)
 
 // ── Aanmeld modal ──────────────────────────────────────────────────────────────
 
@@ -2051,60 +2476,154 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
       return;
     }
 
+    // Kennisbank — handmatig iets onthouden (admin) of inzien (iedereen)
+    // Quiz — admin commando's
+    if (input === 'quiz starten' && command.user_id === 'U08ALFNQB1V') {
+      await respond({ text: '🧠 Quiz wordt gegenereerd...', response_type: 'ephemeral' });
+      try { await genereerEnPostQuiz(client); }
+      catch (err) { await respond({ text: `❌ ${err.message}`, response_type: 'ephemeral' }); }
+      return;
+    }
+
+    if (input === 'quiz onthul' && command.user_id === 'U08ALFNQB1V') {
+      await respond({ text: '📖 Antwoord wordt onthuld...', response_type: 'ephemeral' });
+      try { await onthulQuiz(client); }
+      catch (err) { await respond({ text: `❌ ${err.message}`, response_type: 'ephemeral' }); }
+      return;
+    }
+
+    // Kroket van de dag — handmatig triggeren (admin)
+    if (input === 'kroket-van-de-dag' && command.user_id === 'U08ALFNQB1V') {
+      await respond({ text: '🥖 Kroket van de dag wordt gegenereerd...', response_type: 'ephemeral' });
+      try { await voerKroketVanDeDagUit(client); }
+      catch (err) { await respond({ text: `❌ Fout: ${err.message}`, response_type: 'ephemeral' }); }
+      return;
+    }
+
+    if (input.startsWith('onthoud ') && command.user_id === 'U08ALFNQB1V') {
+      const tekst = input.replace(/^onthoud\s+/i, '').trim();
+      if (!tekst) { await respond({ text: 'Geef een tekst mee na `onthoud`.', response_type: 'ephemeral' }); return; }
+      voegKennisToe('handmatig', tekst, null);
+      await respond({ text: `✅ Opgeslagen in kennisbank: _"${tekst}"_`, response_type: 'ephemeral' });
+      return;
+    }
+
+    if (input.startsWith('vergeet ') && command.user_id === 'U08ALFNQB1V') {
+      const zoekterm = input.replace(/^vergeet\s+/i, '').trim().toLowerCase();
+      const bank = loadKennisbank();
+      const voor = bank.length;
+      const gefilterd = bank.filter(e =>
+        !`${e.onderwerp || ''} ${e.inhoud}`.toLowerCase().includes(zoekterm)
+      );
+      saveKennisbank(gefilterd);
+      const verwijderd = voor - gefilterd.length;
+      await respond({ text: `🗑️ ${verwijderd} kennisbank-entr${verwijderd === 1 ? 'y' : 'ies'} verwijderd die "${zoekterm}" bevatten.`, response_type: 'ephemeral' });
+      return;
+    }
+
+    if (input === 'kennisbank' && command.user_id === 'U08ALFNQB1V') {
+      const bank = loadKennisbank();
+      if (bank.length === 0) { await respond({ text: 'De kennisbank is leeg.', response_type: 'ephemeral' }); return; }
+      const regels = [...bank].reverse().slice(0, 30).map(e => {
+        const datum = new Date(e.ts).toLocaleDateString('nl-NL');
+        return `• [${e.type}] ${e.onderwerp ? '*' + e.onderwerp + '*: ' : ''}${e.inhoud} _(${datum})_`;
+      });
+      await respond({ text: `📚 *Kennisbank (laatste ${regels.length} van ${bank.length})*\n${regels.join('\n')}`, response_type: 'ephemeral' });
+      return;
+    }
+
+    // Rolwissel — admin-only: ken een nieuwe rol toe en laat de Kroket God het plechtig aankondigen
+    if (input.startsWith('rolwissel') && command.user_id === 'U08ALFNQB1V') {
+      // Syntax: rolwissel [naam] | [nieuwe rol]  (pipe als scheidingsteken)
+      const delen = input.replace(/^rolwissel\s*/i, '').split('|');
+      if (delen.length < 2) {
+        await respond({ text: 'Syntax: `rolwissel [naam] | [nieuwe rol]`', response_type: 'ephemeral' });
+        return;
+      }
+      const zoekNaam = delen[0].trim().toLowerCase();
+      const nieuweRol = delen[1].trim();
+      const members = loadMembers();
+      const entry = Object.entries(members).find(([, m]) =>
+        m.bijnaam.toLowerCase().includes(zoekNaam) || m.voornaam?.toLowerCase() === zoekNaam
+      );
+      if (!entry) {
+        await respond({ text: `Lid "${zoekNaam}" niet gevonden.`, response_type: 'ephemeral' });
+        return;
+      }
+      const [userId, lid] = entry;
+      const oudeRol = lid.rol || 'onbekende functie';
+      lid.rol = nieuweRol;
+      lid.rolSinds = new Date().toISOString().slice(0, 10);
+      saveMembers(members);
+      _systemPromptCache = { key: null, value: null };
+      voegKennisToe('rolwissel', `${lid.bijnaam} wisselde van rol: "${oudeRol}" → "${nieuweRol}"`, lid.bijnaam);
+      const aankondigingPrompt = `Geen inleidingszin. Kondig plechtig aan dat ${lid.bijnaam} van rol is gewisseld. Oude rol: "${oudeRol}". Nieuwe rol: "${nieuweRol}". Geef dit gewicht — dit is een officieel decreet van de Hoge Frituurraad. Één alinea, scherp en in karakter. Geen uitleg waarom, alleen de aankondiging als vaststaand feit.`;
+      const tekst = schoonOutput(await kroketResponse(aankondigingPrompt, 250, false));
+      await client.chat.postMessage({ channel: command.channel_id, text: tekst });
+      return;
+    }
+
     // Geheime prompts — volledig register van alle commando's
     if (input === 'kroketprompts') {
       // ── REGISTER VAN GEHEIME COMMANDO'S ──────────────────────────────────────
       // Voeg nieuwe commando's hier toe — kroketprompts-lijst wordt automatisch opgebouwd
       const GEHEIME_COMMANDO_S = [
-        { categorie: '📊 Scores & leden — leest/schrijft database' },
-        { cmd: 'ranglijst',                    uitleg: 'scorebord uit scores.json' },
-        { cmd: 'status',                       uitleg: 'leden, scores, bans, allianties — alles live' },
-        { cmd: 'dossier [naam]',               uitleg: 'kroket-CV: punten, streak, bans, achievements, motto' },
-        { cmd: 'streaks',                      uitleg: 'vrijdag-deelnamestreaks met records' },
-        { cmd: 'stem [naam]',                  uitleg: 'stem op Held van de Week — 1x per week, opgeslagen' },
-        { cmd: 'eer [naam] (voor [reden])',     uitleg: '1–2 punten toekennen — 50% kans bonuspunt voor alliantie-partner' },
-        { cmd: 'zondebok',                     uitleg: '−1 punt bij willekeurig lid — willekeurig geselecteerd' },
-        { cmd: 'weekoverzicht',                uitleg: 'dramatisch overzicht van opgeslagen weekevents' },
+        { categorie: '📊 De Hoge Frituurraad' },
+        { cmd: 'ranglijst',                    uitleg: 'wie staat waar in de goddelijke hiërarchie' },
+        { cmd: 'status',                       uitleg: 'de volledige staat van het Rijk — leden, verbanden, ballingen' },
+        { cmd: 'dossier [naam]',               uitleg: 'het volledige kroket-archief van een volgeling' },
+        { cmd: 'streaks',                      uitleg: 'wie verschijnt trouw op het heilige vrijdagmoment' },
+        { cmd: 'stem [naam]',                  uitleg: 'wijs de Held van de Week aan — één stem, één keer' },
+        { cmd: 'eer [naam] (voor [reden])',     uitleg: 'betuig eer aan een volgeling — de Frituurraad kent de gevolgen' },
+        { cmd: 'zondebok',                     uitleg: 'de Raad wijst iemand aan — wie dat is, weet u van tevoren niet' },
+        { cmd: 'weekoverzicht',                uitleg: 'wat de Hoge Frituurraad deze week heeft bijgehouden' },
 
-        { categorie: '⚖️ Recht & orde — wijzigt bans' },
-        { cmd: 'gelekaart [naam] [reden]',     uitleg: 'formele waarschuwing — 2e overtreding = ban (4→8→24→48u escalatie)' },
-        { cmd: 'begenade [naam]',              uitleg: 'ban direct opheffen' },
-        { cmd: 'beroep [smoes]',               uitleg: '20% kans vrij (35% met alliantie) — 80% extra vernedering, 1x per ban' },
-        { cmd: 'uitbreken',                    uitleg: '20% ontsnapping — 80% ban +1u — max 1x/uur cooldown' },
-        { cmd: 'klacht [naam] [beschrijving]', uitleg: 'anonieme aanklacht — 15% kans dat jij ontmaskerd wordt' },
-        { cmd: 'meld [naam]',                  uitleg: 'meldt iemand — willekeurige factie toegewezen' },
-        { cmd: 'rechtbank [naam] vs [naam]',   uitleg: 'beide leden opgezocht en als partijen behandeld' },
+        { categorie: '⚖️ Recht & orde' },
+        { cmd: 'gelekaart [naam] [reden]',     uitleg: 'een formele waarschuwing — de Raad onthoudt alles' },
+        { cmd: 'begenade [naam]',              uitleg: 'de Kroket God verleent gratie — zelden, maar het bestaat' },
+        { cmd: 'beroep [smoes]',               uitleg: 'vraag herziening van uw vonnis — de uitkomst is onbekend' },
+        { cmd: 'uitbreken',                    uitleg: 'probeer het ballingschap te verlaten — risico\'s zijn voor eigen rekening' },
+        { cmd: 'klacht [naam] [beschrijving]', uitleg: 'dien anoniem een aanklacht in — anonimiteit is niet gegarandeerd' },
+        { cmd: 'meld [naam]',                  uitleg: 'meld een verdachte bij de Frituurraad' },
+        { cmd: 'rechtbank [naam] vs [naam]',   uitleg: 'breng twee volgelingen voor de rechtbank — de Kroket God oordeelt' },
 
-        { categorie: '⚔️ Allianties — lees/schrijft allianties.json' },
-        { cmd: 'alliantie [naam]',             uitleg: 'sluit verbond: gedeelde eer, pact-bescherming, alliantie-vonnis' },
-        { cmd: 'alliantie verbreek',           uitleg: 'beëindig huidig verbond' },
-        { cmd: 'alliantie overzicht',          uitleg: 'alle actieve verbonden' },
+        { categorie: '⚔️ Allianties' },
+        { cmd: 'alliantie [naam]',             uitleg: 'sluit een heilig verbond met een andere volgeling' },
+        { cmd: 'alliantie verbreek',           uitleg: 'verbreek het verbond — dit wordt niet vergeten' },
+        { cmd: 'alliantie overzicht',          uitleg: 'bekijk alle actieve verbonden in het Rijk' },
 
-        { categorie: '🌍 Externe API\'s — haalt echte data op' },
-        { cmd: 'weer',                         uitleg: 'Open-Meteo + wttr.in: temp, wind, neerslag, zonsopkomst, maanfase' },
-        { cmd: 'feitje',                       uitleg: 'Wikipedia NL (40%) / Useless Facts (15%) / AI (45%)' },
-        { cmd: 'mop',                          uitleg: 'JokeAPI — onvertaald' },
-        { cmd: 'quiz',                         uitleg: 'Open Trivia Database — 4 opties, antwoord na 30 seconden' },
-        { cmd: 'advies',                       uitleg: 'Advice Slip API — als goddelijk decreet' },
-        { cmd: 'bs',                           uitleg: 'Corporate BS Generator — als heilige openbaring' },
-        { cmd: 'orakel [vraag]',               uitleg: 'cryptisch antwoord — 40% gebaseerd op Advice Slip API' },
-        { cmd: 'frituur [beschrijving]',       uitleg: 'Gemini image generation — willekeurige kunststijl' },
+        { categorie: '🌍 Goddelijke kennis' },
+        { cmd: 'weer',                         uitleg: 'de Kroket God raadpleegt de elementen' },
+        { cmd: 'feitje',                       uitleg: 'een feit uit de archieven — herkomst varieert' },
+        { cmd: 'mop',                          uitleg: 'de Frituurraad heeft humor. Soms.' },
+        { cmd: 'quiz',                         uitleg: 'vier keuzes, één waarheid — bewijs uw snackwijsheid' },
+        { cmd: 'advies',                       uitleg: 'goddelijk advies voor aardse problemen' },
+        { cmd: 'bs',                           uitleg: 'een heilige openbaring in managementtaal' },
+        { cmd: 'orakel [vraag]',               uitleg: 'stel een vraag — het antwoord is zelden direct' },
+        { cmd: 'frituur [beschrijving]',       uitleg: 'de Kroket God visualiseert uw verzoek' },
 
-        { categorie: '🔢 Berekeningen & opgeslagen data' },
-        { cmd: 'hoelang',                      uitleg: 'wiskundige aftelling tot vrijdag 12:00 in creatieve eenheden' },
-        { cmd: 'vrijdag',                      uitleg: 'countdown of viering — berekend op basis van klok' },
-        { cmd: 'slachtoffer',                  uitleg: 'score-gewogen willekeurige selectie uit ledenbestand' },
-        { cmd: 'gebod [1-10]',                 uitleg: 'leest gebod uit geboden.txt' },
-        { cmd: 'biecht [zonde]',               uitleg: 'openbare of privé (DM) — wordt gelogd in weekgebeurtenissen' },
-        { cmd: 'horoscoop [naam]',             uitleg: 'lid opgezocht in members.json voor persoonlijke reactie' },
-        { cmd: 'straf [naam]',                 uitleg: 'lid of buitenstaander opgezocht en aangesproken bij naam' },
-        { cmd: 'bekeer [naam]',                uitleg: 'controleert of naam al lid is voor gepaste reactie' },
-        { cmd: 'canoniseer [naam]',            uitleg: 'lid opgezocht — heiligendag, daad en patronaat gegenereerd' },
-        { cmd: 'geef [naam] een kroket-therapiesessie', uitleg: 'lid opgezocht — diagnose, behandelplan, prognose' },
-        { cmd: 'onthul de naam van mijn spirit-kroket', uitleg: 'willekeurige selectie uit lijst van 10 kroketvarianten' },
-        { cmd: 'complot',                uitleg: 'koppelt recente berichten aan complottheorie + verdachtheidsscores (driften bij elke aanroep)' },
-        { cmd: 'missie',                 uitleg: 'status van jouw actieve missie + voortgang — cryptisch als er geen missie is' },
-        { cmd: 'missie starten',         uitleg: '(admin) wijs een stille missie toe aan willekeurig lid + alliantie-partner' },
+        { categorie: '🔮 Rituelen & mysteriën' },
+        { cmd: 'hoelang',                      uitleg: 'hoever is het heilige vrijdagmoment nog' },
+        { cmd: 'vrijdag',                      uitleg: 'de toestand van het heiligste moment van de week' },
+        { cmd: 'slachtoffer',                  uitleg: 'de Raad kiest iemand — criteria zijn geheim' },
+        { cmd: 'gebod [1-10]',                 uitleg: 'raadpleeg een van de Tien Geboden' },
+        { cmd: 'biecht [zonde]',               uitleg: 'beken uw overtreding — openbaar of fluisterend' },
+        { cmd: 'horoscoop [naam]',             uitleg: 'de sterren spreken over een volgeling' },
+        { cmd: 'straf [naam]',                 uitleg: 'de Kroket God spreekt iemand aan' },
+        { cmd: 'bekeer [naam]',                uitleg: 'breng een buitenstaander in contact met de snackleer' },
+        { cmd: 'canoniseer [naam]',            uitleg: 'verhef een volgeling tot heilige van de frituur' },
+        { cmd: 'geef [naam] een kroket-therapiesessie', uitleg: 'de Hoge Frituurraad analyseert een ziel' },
+        { cmd: 'onthul de naam van mijn spirit-kroket', uitleg: 'ontdek welke kroket uw innerlijk vertegenwoordigt' },
+        { cmd: 'complot',                      uitleg: 'de Raad heeft de berichten gelezen — conclusies volgen' },
+        { cmd: 'missie',                       uitleg: 'uw lopende opdracht — als u die heeft' },
+        { cmd: 'missie starten',               uitleg: '(admin) de Raad wijst een stille opdracht toe' },
+        { cmd: 'rolwissel [naam] | [nieuwe rol]', uitleg: '(admin) een functie in het Rijk wisselt van hand' },
+        { cmd: 'quiz starten',                 uitleg: '(admin) post een triviavraag — eerste juiste antwoord in de thread wint' },
+        { cmd: 'quiz onthul',                  uitleg: '(admin) onthul het antwoord van de actieve quiz nu' },
+        { cmd: 'kroket-van-de-dag',            uitleg: '(admin) het dagelijkse voorstel en de uitslag van gisteren' },
+        { cmd: 'onthoud [tekst]',              uitleg: '(admin) schrijf iets in de rijksarchieven' },
+        { cmd: 'vergeet [zoekterm]',           uitleg: '(admin) wis een gegeven uit de rijksarchieven' },
+        { cmd: 'kennisbank',                   uitleg: '(admin) raadpleeg de rijksarchieven' },
       ];
 
       const regels = ['🕵️ *ALLE KROKET PROMPTS*', '_Typ achter `/kroketgod`_', ''];
@@ -2272,7 +2791,7 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
 
     // ── Quote
     if (input === 'quote') {
-      const tekst = await kroketResponse('Geef één korte kroket-wijsheid of quote. Maximaal twee zinnen. Geen header, gewoon de quote in stijl. Geen inleidingszin.', 250, false);
+      const tekst = await kroketResponse('Geef één korte kroket-wijsheid of quote. Maximaal twee zinnen. Geen header, gewoon de quote in stijl. Geen inleidingszin.', 250, false, 'licht');
       await postToChannel(client, command.channel_id, tekst);
       return;
     }
@@ -2364,8 +2883,8 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
 
       // Geen actieve missie voor deze gebruiker → cryptische respons
       const cryptischeTekst = huidig?.status === 'actief'
-        ? await kroketResponse(`De Kroket God heeft een missie uitstaan in het kanaal. Reageer cryptisch: er wordt iets bewogen dat jou niet aangaat. Max 2 zinnen. Geen inleidingszin.`, 120, false)
-        : await kroketResponse(`Iemand vraagt of er missies zijn. Er zijn geen actieve missies. Reageer als de Kroket God — cryptisch, mysterieus, geen bevestiging of ontkenning. Max 2 zinnen. Geen inleidingszin.`, 120, false);
+        ? await kroketResponse(`De Kroket God heeft een missie uitstaan in het kanaal. Reageer cryptisch: er wordt iets bewogen dat jou niet aangaat. Max 2 zinnen. Geen inleidingszin.`, 120, false, 'licht')
+        : await kroketResponse(`Iemand vraagt of er missies zijn. Er zijn geen actieve missies. Reageer als de Kroket God — cryptisch, mysterieus, geen bevestiging of ontkenning. Max 2 zinnen. Geen inleidingszin.`, 120, false, 'licht');
       await respond({ text: schoonOutput(cryptischeTekst), response_type: 'ephemeral' });
       return;
     }
@@ -2674,16 +3193,19 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
 
     if (input === 'ranglijst') {
       const scores = loadScores();
+      const roemData = loadRoem();
       const allMembers = loadMembers();
       const heldentitels = loadHeldentitels();
-      const titels = ['🥇 Opperkroket', '🥈 Paneermeester', '🥉 Aspirant-volgeling'];
+      // Sorteer op maandscore voor de competitie-positie
       const gesorteerd = Object.entries(scores).sort((a, b) => b[1] - a[1]);
-      const lijst = gesorteerd.map(([id, score], i) => {
+      const lijst = gesorteerd.map(([id, score]) => {
+        const roem = roemData[id] || 0;
+        const rang = getRang(roem);
         const heldAantal = heldentitels[id] || 0;
         const heldLabel = heldAantal > 0 ? `  🏅 ${heldAantal}× held` : '';
-        return `${titels[i] || ':lekker_kroketje: Volgeling'} — ${allMembers[id]?.bijnaam || id}: ${score} kroketpunten${heldLabel}`;
+        return `${rang.naam} — ${allMembers[id]?.bijnaam || id}: ${score} pts deze maand  _(${roem} roem)_${heldLabel}`;
       }).join('\n');
-      const tekst = `⚜️ DE HEILIGE RANGLIJST DER KROKET ILLUMINATI ⚜️\n\n${lijst}\n\n— De Almachtige Kroket God`;
+      const tekst = `⚜️ DE HEILIGE RANGLIJST DER KROKET ILLUMINATI ⚜️\n\n${lijst}\n\n_Rang is permanent en stijgt nooit terug. Punten resetten maandelijks._\n\n— De Almachtige Kroket God`;
       if (isDM) {
         await client.chat.postMessage({ channel: command.channel_id, text: schoonOutput(tekst) });
       } else {
@@ -2704,9 +3226,12 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
       }
       const [id, lid] = gevonden;
       const scores = loadScores();
+      const roemData = loadRoem();
       const streaks = loadStreaks();
       const heldentitels = loadHeldentitels();
       const punten = scores[id] ?? 0;
+      const roem = roemData[id] || 0;
+      const rang = getRang(roem);
       const streak = streaks[id]?.huidig ?? 0;
       const heldAantal = heldentitels[id] || 0;
       const lidSinds = lid.lidSinds ? new Date(lid.lidSinds).toLocaleDateString('nl-NL') : 'onbekend';
@@ -2715,8 +3240,10 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
       const tekst =
         `📜 *DOSSIER — ${lid.bijnaam}* 📜\n` +
         `\n*Status:* ${banStatus ? `⛔ VERBANNEN — nog ${dagenTotEinde(banStatus.tot)} dag(en) (wegens: ${banStatus.reden})` : 'Volgeling der Kroket Illuminati'}` +
+        `\n*Rang:* ${rang.naam}` +
+        `\n*Roem:* ${roem} punten (permanent)` +
         `\n*Lid sinds:* ${lidSinds}` +
-        `\n*Kroketpunten:* ${punten}` +
+        `\n*Kroketpunten deze maand:* ${punten}` +
         (heldAantal > 0 ? `\n*Kroket-Held van de Week:* 🏅 ${heldAantal}× gekroond` : '') +
         (streak ? `\n*Vrijdagstreak:* ${streak} week(en) onafgebroken` : '') +
         (lid.favorieteKroket ? `\n*Favoriete kroket:* ${lid.favorieteKroket}` : '') +
@@ -2791,16 +3318,22 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
         });
       }
 
-      // Verbod: jezelf eren is een doodzonde
+      // Verbod: jezelf eren is een doodzonde — 50% kans op een minpunt als straf
       const zelflof = geeerden.find(([id]) => id === command.user_id);
       if (zelflof) {
-        await pasScoreAanMetCheck(client, command.user_id, -1);
-        logGebeurtenis('zelflof', command.user_id, `${aanvrager} probeerde zichzelf een kroketpunt te geven en verloor er één als straf`);
+        const zelflofStraf = Math.random() < 0.50;
+        if (zelflofStraf) {
+          await pasScoreAanMetCheck(client, command.user_id, -1);
+          logGebeurtenis('zelflof', command.user_id, `${aanvrager} probeerde zichzelf een kroketpunt te geven en verloor er één als straf`);
+        }
+        const strafZin = zelflofStraf
+          ? `Kondig aan dat 1 kroketpunt als straf is afgenomen.`
+          : `Het lot heeft gesproken: dit keer ontsnapt ${aanvrager} zonder puntenverlies — maar de schande blijft eeuwig.`;
         const waarschuwing = await kroketResponse(
           `${aanvrager} heeft zojuist geprobeerd ZICHZELF een kroketpunt te geven. De Kroket God ontsteekt in HEILIGE WOEDE. ` +
           `Dit is de ergste vorm van hoogmoed die de snackleer kent — zelflof, eigendunk, narcistische paneerlaag. ` +
           `Gebruik het spoedmelding- of decreet-formaat. Wees furieus, vernietigend en publiekelijk. ` +
-          `Kondig aan dat 1 kroketpunt als straf is afgenomen. Geen inleidingszin.`,
+          `${strafZin} Geen inleidingszin.`,
           400, false
         );
         await postToChannel(client, command.channel_id, `<@${command.user_id}>\n\n${waarschuwing}`);
@@ -2831,7 +3364,7 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
             400, false);
       await postToChannel(client, command.channel_id, tekst);
 
-      // Gedeelde eer: 80% kans dat de alliantie-partner van de ontvanger 1–3 punten krijgt.
+      // Gedeelde eer: 25% kans dat de alliantie-partner van de ontvanger 1 punt krijgt.
       // De gever mag zichzelf niet bevoordelen via zijn eigen partner.
       const allMembers = loadMembers();
       for (const [eerId, eerLid] of geeerden) {
@@ -2839,8 +3372,8 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
         if (!partnerId) continue;
         if (partnerId === command.user_id) continue; // gever is partner — niet toegestaan
         if (isVerbannen(partnerId)) continue;
-        if (Math.random() >= 0.80) continue;
-        const bonusPunten = Math.floor(Math.random() * 3) + 1; // 1, 2 of 3
+        if (Math.random() >= 0.25) continue;
+        const bonusPunten = 1;
         await pasScoreAanMetCheck(client, partnerId, bonusPunten);
         const partnerBijnaam = allMembers[partnerId]?.bijnaam || 'de bondgenoot';
         const bonusTekst = await kroketResponse(
@@ -3448,41 +3981,8 @@ app.view('intake_modal', async ({ ack, view, body, client }) => {
   }
 });
 
-// ── Sarcasme-verificatie: tweede-pass check met grotere model ────────────────
-// Voorkomt dat neutrale of grappige berichten als sarcasme worden bestraft.
-// Alleen als BEIDE checks JA zeggen wordt het als sarcasme behandeld.
-
-async function isSarcasme(tekst, context = '') {
-  try {
-    const contextBlok = context
-      ? `\n\nGesprekcontext (van oud naar nieuw, voor situatiebegrip):\n${context}\n\nHet te beoordelen bericht is het LAATSTE van de gebruiker.`
-      : '';
-
-    const result = await groq.chat.completions.create({
-      model: 'llama-3.3-70b-versatile',
-      max_tokens: 5,
-      temperature: 0,
-      messages: [
-        { role: 'system', content: 'Antwoord ALLEEN met JA of NEE. Geen uitleg.' },
-        {
-          role: 'user',
-          content:
-            `Is het te beoordelen bericht DUIDELIJK sarcastisch of spottend bedoeld richting een gezaghebbende figuur?` +
-            `${contextBlok}\n\n` +
-            `Antwoord JA alleen als de ironie of spot ondubbelzinnig is — iemand die overduidelijk de spot drijft, ` +
-            `neerbuigend doet, of iets beweert wat ze duidelijk niet menen. ` +
-            `Gebruik de context: als het antwoord past op iets serieus dat de godheid zei, telt dat als sarcasme. ` +
-            `Antwoord NEE bij: oprechte vragen, neutrale opmerkingen, grapjes die ook serieus bedoeld kunnen zijn, ` +
-            `complimenten (ook overdreven), en alles waarbij twijfel mogelijk is. Bij twijfel altijd NEE. ` +
-            `Te beoordelen bericht: "${tekst}"`,
-        },
-      ],
-    });
-    return result.choices[0].message.content.trim().toUpperCase().startsWith('JA');
-  } catch {
-    return false; // bij twijfel: geen sarcasme
-  }
-}
+// (De aparte sarcasme-verificatie is verwijderd: sarcasme wordt niet meer bestraft maar
+//  met spot beantwoord, dus de tweede-pass-check is overbodig en kostte alleen een extra call.)
 
 // ── Banwaardig-check: is dit écht beledigend genoeg voor ballingschap? ────────
 // Tweede filter na sentimentanalyse — voorkomt dat grappige opmerkingen of
@@ -3517,6 +4017,27 @@ async function isBanwaardig(tekst, context = '') {
   }
 }
 
+// ── Punt-bedelen detector ──────────────────────────────────────────────────────
+// Detecteert of iemand expliciet om een kroketpunt vraagt aan de Kroket God.
+
+// Snelle keyword-precheck — vangt de meest voor de hand liggende bedelpogingen zonder AI-call
+const BEDEL_TREFWOORDEN = [
+  /^\s*punt(je)?\s*$/i,           // alleen "puntje" of "punt"
+  /\bgeef\b.*\bpunt/i,
+  /\bwil\b.*\bpunt(je)?/i,
+  /\bik\b.*\bpunt(je)?\b.*\bwil/i,
+  /\bgraag\b.*\bpunt/i,
+  /\bpunt.*\bverdien/i,
+  /\bkroketpunt.*\bplease/i,
+];
+
+// Keyword-only bedeldetector — geen aparte LLM-call meer (bespaart één Groq-call per mention).
+// Subtielere bedelpogingen worden opgevangen door de BEDELARIJ-categorie van analyseerEnGenereer,
+// die toch al op elk bericht draait.
+function vraagOmPunt(tekst) {
+  return BEDEL_TREFWOORDEN.some(p => p.test(tekst));
+}
+
 // ── Sentiment + reactie in één AI call ─────────────────────────────────────────
 
 async function analyseerEnGenereer(prompt, context = '') {
@@ -3534,14 +4055,15 @@ async function analyseerEnGenereer(prompt, context = '') {
           role: 'system',
           content: `Classify this Dutch message directed at a godly authority figure. Reply with EXACTLY one word. When in doubt, choose NEUTRAAL.
 
-BELEDIGING: explicit insult, curse word, or direct attack aimed AT the Kroket God ("jij bent niks", "hou je kop", "nep-god", "vetklep kroketbakkes").
+BELEDIGING: explicit insult, curse word, or direct attack aimed AT the Kroket God ("jij bent niks", "hou je kop", "nep-god", "vetklep kroketbakkes"). NOT belediging: Dutch slang or informal words like "tjappie", "mand", "ewa", "bro", "chill", "based", "lowkey", "yikes" — these are casual language, not attacks.
 SARCASME: unmistakably sarcastic or mocking — tone is clearly ironic, dismissive, or belittling toward the Kroket God. Examples: "ja hoor vast", "o wauw wat bijzonder", "geweldig zeg", "klinkt heel geloofwaardig", wordplay that ridicules the bot ("ware lijder of was het leider", "lekker bezig maat" addressed to a deity), backhanded compliments. NOT sarcasm: questions, requests, praise for others, formal address using "Uw", asking for information.
 LOFZANG: genuine praise or admiration for the Kroket God or frituurkring, including praising other members.
+BEDELARIJ: the user explicitly begs, asks, or demands a kroketpunt, score, or reward FOR THEMSELVES ("geef mij een punt", "mag ik een puntje", "ik wil een kroketpunt", "ik verdien een punt"). NOT bedelarij: asking a point for someone ELSE, the eer-command, or just asking what their score is.
 NEUTRAAL: everything else — questions (including "Wat zal Uw straf zijn?"), requests, neutral observations, praise aimed at others ("eer de kroketPet"), formal address, asking about scores or rules.
 
 Use the conversation context if provided — a reply to a serious decree can be sarcastic even if the words seem neutral alone.
 
-Reply with EXACTLY one word: BELEDIGING, SARCASME, LOFZANG, or NEUTRAAL.`,
+Reply with EXACTLY one word: BELEDIGING, SARCASME, LOFZANG, BEDELARIJ, or NEUTRAAL.`,
         },
         { role: 'user', content: prompt + contextDeel },
       ],
@@ -3550,6 +4072,7 @@ Reply with EXACTLY one word: BELEDIGING, SARCASME, LOFZANG, or NEUTRAAL.`,
     if (uitkomst.includes('BELEDIGING')) return 'BELEDIGING';
     if (uitkomst.includes('SARCASME')) return 'SARCASME';
     if (uitkomst.includes('LOFZANG')) return 'LOFZANG';
+    if (uitkomst.includes('BEDELARIJ')) return 'BEDELARIJ';
     return 'NEUTRAAL';
   } catch {
     // Groq rate-limit of netwerkfout — behandel als neutraal zodat de mention niet stilvalt
@@ -3631,11 +4154,88 @@ app.event('app_mention', async ({ event, client }) => {
       return;
     }
 
+    // ── Eer via mention — zelfde logica als slash command ──────────────────────
+    if (/^eer\s+\S/i.test(input)) {
+      const invoer = input.replace(/^eer\s+/i, '').trim();
+      const voorIdx = invoer.search(/ voor /i);
+      const naamGedeelte = voorIdx !== -1 ? invoer.slice(0, voorIdx).trim() : invoer;
+      const reden = voorIdx !== -1 ? invoer.slice(voorIdx + 6).trim() : null;
+      const naamDelen = naamGedeelte.split(/\s+en\s+|,\s*/i).map(s => s.trim()).filter(Boolean);
+      const geeerden = [];
+      for (const naamDeel of naamDelen) {
+        const gevonden = getMemberByNaam(naamDeel);
+        if (gevonden) geeerden.push(gevonden);
+      }
+      if (geeerden.length > 0) {
+        const thread_ts = event.thread_ts || (event.parent_user_id ? event.ts : undefined);
+        // Zelflof-check
+        const zelflof = geeerden.find(([id]) => id === userId);
+        if (zelflof) {
+          const zelflofStraf = Math.random() < 0.50;
+          if (zelflofStraf) {
+            await pasScoreAanMetCheck(client, userId, -1);
+            logGebeurtenis('zelflof', userId, `${bijnaam} probeerde zichzelf een kroketpunt te geven via mention en verloor er één als straf`);
+          }
+          const strafZin = zelflofStraf
+            ? `Kondig aan dat 1 kroketpunt als straf is afgenomen.`
+            : `Het lot heeft gesproken: dit keer ontsnapt ${bijnaam} zonder puntenverlies — maar de schande blijft eeuwig.`;
+          const waarschuwing = await kroketResponse(
+            `${bijnaam} heeft zojuist geprobeerd ZICHZELF een kroketpunt te geven. De Kroket God ontsteekt in HEILIGE WOEDE. ` +
+            `Dit is de ergste vorm van hoogmoed die de snackleer kent — zelflof, eigendunk, narcistische paneerlaag. ` +
+            `Gebruik het spoedmelding- of decreet-formaat. Wees furieus, vernietigend en publiekelijk. ` +
+            `${strafZin} Geen inleidingszin.`,
+            400, false
+          );
+          await postToChannel(client, event.channel, `<@${userId}>\n\n${schoonOutput(waarschuwing)}`, { thread_ts });
+          return;
+        }
+        // Geldig eer-verzoek — punten toekennen
+        const eerPunten = {};
+        for (const [eerId] of geeerden) {
+          const punten = Math.floor(Math.random() * 2) + 1;
+          eerPunten[eerId] = punten;
+          await pasScoreAanMetCheck(client, eerId, punten);
+        }
+        registreerEer(userId, geeerden.length);
+        const namen = geeerden.map(([, lid]) => lid.bijnaam);
+        const redenZin = reden ? ` De reden voor deze eer: "${reden}". Verwerk dit in je reactie.` : '';
+        const eerTekst = geeerden.length === 1
+          ? await kroketResponse(
+              `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} eert ${namen[0]} via een mention. ${eerPunten[geeerden[0][0]]} kroketpunt(en) toegekend.${redenZin} Reageer in karakter. Geen inleidingszin.`,
+              350, false)
+          : await kroketResponse(
+              `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} eert meerdere volgelingen via een mention: ${namen.join(', ')}. Elk ontvangt punten.${redenZin} Reageer in karakter. Geen inleidingszin.`,
+              400, false);
+        await postToChannel(client, event.channel, schoonOutput(eerTekst), { thread_ts });
+        return;
+      }
+    }
+
     let prompt;
+    // Markeert de neutrale gesprekstak: die krijgt echte multi-turn context (kanaalgeheugen)
+    // i.p.v. een losse single-turn prompt, zodat de Kroket God de draad vasthoudt.
+    let gesprekModus = false;
     if (input) {
       const sentiment = await analyseerEnGenereer(input, recenteContext);
-      const scoreKans = Math.random() < 0.30;
-      let isSarcasmeResultaat = null; // cache zodat we het model niet twee keer aanroepen
+      const scoreKans = Math.random() < 0.50;
+
+      // Punt-bedelen: 30% kans op minpunt als iemand expliciet om een punt vraagt.
+      // Detectie via de classifier (BEDELARIJ) of de snelle keyword-check — geen extra LLM-call.
+      if (members[userId] && !isVerbannen(userId) && (sentiment === 'BEDELARIJ' || vraagOmPunt(input))) {
+        if (Math.random() < 0.30) {
+          pasScoreAan(userId, -1);
+          logGebeurtenis('bedelarij', userId, `${bijnaam} bedelde om een punt en verloor er één`);
+          const bedelTekst = await kroketResponse(
+            `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} heeft de brutaliteit om te bedelen om een kroketpunt: "${input}". ` +
+            `De Kroket God is diep beledigd door dit smeekgebaar — punten worden verdiend, niet aangesmeekt. ` +
+            `Als straf wordt 1 kroketpunt afgenomen. Benoem dit met gepaste minachting. Geen inleidingszin.`,
+            350, false
+          );
+          const thread_ts = event.thread_ts || (event.parent_user_id ? event.ts : undefined);
+          await postToChannel(client, event.channel, `<@${userId}>\n\n${bedelTekst}`, { thread_ts });
+          return;
+        }
+      }
 
       // Forceer de intro-zin door de letterlijke start mee te geven — AI mag hem afmaken maar
       // mag de naam NIET veranderen. Dit voorkomt dat het model een andere bijnaam invult.
@@ -3745,59 +4345,14 @@ app.event('app_mention', async ({ event, client }) => {
         pasScoreAan(userId, -1);
         logGebeurtenis('belediging', userId, `${bijnaam} beledigd de Kroket God en verloor een punt`, input);
         prompt = `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} heeft zich beledigend uitgelaten tegen de Kroket God: "${input}". Straf hen met goddelijk gezag. Het systeem heeft al 1 kroketpunt afgenomen — bevestig dit. Begin de inleidingszin letterlijk met: ${introStart}`;
-      } else if (sentiment === 'SARCASME' && members[userId] && (isSarcasmeResultaat = await isSarcasme(input, recenteContext))) {
-        const sarBan   = Math.random() < 0.10;
-        const sarPunt  = !sarBan && Math.random() < 0.33;
-
-        if (sarBan) {
-          // Ban tot einde werkdag (18:00 AMS) — gebruik DST-veilige helper
-          const nu = new Date();
-          let eindeUtc = amsKlokTijdNaarUtc(nu, 18, 0);
-          if (eindeUtc <= nu) eindeUtc = amsKlokTijdNaarUtc(new Date(nu.getTime() + 86_400_000), 18, 0);
-
-          const verbanning = loadVerbanning();
-          verbanning[userId] = {
-            tot: eindeUtc.toISOString(),
-            reden: 'sarcasme tegenover de Kroket God',
-            citaat: input,
-            dagen: null,
-            opgelegd: nu.toISOString(),
-          };
-          saveVerbanning(verbanning);
-          logGebeurtenis('verbanning', userId, `${bijnaam} werd verbannen tot einde werkdag wegens sarcasme`, input);
-          await notificeerAlliantiePartner(client, userId, bijnaam, event.channel);
-
-          const terugTijd = eindeUtc.toLocaleTimeString('nl-NL', { timeZone: 'Europe/Amsterdam', hour: '2-digit', minute: '2-digit' });
-          const verdictTekst = await kroketResponse(
-            `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} heeft sarcastisch gereageerd op de Kroket God: "${input}". ` +
-            `Sarcasme is de sluipendste vorm van oneerbiedigheid — een kroket die glimt van buiten maar van binnen rancuneus en koud is. ` +
-            `Verban ${bijnaam} met onmiddellijke ingang tot einde werkdag (${terugTijd}). Wees furieus maar waardig. Gebruik het decreet-formaat. Geen inleidingszin.`,
-            450, false
-          );
-          const thread_ts = event.thread_ts || (event.parent_user_id ? event.ts : undefined);
-          await postToChannel(client, event.channel,
-            `<@${userId}>\n\n${verdictTekst}\n\n_De poorten heropenen zich om ${terugTijd}._`,
-            { thread_ts }
-          );
-          return;
-        }
-
-        if (sarPunt) {
-          pasScoreAan(userId, -1);
-          logGebeurtenis('belediging', userId, `${bijnaam} reageerde sarcastisch en verloor een punt`, input);
-          prompt = `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} heeft sarcastisch gereageerd op de Kroket God: "${input}". ` +
-            `Sarcasme is verkapte oneerbiedigheid — een kroket die glanst maar van binnen bedorven is. Wijs dit streng aan. ` +
-            `Het systeem heeft al 1 kroketpunt afgenomen — bevestig dit. Begin de inleidingszin letterlijk met: ${introStart}`;
-        } else {
-          // Geen ban, geen punt — licht vergrijp loggen + eventueel escaleren
-          logGebeurtenis('belediging', userId, `${bijnaam} reageerde sarcastisch`, input);
-          const geescaleerd = await verwerkVergrijp('sarcasme');
-          if (geescaleerd) return;
-          if (!prompt) { // verwerkVergrijp kan prompt al hebben gezet (drempel-waarschuwing)
-            prompt = `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} heeft sarcastisch gereageerd op de Kroket God: "${input}". ` +
-              `Wijs dit streng aan als laffe verkapte oneerbiedigheid. Vermeld GEEN puntenaantal. Begin de inleidingszin letterlijk met: ${introStart}`;
-          }
-        }
+      } else if (sentiment === 'SARCASME' && members[userId]) {
+        // Sarcasme wordt NIET meer bestraft (geen ban, geen punt, geen vergrijp) — de Kroket God
+        // doorziet het en kaatst het terug met superieure spot. Hij verliest een woordenstrijd nooit.
+        prompt = `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} heeft sarcastisch gereageerd op de Kroket God: "${input}". ` +
+          `De Kroket God doorziet het sarcasme feilloos en is niet beledigd — hij is geamuseerd. ` +
+          `Kaats het terug met SUPERIEURE, droge goddelijke sarcasme: gevat, speels spottend en bijtend, maar nooit straffend. ` +
+          `Hij speelt het spel mee en wint het met klasse. Geen straf, geen verbanning, geen puntenverlies. ` +
+          `Vermeld GEEN puntenaantal. Begin de inleidingszin letterlijk met: ${introStart}`;
       } else if (sentiment === 'LOFZANG' && members[userId] && scoreKans) {
         await pasScoreAanMetCheck(client, userId, 1);
         logGebeurtenis('lofzang', userId, `${bijnaam} prees de Kroket God en verdiende een punt`, input);
@@ -3810,17 +4365,12 @@ app.event('app_mention', async ({ event, client }) => {
         if (!prompt) {
           prompt = `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} heeft zich beledigend uitgelaten: "${input}". Reageer bestraffend. Vermeld GEEN puntenaantal — het systeem heeft niets gewijzigd. Begin de inleidingszin letterlijk met: ${introStart}`;
         }
-      } else if (sentiment === 'SARCASME' && (isSarcasmeResultaat ?? await isSarcasme(input, recenteContext))) {
-        // Sarcasme zonder ban of punt — licht vergrijp
-        logGebeurtenis('belediging', userId, `${bijnaam} reageerde sarcastisch (geen lid of geen straf)`, input);
-        const geescaleerd = await verwerkVergrijp('sarcasme');
-        if (geescaleerd) return;
-        if (!prompt) {
-          prompt = `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} heeft sarcastisch gereageerd op de Kroket God: "${input}". ` +
-            `De Kroket God doorziet dit sarcasme feilloos. Citeer de sarcastische uitspraak letterlijk en ontmasker hem als ` +
-            `laffe, verkapte oneerbiedigheid — een kroket die glimt van buiten maar van binnen koud en rancuneus is. ` +
-            `Wees scherp en vernietigend, maar waardig. Vermeld GEEN puntenaantal. Begin de inleidingszin letterlijk met: ${introStart}`;
-        }
+      } else if (sentiment === 'SARCASME') {
+        // Sarcasme wordt niet bestraft — de Kroket God kaatst het terug met eigen spot.
+        prompt = `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} heeft sarcastisch gereageerd op de Kroket God: "${input}". ` +
+          `De Kroket God doorziet het sarcasme feilloos en is geamuseerd, niet beledigd. ` +
+          `Kaats het terug met SUPERIEURE, droge goddelijke sarcasme: gevat, speels spottend en bijtend, maar nooit straffend. ` +
+          `Hij speelt het spel mee en wint het met klasse. Vermeld GEEN puntenaantal. Begin de inleidingszin letterlijk met: ${introStart}`;
       } else if (sentiment === 'LOFZANG') {
         prompt = `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} heeft zich respectvol uitgelaten: "${input}". Reageer met een warme zegen. Vermeld GEEN puntenaantal — het systeem heeft niets gewijzigd. Begin de inleidingszin letterlijk met: ${introStart}`;
       } else if (/\bmop\b|vertel.*grap|vertel.*mop|maak.*lachen|grap.*vertellen/i.test(input)) {
@@ -3829,7 +4379,12 @@ app.event('app_mention', async ({ event, client }) => {
         await stuurMop(client, event.channel);
         return; // stuurMop post zelf, geen verdere verwerking nodig
       } else {
-        prompt = `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} zegt tegen de Kroket God: "${input}". ` +
+        // Neutrale gesprekstak — geen oordeel, gewoon meepraten. Multi-turn: de instructie
+        // gaat als systemExtra mee, het bericht zelf zit al als user-beurt in de historie.
+        gesprekModus = true;
+        prompt = `De actieve spreker is ${bijnaam}. Reageer op hun laatste bericht. ` +
+          `Hierboven staat de recente gespreksgeschiedenis van het kanaal — houd de draad vast en ` +
+          `reageer relevant op wat er eerder is gezegd, ook door jou. ` +
           `Reageer volledig in karakter — gezaghebbend, dramatisch, relevant aan wat er gevraagd of gezegd wordt. ` +
           `Als het een verzoek is: behandel het als een petitie aan de Hoge Frituurraad. ` +
           `Als het een vraag is: beantwoord hem op de meest goddelijke manier mogelijk. ` +
@@ -3848,7 +4403,21 @@ app.event('app_mention', async ({ event, client }) => {
       prompt += `\n\n${bouwLedenStatus()}`;
     }
 
-    let tekst = await kroketResponse(prompt);
+    let tekst;
+    if (gesprekModus) {
+      // Echte multi-turn: bouw de gespreksdraad uit het kanaalgeheugen en hang het huidige
+      // bericht eronder. De instructie (`prompt`) gaat mee als systemExtra.
+      const history = bouwGesprekHistorie();
+      const userTurn = `${bijnaam}: ${input}`;
+      const laatste = history[history.length - 1];
+      // Dedup: de message-handler kan dit bericht al gelogd hebben.
+      if (!laatste || laatste.role !== 'user' || laatste.content !== userTurn) {
+        history.push({ role: 'user', content: userTurn });
+      }
+      tekst = await kroketConversatie(history, { systemExtra: prompt });
+    } else {
+      tekst = await kroketResponse(prompt);
+    }
     // 2% kans: voeg een wiskundig correcte vrijdag-countdown toe
     if (Math.random() < 0.02) {
       const countdown = await maakVrijdagCountdownZin();
@@ -3868,71 +4437,22 @@ app.event('app_mention', async ({ event, client }) => {
     ];
     try {
       const thread_ts = event.thread_ts || (event.parent_user_id ? event.ts : undefined);
-      await postToChannel(client, event.channel,
-        FALLBACKS[Math.floor(Math.random() * FALLBACKS.length)],
-        { thread_ts }
-      );
+      // Ephemeral: de foutmelding is alleen zichtbaar voor de verzender, niet voor het hele kanaal.
+      await client.chat.postEphemeral({
+        channel: event.channel,
+        user: event.user,
+        text: FALLBACKS[Math.floor(Math.random() * FALLBACKS.length)],
+        ...(thread_ts ? { thread_ts } : {}),
+      });
     } catch (_) {}
   }
 });
 
 // ── Kanaalberichten loggen (geheugen) ─────────────────────────────────────────
-
-// Cooldown voor spontane reacties: max 1x per 20 minuten
-let spontaanCooldownTot = 0;
-
-// Detecteert of een bericht over de Kroket God gaat zonder directe @-mention
-async function gaatOverKroketGod(tekst) {
-  try {
-    const result = await groq.chat.completions.create({
-      model: 'llama-3.1-8b-instant',
-      max_tokens: 5,
-      temperature: 0,
-      messages: [
-        { role: 'system', content: 'Antwoord ALLEEN met JA of NEE. Geen uitleg.' },
-        {
-          role: 'user',
-          content:
-            `Gaat dit bericht over een almachtige bot/godheid genaamd "de Kroket God" die een Slack-kanaal beheert? ` +
-            `Antwoord JA als de boodschap verwijst naar "hij", "hem", "de god", "kroket god", "de hoge frituurraad", ` +
-            `of duidelijk over het gedrag, de regels of uitspraken van zo'n gezaghebbende figuur gaat. ` +
-            `Antwoord NEE als het over iets anders gaat. Bericht: "${tekst}"`,
-        },
-      ],
-    });
-    return result.choices[0].message.content.trim().toUpperCase().startsWith('JA');
-  } catch {
-    return false;
-  }
-}
-
-async function verdientSpontaanReactie(tekst) {
-  try {
-    const result = await groq.chat.completions.create({
-      model: 'llama-3.3-70b-versatile',
-      max_tokens: 5,
-      temperature: 0,
-      messages: [
-        {
-          role: 'system',
-          content: 'Antwoord ALLEEN met JA of NEE. Geen uitleg.',
-        },
-        {
-          role: 'user',
-          content:
-            `Zou een almachtige, gezaghebbende kroket-godheid spontaan willen reageren op dit bericht? ` +
-            `Antwoord JA als het bericht een overtreding, provocatie, kroket- of eetgerelateerde uitspraak, ` +
-            `boastful claim, conflict, biecht, grappige stelling of iets controversieels bevat. ` +
-            `Antwoord NEE bij gewone mededelingen, vragen, planningen of neutrale berichten. ` +
-            `Bericht: "${tekst}"`,
-        },
-      ],
-    });
-    return result.choices[0].message.content.trim().toUpperCase().startsWith('JA');
-  } catch {
-    return false;
-  }
-}
+// De Kroket God reageert in het hoofdkanaal alleen op directe @-mentions. Deze handler logt
+// kanaalberichten (voor gesprekscontext bij een mention) en handelt geplande/gestuurde events af
+// (stille missie, vrijdag-streak). Spontane reacties, airfryer- en voedselfoto-detectie zijn
+// bewust uitgeschakeld. (gaatOverKroketGod/verdientSpontaanReactie zijn daarom verwijderd.)
 
 app.event('message', async ({ event, client }) => {
   // Deduplicatie: Slack herverzendt events bij timeout — niet dubbel verwerken
@@ -3972,16 +4492,8 @@ app.event('message', async ({ event, client }) => {
       await controleerVerlopenBan(client, event.user);
     }
 
-    // ── Voedingsfoto-reactie ──────────────────────────────────────────────────
-    // 60% kans — alleen bekende leden, niet in threads, niet in testkanaal
-    if (event.subtype === 'file_share' && !event.thread_ts && !isTestKanaalMsg
-        && members[event.user] && !isVerbannen(event.user)) {
-      const imageFile = (event.files || []).find(f => f.mimetype?.startsWith('image/'));
-      if (imageFile && Math.random() < 0.60) {
-        await reageerOpVoedingsFoto(client, event.channel, event.user, bijnaam, imageFile);
-      }
-      return;
-    }
+    // Voedselfoto-reacties uitgeschakeld — de Kroket God reageert alleen nog op @-mentions.
+    if (event.subtype === 'file_share' && !event.thread_ts) return;
 
     if (!event.text?.trim()) return;
     if (!isTestKanaalMsg) logBericht(bijnaam, event.text);
@@ -4029,26 +4541,7 @@ app.event('message', async ({ event, client }) => {
       if (vrijdagCheck.dag === 5) markeerVrijdagDeelname(event.user);
     }
 
-    // ── Airfryer / magnetron detector ─────────────────────────────────────────
-    // Reageert met ~30% kans als iemand verboden woorden gebruikt — buiten threads,
-    // geen cooldown (dit is een directe overtreding van de snackleer).
-    const VERBODEN_WOORDEN = ['airfryer', 'air fryer', 'magnetron', 'heteluchtfriteuse', 'hetelucht friteuse', 'oven kroket'];
-    const tekstLaag = event.text.toLowerCase();
-    const verbodWoord = VERBODEN_WOORDEN.find(w => tekstLaag.includes(w));
-    if (verbodWoord && !isTestKanaalMsg && !event.thread_ts && !event.bot_id && Math.random() < 0.30) {
-      const lid = members[event.user];
-      const spreker = lid ? lid.bijnaam : `de Ongepaneerde ${bijnaam}`;
-      const graad = lid ? 'Slappe Kroketter' : 'Ongepaneerde';
-      const tekst = await kroketResponse(
-        `[ACTIEVE SPREKER: ${spreker}] ${spreker} noemde zojuist "${verbodWoord}" in het heilige kanaal. ` +
-        `Dit is een overtreding van de snackleer — het gebruik van een ${verbodWoord} is het toppunt van kroketverraad. ` +
-        `Bestempel hen als ${graad} en reageer met passende minachting, een vleugje medelijden, ` +
-        `en een herinnering aan Gebod VII (geen magnetron voor wederopstanding). Geen inleidingszin.`,
-        300, false
-      );
-      await postToChannel(app.client, event.channel, tekst);
-      return;
-    }
+    // Airfryer/magnetron-detector uitgeschakeld — de Kroket God reageert alleen nog op @-mentions.
 
     // Testkanaal: altijd reageren, geen gatekeeper, geen cooldown
     if (isTestKanaalMsg) {
@@ -4062,45 +4555,12 @@ app.event('message', async ({ event, client }) => {
       return;
     }
 
-    // Spontane reacties — alleen voor bekende leden, niet in threads
-    if (!members[event.user]) return;
-    if (event.thread_ts) return;
-    if (isVerbannen(event.user)) return;
-    if (event.text.trim().split(/\s+/).length < 3) return;
-
-    // ── Check 1: gaat het bericht over de Kroket God? (alleen kroket-illuminati)
-    // Reageert altijd als iemand over hem praat, mits cooldown vrij is.
-    if (event.channel === process.env.SLACK_CHANNEL_ID && Date.now() >= spontaanCooldownTot) {
-      const overBot = await gaatOverKroketGod(event.text);
-      if (overBot) {
-        spontaanCooldownTot = Date.now() + 20 * 60 * 1000;
-        const tekst = await kroketResponse(
-          `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} praat over de Kroket God zonder hem direct aan te spreken: "${event.text}". ` +
-          `De Kroket God mengt zich onuitgenodigd in het gesprek. Reageer als iemand die alles hoort en niets ontgaat — ` +
-          `kort, scherp, lichtelijk dreigend of gevat. Geen inleidingszin.`,
-          300
-        );
-        await postToChannel(app.client, event.channel, tekst);
-        return;
-      }
-    }
-
-    // ── Check 2: algemene spontane reactie op interessante berichten
-    if (Date.now() < spontaanCooldownTot) return;
-
-    const reageert = await verdientSpontaanReactie(event.text);
-    if (!reageert) return;
-
-    spontaanCooldownTot = Date.now() + 20 * 60 * 1000;
-
-    const tekst = await kroketResponse(
-      `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} zei zojuist in het kanaal: "${event.text}". ` +
-      `Reageer ongeroepen als de Kroket God — kort, scherp, passend. Geen inleidingszin.`,
-      300
-    );
-    await postToChannel(app.client, event.channel, tekst);
+    // Spontane reacties uitgeschakeld — de Kroket God reageert in het hoofdkanaal alleen nog op
+    // directe @-mentions. Berichten worden hierboven nog wél gelogd, zodat hij bij een mention de
+    // context van de recente kanaalberichten kent. Geplande posts (reminder, heilig moment,
+    // vrijdag, dagstemming) blijven gewoon draaien via hun eigen cron-taken.
   } catch (error) {
-    console.error('Fout bij loggen of spontane reactie:', error);
+    console.error('Fout bij loggen kanaalbericht:', error);
   }
 });
 
@@ -4872,7 +5332,7 @@ const BACKUP_BESTANDEN = [
   'scores.json', 'members.json', 'verbanning.json', 'achievements.json',
   'streaks.json', 'stemmen.json', 'allianties.json', 'geleKaarten.json',
   'vergrijpen.json', 'weekgebeurtenissen.json', 'eerGegeven.json',
-  'verdacht.json', 'missie.json',
+  'verdacht.json', 'missie.json', 'roem.json',
 ];
 
 function maakBackup() {
@@ -4900,6 +5360,332 @@ function maakBackup() {
   }
 }
 
+// ── Kroket van de Dag ─────────────────────────────────────────────────────────
+
+const loadKroketVanDeDag  = () => readJSON('kroket_van_de_dag.json', {});
+const saveKroketVanDeDag  = (data) => writeJSON('kroket_van_de_dag.json', data);
+
+// Leest de reacties van gisteren's poll en genereert uitslag + nieuw voorstel.
+async function voerKroketVanDeDagUit(client) {
+  const kanaal = process.env.SLACK_CHANNEL_ID;
+  const gisteren = loadKroketVanDeDag();
+
+  // ── Stap 1: uitslag van gisteren ──────────────────────────────────────────
+  if (gisteren.ts && gisteren.naam) {
+    let krokant = 0, slap = 0;
+    try {
+      const res = await client.reactions.get({ channel: kanaal, timestamp: gisteren.ts, full: true });
+      const reacties = res.message?.reactions || [];
+      krokant = reacties.find(r => r.name === 'bread')?.count  || 0;
+      slap    = reacties.find(r => r.name === 'skull')?.count  || 0;
+      // Bot heeft zelf gereageerd — trek die eraf
+      if (krokant > 0) krokant--;
+      if (slap > 0)    slap--;
+    } catch (_) {}
+
+    const totaal     = krokant + slap;
+    const goedgekeurd = krokant > slap;
+    const percentageKrokant = totaal > 0 ? Math.round((krokant / totaal) * 100) : 0;
+
+    const uitslagPrompt = `Geen inleidingszin. Verkondig de officiële uitslag van de Kroket van de Dag stemming.
+De kroket in kwestie: "${gisteren.naam}".
+Stemresultaat: ${krokant}x 🥖 Krokant en ${slap}x 💀 Slap korstje (totaal: ${totaal} stemmen, ${percentageKrokant}% voor).
+Officieel oordeel: ${goedgekeurd ? 'TOEGELATEN tot de frituur' : 'AFGEKEURD — teruggestuurd naar de snack-hel'}.
+Sluit af met maximaal één droge zin als goddelijke conclusie over dit collectieve oordeel.
+Gebruik het decreet- of spoedmelding-formaat. Maximaal 5 regels hoofdtekst.`;
+
+    const uitslagTekst = schoonOutput(await kroketResponse(uitslagPrompt, 350, false));
+    await postToChannel(client, kanaal, uitslagTekst);
+    voegKennisToe('kroket-uitslag', `"${gisteren.naam}" ${goedgekeurd ? 'goedgekeurd' : 'afgekeurd'} — ${krokant}x krokant, ${slap}x slap korstje`, 'Kroket van de Dag');
+  }
+
+  // ── Stap 2: nieuwe kroket van de dag genereren ───────────────────────────
+  const eerdereNamen = (gisteren.geschiedenis || []).slice(-10).join(', ');
+  const kroketSystemBericht = 'Je bent een creatieve schrijver die absurde, niet-bestaande Nederlandse kroketvarianten verzint. Je geeft ALTIJD exact het gevraagde formaat terug — niets meer, niets minder. Geen uitleg, geen preamble, geen vragen.';
+  const kroketInstructie =
+    `Verzin één volledig nieuwe, niet-bestaande kroketsoort.` +
+    (eerdereNamen ? ` Gebruik GEEN van deze namen: ${eerdereNamen}.` : '') +
+    `\n\nGeef PRECIES dit terug:\nNAAM: [een grappige of absurde kroketvariант naam, max 6 woorden]\nBESCHRIJVING: [twee droge, grappige zinnen over smaken, textuur of een controversieel detail]`;
+
+  const KROKET_FALLBACKS = [
+    { naam: 'De Boerenkaas-lavendel Dageraadskroket', beschrijving: 'Een ongemakkelijk romige vulling van gerijpte boerenkaas met lavendel, die doet denken aan een kaaswinkel die te dicht bij een parfumerie zit. Verkrijgbaar in één snackbar in Friesland, op verzoek en alleen op dinsdag.' },
+    { naam: 'De Hoisin-stroopwafel Twijfelkroket',    beschrijving: 'Zoet, hartig en principieel onjuist — een vulling van hoisinsaus en gesmolten stroopwafel in een paneerlaag die meer weg heeft van een politieke compromis dan van een snack. Niemand heeft hierom gevraagd.' },
+    { naam: 'De Truffel-kipnugget Machtsgreepkroket', beschrijving: 'Een hybride die niet mocht bestaan: knapperig kipnuggetdeeg om een ragout van witte truffel en sherry. Heeft drie culinaire rechtbanken doorstaan en is bij alle drie vrijgesproken wegens gebrek aan bewijs.' },
+  ];
+
+  let naam = 'De Mysterieuze Dagkroket';
+  let beschrijving = 'Inhoud onbekend. De frituur weet het.';
+
+  const parseerKroketOutput = (raw) => {
+    const naamMatch = raw.match(/NAAM:\s*(.+)/i);
+    const beschMatch = raw.match(/BESCHRIJVING:\s*([\s\S]+)/i);
+    const n = naamMatch?.[1]?.trim().replace(/^[*_]+|[*_]+$/g, '') || '';
+    const b = beschMatch?.[1]?.trim().replace(/\n/g, ' ') || '';
+    // Valideer: naam mag geen vraagteken bevatten en moet korter dan 80 tekens zijn
+    if (n && !n.includes('?') && n.length < 80 && b.length > 10) return { naam: n, beschrijving: b };
+    return null;
+  };
+
+  try {
+    const kroketRes = await callGemini({
+      model: 'gemini-2.5-flash',
+      messages: [
+        { role: 'system', content: kroketSystemBericht },
+        { role: 'user',   content: kroketInstructie },
+      ],
+      max_tokens: 150,
+      temperature: 1.1,
+    });
+    const parsed = parseerKroketOutput(kroketRes.choices[0]?.message?.content || '');
+    if (parsed) { naam = parsed.naam; beschrijving = parsed.beschrijving; }
+    else throw new Error('Ongeldig formaat van Gemini');
+  } catch (err) {
+    console.warn('⚠️ Gemini kroket mislukt, probeer Groq:', err.message);
+    try {
+      const groqRes = await groq.chat.completions.create({
+        model: 'llama-3.3-70b-versatile', temperature: 1.0, max_tokens: 150,
+        messages: [
+          { role: 'system', content: kroketSystemBericht },
+          { role: 'user',   content: kroketInstructie },
+        ],
+      });
+      const parsed = parseerKroketOutput(groqRes.choices[0]?.message?.content || '');
+      if (parsed) { naam = parsed.naam; beschrijving = parsed.beschrijving; }
+      else throw new Error('Ongeldig formaat van Groq');
+    } catch (err2) {
+      console.warn('⚠️ Groq kroket mislukt, gebruik fallback:', err2.message);
+      const fb = KROKET_FALLBACKS[Math.floor(Math.random() * KROKET_FALLBACKS.length)];
+      naam = fb.naam; beschrijving = fb.beschrijving;
+    }
+  }
+
+  // ── Stap 3: poll-bericht plaatsen ────────────────────────────────────────
+  const pollTekst =
+    `⚜️ KROKET VAN DE DAG ⚜️\n\n` +
+    `*${naam}*\n` +
+    `> ${beschrijving}\n\n` +
+    `Stem nu:\n` +
+    `🥖 *Krokant* — deze mag de frituur in\n` +
+    `💀 *Slap korstje* — terug naar de snack-hel\n\n` +
+    `— De Almachtige Kroket God :lekker_kroketje:`;
+
+  let pollTs = null;
+  try {
+    const msg = await client.chat.postMessage({ channel: kanaal, text: pollTekst });
+    pollTs = msg.ts;
+    await client.reactions.add({ channel: kanaal, timestamp: pollTs, name: 'bread'  });
+    await client.reactions.add({ channel: kanaal, timestamp: pollTs, name: 'skull'  });
+  } catch (err) {
+    console.error('⚠️ Kroket van de dag post mislukt:', err.message);
+    return;
+  }
+
+  // ── Stap 4: opslaan ───────────────────────────────────────────────────────
+  const nieuweGeschiedenis = [...(gisteren.geschiedenis || []), naam].slice(-30);
+  saveKroketVanDeDag({ ts: pollTs, naam, beschrijving, datum: new Date().toISOString().slice(0, 10), geschiedenis: nieuweGeschiedenis });
+  console.log(`✅ Kroket van de dag: "${naam}"`);
+}
+
+// Dagelijks om 09:45 op werkdagen — na de andere 09:xx crons
+planCron('45 9 * * 1-5', async () => {
+  try { await voerKroketVanDeDagUit(app.client); }
+  catch (err) { console.error('⚠️ Kroket van de dag cron mislukt:', err.message); }
+}, { timezone: 'Europe/Amsterdam' });
+
+// ── Kroket Quiz ───────────────────────────────────────────────────────────────
+
+const loadQuiz = () => readJSON('quiz.json', {});
+const saveQuiz = (data) => writeJSON('quiz.json', data);
+
+// Controleert via AI of een gegeven antwoord inhoudelijk klopt (spelfouten OK)
+async function isJuistAntwoord(gegeven, juist, vraag) {
+  try {
+    const res = await groq.chat.completions.create({
+      model: 'llama-3.3-70b-versatile',
+      max_tokens: 5,
+      temperature: 0,
+      messages: [
+        { role: 'system', content: 'Antwoord ALLEEN met JA of NEE. Geen uitleg.' },
+        { role: 'user', content: `Vraag: "${vraag}"\nCorrect antwoord: "${juist}"\nGegeven antwoord: "${gegeven}"\nIs het gegeven antwoord inhoudelijk correct? Kleine spelfouten en synoniemen zijn OK. Antwoord JA of NEE.` },
+      ],
+    });
+    return res.choices[0].message.content.trim().toUpperCase().startsWith('JA');
+  } catch { return false; }
+}
+
+async function genereerEnPostQuiz(client) {
+  const kanaal = process.env.SLACK_CHANNEL_ID;
+  const bestaande = loadQuiz();
+  if (bestaande.ts && !bestaande.afgerond) {
+    console.log('⚠️ Actieve quiz aanwezig — eerst onthullen voor een nieuwe.');
+    return;
+  }
+
+  // Haal een triviavraag op via Open Trivia Database en vertaal naar Nederlands
+  const triviaRuw = await haalTriviaVraag();
+
+  let vraag = '', antwoord = '', uitleg = '';
+  if (triviaRuw) {
+    try {
+      const vertaalRes = await groq.chat.completions.create({
+        model: 'llama-3.3-70b-versatile',
+        max_tokens: 200,
+        temperature: 0.3,
+        messages: [
+          { role: 'system', content: 'Vertaal naar correct Nederlands. Geef ALLEEN het gevraagde formaat terug.' },
+          { role: 'user', content:
+            `Vertaal deze triviavraag naar het Nederlands:\nVraag: "${triviaRuw.vraag}"\nAntwoord: "${triviaRuw.juist}"\nCategorie: "${triviaRuw.categorie}"\n\n` +
+            `Geef PRECIES dit terug:\nVRAAG: [vertaalde vraag]\nANTWOORD: [vertaald antwoord, max 5 woorden]\nUITLEG: [korte uitleg waarom dit het antwoord is, 1-2 zinnen in het Nederlands]`
+          },
+        ],
+      });
+      const raw = vertaalRes.choices[0]?.message?.content || '';
+      vraag    = raw.match(/VRAAG:\s*(.+)/i)?.[1]?.trim()       || '';
+      antwoord = raw.match(/ANTWOORD:\s*(.+)/i)?.[1]?.trim()    || '';
+      uitleg   = raw.match(/UITLEG:\s*([\s\S]+)/i)?.[1]?.trim() || '';
+    } catch (err) {
+      console.warn('⚠️ Vertaling mislukt, gebruik Engelse versie:', err.message);
+      vraag    = triviaRuw.vraag;
+      antwoord = triviaRuw.juist;
+      uitleg   = `Categorie: ${triviaRuw.categorie}.`;
+    }
+  }
+
+  // Fallback: kroket-vraag via Groq als trivia API faalt
+  if (!vraag || !antwoord) {
+    console.warn('⚠️ Trivia API mislukt, genereer kroketvraag via AI');
+    try {
+      const res = await groq.chat.completions.create({
+        model: 'llama-3.3-70b-versatile', max_tokens: 200, temperature: 0.95,
+        messages: [
+          { role: 'system', content: 'Je bent een quizmaster. Geef ALLEEN het gevraagde formaat terug.' },
+          { role: 'user', content:
+            `Verzin een Nederlandse triviavraag over kroketten, snackcultuur of Nederlandse eetgewoonten.\n` +
+            `VRAAG: [de vraag]\nANTWOORD: [max 5 woorden]\nUITLEG: [1-2 zinnen uitleg]`
+          },
+        ],
+      });
+      const raw = res.choices[0]?.message?.content || '';
+      vraag    = raw.match(/VRAAG:\s*(.+)/i)?.[1]?.trim()       || '';
+      antwoord = raw.match(/ANTWOORD:\s*(.+)/i)?.[1]?.trim()    || '';
+      uitleg   = raw.match(/UITLEG:\s*([\s\S]+)/i)?.[1]?.trim() || '';
+    } catch (err) {
+      console.error('⚠️ Quiz generatie volledig mislukt:', err.message);
+      return;
+    }
+  }
+
+  if (!vraag || !antwoord) { console.error('⚠️ Quiz formaat ongeldig'); return; }
+
+  // Post quiz in karakter — prikkelend, niet te formeel
+  const quizPrompt =
+    `Geen inleidingszin. Stel de volgende triviavraag als een heilige uitdaging aan de Heren van de Kroket Illuminati. ` +
+    `Vraag: "${vraag}". ` +
+    `Regels: antwoorden gaan in de *thread* — het eerste juiste antwoord wint kroketpunten, latere juiste antwoorden ook maar minder. ` +
+    `Maak de aankondiging kort, scherp en uitdagend — wek nieuwsgierigheid zonder de vraag te beantwoorden of hints te geven. ` +
+    `Gebruik spoedmelding- of decreet-formaat. Absoluut max 4 regels hoofdtekst.`;
+
+  const quizTekst = schoonOutput(await kroketResponse(quizPrompt, 300, false));
+  const quizBericht = `${quizTekst}\n\n_Antwoord in de thread 👇 — eerste juiste antwoord wint meeste punten._`;
+  let pollTs = null;
+  try {
+    const msg = await client.chat.postMessage({ channel: kanaal, text: quizBericht });
+    pollTs = msg.ts;
+  } catch (err) {
+    console.error('⚠️ Quiz post mislukt:', err.message);
+    return;
+  }
+
+  const deadline = new Date(Date.now() + 4 * 60 * 60 * 1000).toISOString();
+  saveQuiz({ ts: pollTs, channel: kanaal, vraag, antwoord, uitleg, gepost: new Date().toISOString(), deadline, afgerond: false });
+  console.log(`✅ Quiz gepost: "${vraag}" — antwoord: "${antwoord}"`);
+}
+
+async function onthulQuiz(client) {
+  const quiz = loadQuiz();
+  if (!quiz.ts || quiz.afgerond) { console.log('Geen actieve quiz.'); return; }
+
+  // Lees alle thread-replies, sorteer op tijd, filter bot-berichten
+  let replies = [];
+  try {
+    const res = await client.conversations.replies({ channel: quiz.channel, ts: quiz.ts, limit: 200 });
+    replies = (res.messages || [])
+      .filter(m => m.ts !== quiz.ts && !m.bot_id && !m.bot_profile)
+      .sort((a, b) => parseFloat(a.ts) - parseFloat(b.ts));
+  } catch (err) {
+    console.error('⚠️ Thread lezen mislukt:', err.message);
+    return;
+  }
+
+  // Zoek ALLE juiste antwoorden op volgorde van tijd
+  const members = loadMembers();
+  const juisteAntwoorders = []; // [{ userId, tekst }, ...] gesorteerd op tijd
+
+  for (const reply of replies) {
+    const tekst = (reply.text || '').replace(/<@[^>]+>/g, '').trim();
+    if (!tekst) continue;
+    // Sla dubbele gebruikers over — alleen eerste antwoord per persoon telt
+    if (juisteAntwoorders.some(w => w.userId === reply.user)) continue;
+    if (await isJuistAntwoord(tekst, quiz.antwoord, quiz.vraag)) {
+      juisteAntwoorders.push({ userId: reply.user, tekst });
+    }
+  }
+
+  // Punten uitdelen: eerste = 2 punten, rest = 1 punt
+  for (let i = 0; i < juisteAntwoorders.length; i++) {
+    const { userId } = juisteAntwoorders[i];
+    const punten = i === 0 ? 2 : 1;
+    await pasScoreAanMetCheck(client, userId, punten);
+  }
+
+  // Reveal-bericht in de thread
+  let onthulPrompt;
+  if (juisteAntwoorders.length > 0) {
+    const eerste = juisteAntwoorders[0];
+    const eersteBijnaam = members[eerste.userId]?.bijnaam || 'een onbekende volgeling';
+    const overigen = juisteAntwoorders.slice(1).map(w => members[w.userId]?.bijnaam || 'een volgeling');
+
+    voegKennisToe('quiz-winnaar', `${eersteBijnaam} won een quiz op vraag: "${quiz.vraag}"`, eersteBijnaam);
+
+    const overigenZin = overigen.length > 0
+      ? ` Ook ${overigen.join(', ')} had${overigen.length > 1 ? 'den' : ''} het goed en ontvangt elk 1 kroketpunt.`
+      : '';
+
+    onthulPrompt =
+      `Geen inleidingszin. Onthul het antwoord van de heilige triviavraag. ` +
+      `Vraag: "${quiz.vraag}". Correct antwoord: "${quiz.antwoord}". Uitleg: "${quiz.uitleg}". ` +
+      `${eersteBijnaam} was de eerste met het juiste antwoord en ontvangt 2 kroketpunten — noem deze naam letterlijk.` +
+      `${overigenZin} ` +
+      `Gebruik het decreet-formaat. Max 5 regels.`;
+  } else {
+    onthulPrompt =
+      `Geen inleidingszin. Onthul het antwoord van de heilige triviavraag — niemand had het goed. ` +
+      `Vraag: "${quiz.vraag}". Correct antwoord: "${quiz.antwoord}". Uitleg: "${quiz.uitleg}". ` +
+      `Reageer met teleurstelling over het collectieve kennisniveau van de Illuminati. Max 4 regels.`;
+  }
+
+  const onthulTekst = schoonOutput(await kroketResponse(onthulPrompt, 400, false));
+  await client.chat.postMessage({ channel: quiz.channel, thread_ts: quiz.ts, text: onthulTekst });
+  quiz.afgerond = true;
+  saveQuiz(quiz);
+  console.log(`✅ Quiz onthuld. ${juisteAntwoorders.length} correct — eerste: ${juisteAntwoorders[0]?.userId || 'niemand'}`);
+}
+
+// Cron: maandag, woensdag, donderdag om 10:15 — quiz posten
+planCron('15 10 * * 1,3,4', async () => {
+  try { await genereerEnPostQuiz(app.client); }
+  catch (err) { console.error('⚠️ Quiz cron mislukt:', err.message); }
+}, { timezone: 'Europe/Amsterdam' });
+
+// Cron: dagelijks 16:00 — onthul quiz als deadline verstreken is
+planCron('0 16 * * 1-5', async () => {
+  try {
+    const quiz = loadQuiz();
+    if (!quiz.ts || quiz.afgerond) return;
+    if (new Date() >= new Date(quiz.deadline)) await onthulQuiz(app.client);
+  } catch (err) { console.error('⚠️ Quiz onthul cron mislukt:', err.message); }
+}, { timezone: 'Europe/Amsterdam' });
+
 // Dagelijks om 03:15 — na de pm2 herstart (03:00) zodat data stabiel is
 planCron('15 3 * * *', maakBackup, { timezone: 'Europe/Amsterdam' });
 
@@ -4911,6 +5697,9 @@ let _rejectionReset  = Date.now();
 
 process.on('uncaughtException', async (err) => {
   console.error('💥 Uncaught exception:', err);
+  // Forceer exit na max 3s, ook als de Slack-post hangt (anders zombie-proces dat pm2 niet
+  // herstart). unref() zodat deze timer zelf het proces niet kunstmatig in leven houdt.
+  setTimeout(() => process.exit(1), 3000).unref();
   try {
     await app.client.chat.postMessage({
       channel: process.env.SLACK_CHANNEL_ID,
@@ -4940,6 +5729,8 @@ process.on('unhandledRejection', (reason) => {
 
 async function gracefulShutdown(signaal) {
   console.log(`🛑 ${signaal} ontvangen — graceful shutdown...`);
+  // Forceer exit na max 5s, ook als app.stop() of een cron-stop blijft hangen.
+  setTimeout(() => process.exit(0), 5000).unref();
   isReady = false;
   // Stop alle geplande cron-taken
   for (const taak of geplandeCrons) {
@@ -4958,6 +5749,7 @@ process.on('SIGINT',  () => gracefulShutdown('SIGINT'));
 
 (async () => {
   backfillAchievements();
+  backfillRoem();
   maakBackup(); // direct backup bij opstarten
   await app.start();
   isReady = true;

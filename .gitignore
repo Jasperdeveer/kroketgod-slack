@@ -1,5 +1,7 @@
 node_modules/
 .env
+.env.*
+!.env.example
 .DS_Store
 
 # Lokale state — per machine. Mag niet in git anders worden ze overschreven bij git reset.
