@@ -5,6 +5,7 @@ node_modules/
 .DS_Store
 
 # Lokale state — per machine. Mag niet in git anders worden ze overschreven bij git reset.
+# De Pi is de bron van waarheid voor al deze bestanden (zie deploy.sh / PI_EIGEN).
 members.json
 scores.json
 geschiedenis.json
@@ -14,3 +15,47 @@ achievements.json
 verbanning.json
 test_kanalen.json
 instellingen.json
+personas.json
+
+# Overige runtime-state en opgebouwde inhoud. Bevat ledengegevens en uitspraken van leden,
+# dus hoort niet in git — en zou bij een git reset de echte stand overschrijven.
+roem.json
+allianties.json
+geleKaarten.json
+vergrijpen.json
+weekgebeurtenissen.json
+eerGegeven.json
+verdacht.json
+missie.json
+powerups.json
+winkelhistorie.json
+statistiekhistorie.json
+geplandeberichten.json
+overslaan.json
+auditlog.json
+llmstats.json
+frituurlog.json
+kennisbank.json
+quiz.json
+profetie.json
+kroketgok.json
+kroket_van_de_dag.json
+goudenkroket.json
+troon.json
+troonduel.json
+cooldowns.json
+duels.json
+vetbad.json
+bingo.json
+veiling.json
+bamischijf.json
+premie.json
+profeet.json
+weekreset.json
+kroketevent.json
+
+# Backups bevatten kopieën van alle ledengegevens
+backups/
+
+# Claude Code: lokale (machine-specifieke) instellingen
+.claude/settings.local.json
