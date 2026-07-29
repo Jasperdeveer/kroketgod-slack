@@ -90,11 +90,21 @@ info "Bestanden uploaden..."
 
 BESTANDEN=(
   "index.js"
+  "dashboard.html"
+  "prompt-safety.js"
   "tone_of_voice.txt"
+  "tone_of_voice_satebal.txt"
   "geboden.txt"
   "gepanneerde_rijk.txt"
-  "members.json"
   "kroketgod.png"
+)
+
+# Bestanden waarvan de PI de bron van waarheid is: de bot schrijft ze zelf (aanmelden,
+# rolwissel, profielvelden). Ze worden alleen geüpload als ze op de Pi nog NIET bestaan —
+# anders zou een deploy vanaf een verouderde laptop-kopie nieuwe leden wegvagen.
+# (Net als .env, die nooit wordt gedeployed.)
+PI_EIGEN=(
+  "members.json"
 )
 
 for bestand in "${BESTANDEN[@]}"; do
@@ -107,6 +117,17 @@ for bestand in "${BESTANDEN[@]}"; do
   fi
 done
 
+for bestand in "${PI_EIGEN[@]}"; do
+  lokaal="${LOKAAL_PAD}/${bestand}"
+  [[ -f "$lokaal" ]] || continue
+  if ssh "${PI_USER}@${PI_HOST}" "test -f '${PI_PAD}/${bestand}'"; then
+    info "  ${bestand} overgeslagen (Pi is de bron van waarheid)"
+  else
+    scp -q "$lokaal" "${PI_USER}@${PI_HOST}:${PI_PAD}/${bestand}"
+    info "  ${bestand} (eerste keer aangelegd)"
+  fi
+done
+
 # ── npm install
 echo ""
 info "Dependencies controleren..."
@@ -116,7 +137,7 @@ ssh "${PI_USER}@${PI_HOST}" "${NVM_SETUP}; cd '${PI_PAD}' && npm install --silen
 echo ""
 info "Bot herstarten..."
 ssh "${PI_USER}@${PI_HOST}" "${NVM_SETUP}
-  pm2 restart ${PM2_NAAM} 2>/dev/null \
+  pm2 restart ${PM2_NAAM} --update-env 2>/dev/null \
     || pm2 start '${PI_PAD}/index.js' --name ${PM2_NAAM}
   sleep 3
   pm2 save --force 2>/dev/null || true
