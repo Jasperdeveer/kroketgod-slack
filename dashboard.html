@@ -1,0 +1,701 @@
+<!doctype html><html lang="nl"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kroket God — Dashboard</title>
+<style>
+  :root{--bg:#120c06;--card:#221809;--card2:#2a1e0c;--gold:#f0c060;--gold2:#caa047;--amber:#e08a2a;--txt:#f6ead0;--dim:#b89c72;--green:#7fd07f;--red:#e07a5a;--line:#4a3618;--glow:rgba(240,192,96,.45)}
+  *{box-sizing:border-box}html,body{margin:0}
+  body{color:var(--txt);font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;background:
+    radial-gradient(1100px 560px at 50% -8%,rgba(224,138,42,.20),transparent 60%),
+    radial-gradient(900px 520px at 50% 108%,rgba(202,160,71,.10),transparent 60%),var(--bg);background-attachment:fixed}
+  body::before{content:"";position:fixed;inset:0;pointer-events:none;opacity:.55;z-index:0;
+    background-image:radial-gradient(rgba(240,192,96,.10) 1px,transparent 1.5px),radial-gradient(rgba(224,138,42,.07) 1px,transparent 1.5px);
+    background-size:7px 7px,12px 12px;background-position:0 0,3px 5px}
+  .wrap{position:relative;z-index:1}
+  /* centraal watermerk: grote, vervaagde Kroket God achter alle kaarten */
+  .watermark{position:absolute;inset:0;z-index:0;pointer-events:none;
+    background:url('/kroketgod.png') center 54% no-repeat;background-size:min(720px,82vw) auto;opacity:.16;
+    -webkit-mask:radial-gradient(circle at center 54%,#000 24%,transparent 66%);mask:radial-gradient(circle at center 54%,#000 24%,transparent 66%)}
+  main{position:relative;z-index:1}
+  /* boxed op desktop: gecentreerde, omkaderde box met de achtergrond eromheen */
+  @media(min-width:980px){
+    body{padding:0 20px}
+    .wrap{max-width:1200px;margin:24px auto;border:1px solid var(--line);border-radius:18px;overflow:hidden;
+      background:linear-gradient(180deg,rgba(26,18,8,.6),rgba(18,12,6,.5));
+      box-shadow:0 22px 70px rgba(0,0,0,.55),0 0 0 1px rgba(240,192,96,.06) inset}
+  }
+  /* hero */
+  .hero{position:relative;z-index:1;text-align:center;padding:20px 16px 14px;overflow:hidden;border-bottom:1px solid var(--line)}
+  .halo{position:absolute;left:50%;top:2px;width:380px;height:380px;max-width:84vw;transform:translateX(-50%);z-index:0;filter:blur(4px);
+    background:radial-gradient(circle,rgba(240,192,96,.5),rgba(224,138,42,.14) 45%,transparent 70%);animation:pulse 4s ease-in-out infinite}
+  @keyframes pulse{0%,100%{opacity:.7;transform:translateX(-50%) scale(1)}50%{opacity:1;transform:translateX(-50%) scale(1.07)}}
+  .god{position:relative;z-index:2;width:184px;height:184px;border-radius:50%;object-fit:cover;background:#1a1208;
+    border:3px solid var(--gold);box-shadow:0 0 0 7px rgba(240,192,96,.10),0 0 44px var(--glow)}
+  .godph{align-items:center;justify-content:center;font-size:92px}
+  .crown{position:relative;z-index:2;margin:13px 0 1px;font-family:Georgia,'Times New Roman',serif;font-weight:700;
+    font-size:clamp(22px,4vw,30px);letter-spacing:3px;color:var(--gold);text-shadow:0 0 22px var(--glow),0 2px 0 #5a3c10}
+  .sub{position:relative;z-index:2;color:var(--dim);letter-spacing:4px;text-transform:uppercase;font-size:10px;margin-bottom:10px}
+  .pills{position:relative;z-index:2;display:flex;flex-wrap:wrap;gap:8px;justify-content:center}
+  .bolt{position:absolute;top:-10px;z-index:1;width:64px;height:200px;opacity:0;filter:drop-shadow(0 0 7px var(--gold));animation:flash 7s infinite}
+  .bolt.l{left:6%}.bolt.r{right:6%;transform:scaleX(-1)}
+  .bolt.l2{left:22%;animation-delay:2.3s}.bolt.r2{right:22%;transform:scaleX(-1);animation-delay:4.1s}
+  @keyframes flash{0%,100%{opacity:0}1.5%{opacity:1}3%{opacity:.15}5%{opacity:.95}8%{opacity:0}}
+  .pill{padding:4px 12px;border-radius:99px;font-size:12px;font-weight:600;background:rgba(42,30,12,.85);border:1px solid var(--line);color:var(--txt)}
+  .pill.on{color:var(--green);border-color:var(--green)}.pill.off{color:var(--red);border-color:var(--red)}
+  main{padding:11px 13px;max-width:none;margin:0 auto}
+  /* masonry: kaarten vullen verticaal op, geen lege gaten onder kortere kaarten */
+  .cards{column-width:244px;column-gap:10px}
+  #instellingen{margin-bottom:10px}
+  .setgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px}
+  .lbl{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px}
+  .info{display:inline-block;width:15px;height:15px;line-height:14px;text-align:center;border-radius:50%;border:1px solid var(--gold2);color:var(--gold);font-size:10px;font-weight:700;font-style:italic;cursor:help;margin-left:5px;position:relative;vertical-align:middle;text-transform:none;letter-spacing:0}
+  .info:hover{background:var(--gold2);color:#1a1208}
+  .info:hover::after{content:attr(data-tip);position:absolute;left:50%;bottom:150%;transform:translateX(-50%);width:240px;max-width:70vw;background:#16100a;color:var(--txt);border:1px solid var(--gold2);border-radius:8px;padding:8px 11px;font-size:12px;font-weight:400;font-style:normal;line-height:1.45;text-align:left;box-shadow:0 8px 22px rgba(0,0,0,.55);z-index:20;white-space:normal}
+  .info:hover::before{content:"";position:absolute;left:50%;bottom:150%;transform:translate(-50%,99%);border:6px solid transparent;border-top-color:var(--gold2);z-index:20}
+  .tog{display:block;padding:2px 0;font-size:13px;cursor:pointer}.tog input{vertical-align:middle;margin-right:6px;accent-color:var(--amber)}
+  .numl{display:block;font-size:13px;margin:2px 0}.numl input{width:54px;background:#16100a;color:var(--txt);border:1px solid var(--line);border-radius:6px;padding:2px 6px;margin:0 4px}
+  select,textarea{width:100%;background:#16100a;color:var(--txt);border:1px solid var(--line);border-radius:8px;padding:6px 8px;font:inherit}
+  .btn{background:#2c2010;color:var(--txt);border:1px solid var(--line);border-radius:8px;padding:6px 11px;font:inherit;cursor:pointer;margin:2px 2px}
+  .btn:hover{border-color:var(--gold)}.btn.gold{background:linear-gradient(180deg,var(--gold),var(--gold2));color:#1a1208;border-color:var(--gold);font-weight:700}
+  .card{position:relative;break-inside:avoid;margin-bottom:10px;background:linear-gradient(180deg,rgba(42,30,12,.86),rgba(34,24,9,.86));border:1px solid var(--line);border-radius:12px;padding:10px 12px;box-shadow:0 1px 0 rgba(240,192,96,.06) inset,0 6px 16px rgba(0,0,0,.4)}
+  .card h2{margin:0 0 6px;padding-bottom:5px;border-bottom:1px solid var(--line);font-size:12px;text-transform:uppercase;letter-spacing:.8px;color:var(--gold);text-shadow:0 0 12px rgba(240,192,96,.25)}
+  table{width:100%;border-collapse:collapse}td,th{text-align:left;padding:2px 5px;border-bottom:1px solid rgba(74,54,24,.6);font-size:13px}
+  th{color:var(--dim);font-weight:600;font-size:11px}tr:last-child td{border-bottom:0}
+  .num{text-align:right;font-variant-numeric:tabular-nums}
+  .prov{display:flex;justify-content:space-between;align-items:center;padding:3px 0;border-bottom:1px solid rgba(74,54,24,.6);font-size:13px}.prov:last-child{border:0}
+  .dot{display:inline-block;width:9px;height:9px;border-radius:99px;margin-right:7px;vertical-align:middle;box-shadow:0 0 6px currentColor}
+  .dot.ok{background:var(--green);color:var(--green)}.dot.cool{background:var(--gold);color:var(--gold)}.dot.off{background:#5a4a30;color:transparent}
+  .tier{font-size:11px;color:var(--dim);margin-left:6px}
+  .bar{height:7px;background:#16100a;border-radius:99px;overflow:hidden;margin-top:3px;border:1px solid var(--line)}.bar i{display:block;height:100%;background:linear-gradient(90deg,var(--amber),var(--gold))}
+  /* grafieken */
+  .vbars{display:flex;align-items:flex-end;gap:6px;height:90px;margin-top:5px;padding-top:13px}
+  .vbar{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%}
+  .vbar i{position:relative;width:100%;min-height:3px;border-radius:4px 4px 0 0;display:block;
+    background:linear-gradient(180deg,var(--gold),var(--amber));box-shadow:0 0 10px rgba(224,138,42,.35)}
+  .vbar i b{position:absolute;top:-15px;left:0;right:0;text-align:center;font-size:11px;color:var(--gold);font-weight:700}
+  .vbar i b.zero{color:var(--dim);font-weight:400}
+  .vbar span{font-size:11px;color:var(--dim);margin-top:5px}
+  .hbar{display:flex;align-items:center;gap:8px;padding:3px 0}
+  .hbar .hl{width:34%;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .hbar .ht{flex:1;height:10px;background:#16100a;border-radius:99px;overflow:hidden;border:1px solid var(--line)}
+  .hbar .ht i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,var(--amber),var(--gold))}
+  .hbar .hn{width:30px;text-align:right;font-variant-numeric:tabular-nums;font-size:12px;color:var(--txt)}
+  /* ranglijst: één gestapelde balk per lid — roempunten (navy) + kroketpunten (goud) */
+  .rlg{display:flex;gap:14px;margin-bottom:9px;font-size:12px;color:var(--dim)}
+  .rlg span{display:flex;align-items:center;gap:5px}.rlg i{width:11px;height:11px;border-radius:3px}
+  .sw-kroket{background:linear-gradient(90deg,var(--amber),var(--gold))}
+  .sw-roem{background:linear-gradient(90deg,#2e3192,#4348c4)}
+  .rrow{padding:5px 0;border-bottom:1px solid rgba(74,54,24,.4)}.rrow:last-child{border:0}
+  .rrow .rn{display:flex;justify-content:space-between;align-items:baseline;gap:8px;font-size:13px;margin-bottom:3px}
+  .rrow .rn .nm{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .rrow .rn .vals{flex:0 0 auto;font-variant-numeric:tabular-nums;font-weight:600}
+  .rrow .rn .vk{color:var(--gold)}.rrow .rn .vr{color:#9aa0e8}
+  .sbar{display:flex;height:14px;background:#16100a;border-radius:99px;overflow:hidden;border:1px solid var(--line)}
+  .sbar .seg{height:100%}
+  .sbar .seg.roem{background:linear-gradient(90deg,#2e3192,#4348c4)}
+  .sbar .seg.kroket{background:linear-gradient(90deg,var(--amber),var(--gold))}
+  .donut{display:flex;align-items:center;gap:12px;margin-top:5px;flex-wrap:wrap}
+  .donut .ring{width:86px;height:86px;border-radius:99px;flex:0 0 auto;position:relative;
+    -webkit-mask:radial-gradient(circle 27px at 50% 50%,transparent 98%,#000);mask:radial-gradient(circle 27px at 50% 50%,transparent 98%,#000)}
+  .donut .ring.empty{background:#16100a;border:1px solid var(--line)}
+  .donut .leg{flex:1;min-width:120px}
+  .donut .leg .li{display:flex;align-items:center;gap:6px;padding:2px 0;font-size:12px}
+  .donut .leg .sw{width:10px;height:10px;border-radius:3px;flex:0 0 auto}
+  .donut .leg .ln{margin-left:auto;color:var(--dim);font-variant-numeric:tabular-nums}
+  .lc{width:100%;height:auto;display:block;margin-top:4px;overflow:visible}
+  .llg{display:flex;gap:14px;flex-wrap:wrap;margin-top:7px;font-size:12px;color:var(--dim)}
+  .llg i{display:inline-block;width:12px;height:3px;border-radius:2px;margin-right:5px;vertical-align:middle}
+  .axis{display:flex;justify-content:space-between;font-size:11px;color:var(--dim);margin-top:3px}
+  .lc-empty{color:var(--dim);font-size:13px;padding:18px 0;text-align:center}
+  .feed{max-height:260px;overflow:auto}.feed .row{padding:3px 0;border-bottom:1px solid rgba(74,54,24,.5);font-size:12px}.feed .row:last-child{border:0}
+  /* ingeplande berichten */
+  .sched{display:flex;align-items:flex-start;gap:8px;padding:6px 0;border-bottom:1px solid rgba(74,54,24,.45)}.sched:last-child{border:0}
+  .sched .when{flex:0 0 auto;width:96px;font-size:11px;line-height:1.3}
+  .sched .when b{color:var(--gold);font-weight:600;font-variant-numeric:tabular-nums}
+  .sched .when span{color:var(--dim);display:block}
+  .sched .body{flex:1;min-width:0;font-size:12.5px}
+  .sched .body .tag{display:inline-block;font-size:10px;padding:1px 6px;border-radius:99px;margin-bottom:2px;border:1px solid var(--line);color:var(--dim);text-transform:uppercase;letter-spacing:.4px}
+  .sched .body .tag.terug{color:var(--gold2);border-color:var(--gold2)}
+  .sched .body .tag.eenm{color:#9aa0e8;border-color:#5358b0}
+  .sched .body .lbl2{color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block}
+  .sched .skip{flex:0 0 auto;background:#2c2010;color:var(--dim);border:1px solid var(--line);border-radius:7px;padding:3px 8px;font-size:11px;cursor:pointer}
+  .sched .skip:hover{border-color:var(--red);color:var(--red)}
+  .feed .t{color:var(--dim);font-size:11px}.muted{color:var(--dim)}.big{font-size:26px;color:var(--gold);font-weight:700}
+  /* tab-navigatie (2.0): sticky balk onder de hero */
+  .tabs{position:sticky;top:0;z-index:30;display:flex;gap:6px;flex-wrap:wrap;justify-content:center;padding:9px 4px;margin:-11px -13px 10px;
+    background:linear-gradient(180deg,rgba(18,12,6,.97),rgba(18,12,6,.9));backdrop-filter:blur(6px);border-bottom:1px solid var(--line)}
+  .tab{background:#221809;border:1px solid var(--line);color:var(--dim);border-radius:99px;padding:6px 14px;font:inherit;font-size:12.5px;cursor:pointer;letter-spacing:.4px}
+  .tab:hover{border-color:var(--gold);color:var(--txt)}
+  .tab.act{background:linear-gradient(180deg,var(--gold),var(--gold2));color:#1a1208;border-color:var(--gold);font-weight:700;box-shadow:0 0 14px rgba(240,192,96,.35)}
+  .tab .cnt{display:inline-block;min-width:16px;margin-left:5px;padding:0 4px;border-radius:99px;background:rgba(0,0,0,.25);font-size:10px;font-weight:700;vertical-align:middle}
+  .tabpane{display:none}.tabpane.act{display:block}
+  /* KPI-tegels (2.0) */
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(118px,1fr));gap:10px;margin-bottom:10px}
+  .kpi{background:linear-gradient(180deg,rgba(42,30,12,.9),rgba(34,24,9,.9));border:1px solid var(--line);border-radius:12px;padding:10px 8px;text-align:center;box-shadow:0 6px 16px rgba(0,0,0,.35)}
+  .kpi .v{font-size:24px;font-weight:700;color:var(--gold);font-variant-numeric:tabular-nums;text-shadow:0 0 14px rgba(240,192,96,.3)}
+  .kpi .l{font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.7px;margin-top:2px}
+  /* logs-zoekfilter (2.0) */
+  .zoek{width:100%;background:#16100a;color:var(--txt);border:1px solid var(--line);border-radius:8px;padding:7px 11px;font:inherit;margin-bottom:10px}
+  .zoek:focus{outline:none;border-color:var(--gold2)}
+  footer{text-align:center;color:var(--dim);font-size:12px;padding:16px}footer a{color:var(--gold2)}
+</style><style>#login_overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:999;align-items:center;justify-content:center;}#login_box{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:32px;min-width:300px;display:flex;flex-direction:column;gap:12px;}#login_box h2{margin:0;color:var(--amber);font-size:1.1rem;}#login_token{background:var(--bg);border:1px solid var(--border);color:var(--fg);border-radius:6px;padding:8px 12px;font-size:.9rem;width:100%;box-sizing:border-box;}#login_btn{background:var(--amber);color:#000;border:none;border-radius:6px;padding:10px;font-weight:700;cursor:pointer;}</style></head><body><div id="login_overlay"><div id="login_box"><h2>⚜️ Dashboard — Toegangscode vereist</h2><input id="login_token" type="password" placeholder="DASHBOARD_TOKEN" onkeydown="if(event.key==='Enter')saveToken()"><button id="login_btn" onclick="saveToken()">Bevestigen</button></div></div><div class="wrap">
+<div class="watermark" id="watermark"></div>
+<div class="hero">
+  <div class="halo"></div>
+  <svg class="bolt l" viewBox="0 0 40 200"><path d="M26 2 L9 96 L21 96 L5 198 L33 82 L20 82 Z" fill="#f0c060"/></svg>
+  <svg class="bolt r" viewBox="0 0 40 200"><path d="M26 2 L9 96 L21 96 L5 198 L33 82 L20 82 Z" fill="#f0c060"/></svg>
+  <svg class="bolt l2" viewBox="0 0 40 200"><path d="M24 2 L11 90 L20 90 L7 198 L31 86 L21 86 Z" fill="#caa047"/></svg>
+  <svg class="bolt r2" viewBox="0 0 40 200"><path d="M24 2 L11 90 L20 90 L7 198 L31 86 L21 86 Z" fill="#caa047"/></svg>
+  <img class="god" id="godimg" src="/kroketgod.png" alt="Kroket God" onerror="this.style.display='none';document.getElementById('godph').style.display='flex'">
+  <div class="god godph" id="godph" style="display:none">⚜️</div>
+  <div class="crown">KROKET GOD</div>
+  <div class="sub">Dashboard der Hoge Frituurraad</div>
+  <div class="pills">
+    <span class="pill" id="status">…</span>
+    <span class="pill" id="uptime"></span>
+    <span class="pill" id="mood"></span>
+    <span class="pill" id="vrijdag"></span>
+  </div>
+  <div class="muted" id="updated" style="margin-top:9px;font-size:11px"></div>
+</div>
+<main>
+<nav class="tabs" id="tabs">
+  <button class="tab act" data-tab="overzicht">📊 Overzicht</button>
+  <button class="tab" data-tab="spel">🎮 Spel</button>
+  <button class="tab" data-tab="llm">🤖 LLM &amp; systeem</button>
+  <button class="tab" data-tab="beheer">🛠️ Beheer</button>
+  <button class="tab" data-tab="logs">📜 Logs</button>
+</nav>
+<section class="tabpane act" id="tab-overzicht"><div class="kpis" id="kpis"></div><div class="cards" id="c_overzicht"><div class="card">Laden…</div></div></section>
+<section class="tabpane" id="tab-spel"><div class="cards" id="c_spel"></div></section>
+<section class="tabpane" id="tab-llm"><div class="cards" id="c_llm"></div></section>
+<section class="tabpane" id="tab-beheer"><div id="instellingen"></div><div id="personas"></div><div class="cards" id="c_beheer"></div></section>
+<section class="tabpane" id="tab-logs"><input class="zoek" id="logzoek" placeholder="🔎 filter de logs — naam, type, tekst…" oninput="filterLogs()"><div class="cards" id="c_logs"></div></section>
+</main>
+<footer>⚜️ Ververst automatisch · /api/stats (token vereist)</footer></div>
+<script>
+function esc(s){return String(s==null?'':s).replace(/[&<>]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c];});}
+function dur(s){s=Math.max(0,s|0);var d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60);if(d>0)return d+'d '+h+'u';if(h>0)return h+'u '+m+'m';if(m>0)return m+'m';return s+'s';}
+function pct(a,b){a=parseFloat(a);b=parseFloat(b);if(!b||isNaN(a)||isNaN(b))return 0;return Math.max(0,Math.min(100,Math.round(a/b*100)));}
+function card(title,inner){return '<div class="card"><h2>'+title+'</h2>'+inner+'</div>';}
+function tip(t){return ' <span class="info" data-tip="'+String(t).replace(/"/g,'&quot;')+'" onclick="event.preventDefault()">i</span>';}
+var CHART_KLEUREN=['#f0c060','#e08a2a','#caa047','#d98f5a','#b8863f','#e0b070','#a8702a','#8a6a3a'];
+// Verticale staafgrafiek: data = [{label, value}]
+function vbars(data){
+  var max=1;data.forEach(function(d){if(d.value>max)max=d.value;});
+  return '<div class="vbars">'+data.map(function(d){
+    var h=Math.round(d.value/max*100);
+    return '<div class="vbar"><i style="height:'+(d.value?Math.max(h,4):0)+'%"><b'+(d.value?'':' class="zero"')+'>'+d.value+'</b></i><span>'+esc(d.label)+'</span></div>';
+  }).join('')+'</div>';
+}
+// Horizontale balkjes: data = [{label, value}]
+function hbars(data,leeg){
+  if(!data.length)return '<div class="muted">'+(leeg||'geen data')+'</div>';
+  var max=1;data.forEach(function(d){if(d.value>max)max=d.value;});
+  return data.map(function(d){
+    var w=Math.max(2,Math.round(d.value/max*100));
+    return '<div class="hbar"><span class="hl">'+esc(d.label)+'</span><span class="ht"><i style="width:'+w+'%"></i></span><span class="hn">'+d.value+'</span></div>';
+  }).join('');
+}
+// Donut + legenda: data = [{label, value}]
+function donut(data,leeg){
+  var tot=0;data.forEach(function(d){tot+=d.value;});
+  if(!tot)return '<div class="donut"><div class="ring empty"></div><div class="leg muted">'+(leeg||'geen data')+'</div></div>';
+  var acc=0,segs=[],leg='';
+  data.forEach(function(d,i){
+    var col=CHART_KLEUREN[i%CHART_KLEUREN.length];
+    var van=acc/tot*360,naar=(acc+d.value)/tot*360;acc+=d.value;
+    segs.push(col+' '+van.toFixed(1)+'deg '+naar.toFixed(1)+'deg');
+    leg+='<div class="li"><span class="sw" style="background:'+col+'"></span>'+esc(d.label)+'<span class="ln">'+d.value+' · '+Math.round(d.value/tot*100)+'%</span></div>';
+  });
+  return '<div class="donut"><div class="ring" style="background:conic-gradient('+segs.join(',')+')"></div><div class="leg">'+leg+'</div></div>';
+}
+// Lijngrafiek (SVG). series=[{naam,kleur,data:[getallen|null]}], opts={area,labels:[links,rechts],legenda}
+function lineChart(series,opts){
+  opts=opts||{};
+  var n=0;series.forEach(function(s){if(s.data.length>n)n=s.data.length;});
+  if(n<2)return '<div class="lc-empty">te weinig data — de trend vult zich naarmate de dagen verstrijken</div>';
+  var max=0,heeft=false;
+  series.forEach(function(s){s.data.forEach(function(v){if(v!=null){heeft=true;if(v>max)max=v;}});});
+  if(!heeft)return '<div class="lc-empty">nog geen meetwaarden</div>';
+  if(max<=0)max=1;
+  var W=300,H=104,pl=3,pr=3,pt=8,pb=6;
+  function X(i){return pl+(W-pl-pr)*(n<2?0:i/(n-1));}
+  function Y(v){return pt+(H-pt-pb)*(1-v/max);}
+  var svg='<svg class="lc" viewBox="0 0 '+W+' '+H+'" preserveAspectRatio="none">';
+  series.forEach(function(s,si){
+    var pts=[],first=-1,last=-1;
+    s.data.forEach(function(v,i){if(v!=null){pts.push(X(i)+','+Y(v));if(first<0)first=i;last=i;}});
+    if(!pts.length)return;
+    if(opts.area&&si===0){
+      svg+='<polygon points="'+X(first)+','+(H-pb)+' '+pts.join(' ')+' '+X(last)+','+(H-pb)+'" fill="'+s.kleur+'" opacity="0.15"/>';
+    }
+    svg+='<polyline points="'+pts.join(' ')+'" fill="none" stroke="'+s.kleur+'" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>';
+    var le=pts[pts.length-1].split(',');
+    svg+='<circle cx="'+le[0]+'" cy="'+le[1]+'" r="2.6" fill="'+s.kleur+'" vector-effect="non-scaling-stroke"/>';
+  });
+  svg+='</svg>';
+  var out=svg;
+  if(opts.labels)out+='<div class="axis"><span>'+esc(opts.labels[0])+'</span><span>'+esc(opts.labels[1])+'</span></div>';
+  if(opts.legenda&&series.length)out+='<div class="llg">'+series.map(function(s){return '<span><i style="background:'+s.kleur+'"></i>'+esc(s.naam)+'</span>';}).join('')+'</div>';
+  return out;
+}
+function kortDatum(s){var p=String(s||'').split('-');return p.length===3?(+p[2])+'/'+(+p[1]):s;}
+// Ranglijst: één gestapelde balk per lid — roempunten (navy) + kroketpunten van deze week (goud).
+// data=[{naam,score,roem}]. Schaal gedeeld op de grootste (roem+kroket)-som.
+function ranglijstChart(data,leeg){
+  if(!data.length)return '<div class="muted">'+(leeg||'nog geen scores')+'</div>';
+  var max=1;data.forEach(function(r){max=Math.max(max,(r.score||0)+(r.roem||0));});
+  var leg='<div class="rlg"><span><i class="sw-kroket"></i>kroketpunten (deze week)</span><span><i class="sw-roem"></i>roempunten (totaal)</span></div>';
+  var rows=data.map(function(r){
+    var k=r.score||0,rm=r.roem||0;
+    var kw=k>0?Math.max(1.5,k/max*100):0,rw=rm>0?Math.max(1.5,rm/max*100):0;
+    return '<div class="rrow"><div class="rn"><span class="nm">'+esc(r.naam)+'</span>'
+      +'<span class="vals"><span class="vk">'+k+'</span> · <span class="vr">'+rm+'</span></span></div>'
+      +'<div class="sbar"><i class="seg roem" style="width:'+rw.toFixed(1)+'%"></i><i class="seg kroket" style="width:'+kw.toFixed(1)+'%"></i></div></div>';
+  }).join('');
+  return leg+rows;
+}
+function render(d){
+  document.getElementById('status').className='pill '+(d.bot.status==='online'?'on':'off');
+  document.getElementById('status').textContent=d.bot.status;
+  document.getElementById('uptime').textContent='uptime '+dur(d.bot.uptimeSec)+' · '+d.bot.memMb+'MB';
+  document.getElementById('mood').textContent='stemming: '+d.bot.stemming;
+  document.getElementById('vrijdag').textContent=d.bot.weekend?'weekend — heilig moment geweest':'vrijdag 12:00 over '+dur(d.bot.vrijdagSec);
+  document.getElementById('updated').textContent='bijgewerkt '+new Date(d.nu).toLocaleTimeString('nl-NL');
+  var ohtml='',shtml='',lhtml='',bhtml='',loghtml='';
+  // LLM providers
+  var pr=d.llm.providers.map(function(p){
+    var cls=!p.actief?'off':(p.cooldown>0?'cool':'ok');
+    var note=!p.actief?'<span class="muted">geen key</span>':(p.cooldown>0?'<span class="muted">cooldown '+dur(p.cooldown)+'</span>':'<span style="color:var(--green)">vrij</span>');
+    return '<div class="prov"><span><span class="dot '+cls+'"></span>'+esc(p.naam)+'<span class="tier">'+p.tier+'</span></span>'+note+'</div>';
+  }).join('');
+  lhtml+=card('LLM-providers'+tip('De keten van taalmodellen, van slim naar simpel. Bij een fout/limiet valt de bot door naar het volgende. Groen = vrij, goud = even in cooldown (limiet), grijs = geen key. Tier: zwaar = slim+schaars, middel = degelijk, licht = snel+dom.'),pr);
+  // Gemini keys
+  var gk=d.llm.geminiKeys.map(function(k){return '<div class="prov"><span><span class="dot '+(k.vrij?'ok':'cool')+'"></span>Gemini-key #'+k.nr+'</span>'+(k.vrij?'<span style="color:var(--green)">vrij</span>':'<span class="muted">vrij over '+dur(k.resetOver)+'</span>')+'</div>';}).join('')||'<span class="muted">geen keys</span>';
+  var g=d.llm.groq;
+  var gq='';
+  if(g){gq='<div style="margin-top:10px"><div class="muted">Groq 70B — requests '+g.reqRemaining+'/'+g.reqLimit+' (reset '+g.reqReset+')</div><div class="bar"><i style="width:'+pct(g.reqRemaining,g.reqLimit)+'%"></i></div>'
+    +'<div class="muted" style="margin-top:6px">tokens '+g.tokRemaining+'/'+g.tokLimit+' p/min (reset '+g.tokReset+')</div><div class="bar"><i style="width:'+pct(g.tokRemaining,g.tokLimit)+'%"></i></div></div>';}
+  lhtml+=card('Gemini-keys & Groq-quota'+tip('Gemini draait op meerdere keys die roteren; bij een limiet (429) gaat een key kort in cooldown. Groq toont de live rate-limit: hoeveel requests per dag en tokens per minuut er nog over zijn voordat het vol is.'),gk+gq);
+  // Ranglijst (gegroepeerde balken: kroketpunten goud + roempunten violet)
+  var rl=ranglijstChart(d.stats.ranglijst.slice(0,10),'nog geen scores');
+  ohtml+=card('Ranglijst'+tip('De top 10 volgelingen, gesorteerd op kroketpunten. Eén balk per lid: navy = roempunten (totale prestige, daalt nooit, reset nooit) en goud = kroketpunten (deze week, reset elke zondagnacht). Elke verdiende kroketpunt telt ook als roempunt. Getallen: kroket · roem.'),rl);
+  // Activiteit per dag (staafgrafiek)
+  var apd=(d.grafieken&&d.grafieken.activiteitPerDag)||[];
+  ohtml+=card('Activiteit per dag'+tip('Aantal geregistreerde gebeurtenissen per weekdag (ma–zo). De teller reset elke maandag.'),vbars(apd.map(function(x){return {label:x.dag,value:x.aantal};})));
+  // Activiteit per type (donut)
+  var apt=(d.grafieken&&d.grafieken.activiteitPerType)||[];
+  ohtml+=card('Activiteit per type'+tip('Verdeling van de gebeurtenissen deze week naar soort (bv. punten, verbanning, quiz).'),donut(apt.map(function(x){return {label:x.type,value:x.aantal};}),'geen activiteit deze week'));
+  // Trends over tijd (langlopende geschiedenis, max 30 dagen)
+  var gh=(d.grafieken&&d.grafieken.geschiedenis)||[];
+  var ghLabels=gh.length?[kortDatum(gh[0].datum),kortDatum(gh[gh.length-1].datum)]:null;
+  ohtml+=card('Gebeurtenissen per dag'+tip('Aantal geregistreerde gebeurtenissen per dag over de laatste 30 dagen. Deze historie blijft staan (reset niet wekelijks) en groeit met de tijd.'),
+    lineChart([{naam:'events',kleur:'#f0c060',data:gh.map(function(x){return x.events;})}],{area:true,labels:ghLabels}));
+  ohtml+=card('Groei over tijd'+tip('Dagelijkse momentopname van de totaalscore van het genootschap en het aantal leden, over de laatste 30 dagen. Elke grafiek heeft zijn eigen schaal.'),
+    '<div class="lbl">Totaalscore genootschap</div>'+
+    lineChart([{naam:'score',kleur:'#e08a2a',data:gh.map(function(x){return x.totaalScore;})}],{area:true,labels:ghLabels})+
+    '<div class="lbl" style="margin-top:12px">Aantal leden</div>'+
+    lineChart([{naam:'leden',kleur:'#7fd07f',data:gh.map(function(x){return x.leden;})}],{area:true}));
+  // Bans + vergrijpen (balkjes) — met beheerknoppen (opheffen / +4u verlengen)
+  var bn=d.stats.bans.map(function(b){return '<tr><td>'+esc(b.naam)+'</td><td class="muted">tot '+new Date(b.tot).toLocaleString('nl-NL',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})
+    +'</td><td><button class="skip" onclick="banActie(\''+esc(b.id)+'\',\'opheffen\')">vrij</button> <button class="skip" onclick="banActie(\''+esc(b.id)+'\',\'verlengen\')">+4u</button></td></tr>';}).join('')||'<tr><td class="muted">geen actieve verbanningen</td></tr>';
+  var vg=hbars(d.stats.vergrijpen.map(function(v){return {label:v.naam,value:v.aantal};}),'');
+  bhtml+=card('Verbanningen & vergrijpen'+tip('Actieve verbanningen met beheerknoppen: "vrij" heft de ban direct op, "+4u" verlengt hem met 4 uur. Vereist het dashboard-token.'),'<table><tr><th>Verbannen</th><th></th><th></th></tr>'+bn+'</table>'+(d.stats.vergrijpen.length?'<div class="lbl" style="margin-top:10px">Vergrijpen (7d)</div>'+vg:''));
+  // Scorebeheer: punten handmatig corrigeren per lid
+  var se=d.stats.ranglijst.map(function(r){return '<tr><td>'+esc(r.naam)+'</td><td class="num">'+r.score+'</td>'
+    +'<td><button class="skip" onclick="scoreDelta(\''+esc(r.id)+'\',-1)">−1</button> <button class="skip" onclick="scoreDelta(\''+esc(r.id)+'\',1)">+1</button></td></tr>';}).join('')||'<tr><td class="muted">geen leden</td></tr>';
+  bhtml+=card('Scorebeheer'+tip('Corrigeer kroketpunten handmatig, bv. na een fout van de bot. Wijzigingen zijn stil (geen Slack-bericht) en worden vastgelegd in het audit-log.'),'<table><tr><th>Lid</th><th>Punten</th><th></th></tr>'+se+'</table>');
+  // Aflatenhandel: actieve power-ups & vloeken, totalen per koper en laatste aankopen
+  var wk=d.winkel||{catalogus:[],actief:[],historie:[],totalen:[]};
+  var wIcon={};(wk.catalogus||[]).forEach(function(c){wIcon[c.key]=c.icoon;});
+  var wa=(wk.actief||[]).map(function(p){
+    var rest=Math.max(0,p.tot-d.nu),wu=Math.floor(rest/3600000),wm=Math.floor(rest%3600000/60000);
+    return '<tr><td>'+esc(p.naam)+'</td><td>'+p.icoon+' '+esc(p.itemNaam)+(p.door?' <span class="muted">door '+esc(p.door)+'</span>':'')+'</td><td class="muted">'+(wu>0?wu+'u ':'')+wm+'m</td>'
+      +'<td><button class="skip" onclick="winkelVerwijder(\''+esc(p.userId)+'\',\''+esc(p.item)+'\')">✕</button></td></tr>';
+  }).join('')||'<tr><td class="muted" colspan="4">geen actieve power-ups of vloeken</td></tr>';
+  var wt=(wk.totalen||[]).map(function(t){
+    var det=Object.keys(t.perItem).map(function(k){return t.perItem[k]+'× '+(wIcon[k]||k);}).join(' · ');
+    return '<div class="row"><b>'+esc(t.koper)+'</b> — '+t.aantal+'× gekocht, '+t.besteed+' pt besteed <span class="muted">('+det+')</span></div>';
+  }).join('');
+  var wh=(wk.historie||[]).map(function(h){
+    return '<div class="row"><span class="t">'+new Date(h.ts).toLocaleString('nl-NL',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})+'</span> · <b>'+esc(h.koper)+'</b> '+h.icoon+' '+esc(h.itemNaam)+(h.doel?' → '+esc(h.doel):'')+' <span class="muted">'+(h.prijs>0?h.prijs+' pt':'gratis')+(h.bron==='dashboard'?' · dashboard':'')+'</span></div>';
+  }).join('')||'<span class="muted">nog geen aankopen</span>';
+  shtml+=card('🛒 Aflatenhandel'+tip('Alles uit de Heilige Aflatenhandel: welke power-ups en vloeken nu actief zijn (✕ verwijdert er een direct), wie wat gekocht heeft en hoe vaak. Bij een vloek zie je hier — anders dan in Slack — wél wie hem legde. Geven kan via het beheer-formulier op het Beheer-tabblad.'),
+    '<table><tr><th>Lid</th><th>Power-up</th><th>Resteert</th><th></th></tr>'+wa+'</table>'
+    +(wt?'<div class="lbl" style="margin-top:10px">Totalen per koper</div><div class="feed">'+wt+'</div>':'')
+    +'<div class="lbl" style="margin-top:10px">Laatste aankopen</div><div class="feed">'+wh+'</div>');
+  // LLM-verbruik: succesvolle calls per provider (vandaag + 14 dagen)
+  var ls=d.llmstats&&d.llmstats.dagen?d.llmstats.dagen:{};
+  var lsDagen=Object.keys(ls).sort();
+  var vandaagKey=lsDagen[lsDagen.length-1];
+  var lsVandaag=ls[vandaagKey]||{};
+  var lsTotaal={};
+  lsDagen.forEach(function(dag){Object.keys(ls[dag]).forEach(function(p){lsTotaal[p]=(lsTotaal[p]||0)+ls[dag][p];});});
+  var lsV=hbars(Object.keys(lsVandaag).map(function(p){return {label:p,value:lsVandaag[p]};}),'nog geen calls vandaag');
+  var lsT=hbars(Object.keys(lsTotaal).map(function(p){return {label:p,value:lsTotaal[p]};}).sort(function(a,b){return b.value-a.value;}),'geen data');
+  lhtml+=card('LLM-verbruik'+tip('Aantal succesvolle LLM-calls per provider. Boven: vandaag. Onder: totaal over de bewaarde periode (max 14 dagen). Handig om te zien welke providers het werk dragen en waar quota-druk zit.'),
+    '<div class="lbl">Vandaag</div>'+lsV+'<div class="lbl" style="margin-top:10px">Laatste 14 dagen</div>'+lsT);
+  // Frituur-galerij: laatste beeldprompts
+  var fg=(d.frituurlog||[]).map(function(f){return '<div class="row"><span class="t">'+new Date(f.ts).toLocaleString('nl-NL',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})+'</span> · <b>'+esc(f.door)+'</b> — '+esc(f.beschrijving)+'<br><span class="muted">['+esc(f.stijl)+(f.stemming?' / '+esc(f.stemming):'')+'] '+esc(f.prompt)+'</span></div>';}).join('')||'<span class="muted">nog geen visioenen gefrituurd</span>';
+  loghtml+=card('Frituur-galerij'+tip('De laatste 10 beeldgeneraties: wie vroeg wat, en welke volledige Engelse prompt er naar het beeldmodel ging. Handig om de promptkwaliteit te beoordelen.'),'<div class="feed">'+fg+'</div>');
+  // Audit-log: schrijfacties via het dashboard
+  var au=(d.auditlog||[]).map(function(a){return '<div class="row"><span class="t">'+new Date(a.ts).toLocaleString('nl-NL',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})+'</span> · <b>'+esc(a.endpoint)+'</b> <span class="muted">'+esc(a.samenvatting||'')+'</span></div>';}).join('')||'<span class="muted">nog geen dashboard-acties</span>';
+  loghtml+=card('Audit-log'+tip('De laatste 20 schrijfacties via het dashboard: instellingen, verkondigingen, scorecorrecties, ban-beheer en acties. Iedereen met het token kan schrijven — hier zie je wat er is gebeurd.'),'<div class="feed">'+au+'</div>');
+  // Cijfers
+  var k=d.stats;
+  var cijfers='<table>'
+    +'<tr><td>Leden</td><td class="num">'+k.leden+'</td></tr>'
+    +'<tr><td>Kennisbank-entries</td><td class="num">'+k.kennisbank+'</td></tr>'
+    +'<tr><td>Achievements behaald</td><td class="num">'+k.achievements+'</td></tr>'
+    +'<tr><td>Actieve verbanningen</td><td class="num">'+k.bans.length+'</td></tr>'
+    +'</table>'+(k.kroketVanDeDag?'<div style="margin-top:8px" class="muted">Kroket v/d dag: <b style="color:var(--txt)">'+esc(k.kroketVanDeDag.naam)+'</b></div>':'');
+  ohtml+=card('Cijfers',cijfers);
+  // Geplande posts (de eerstvolgende vijf, met tijdstip)
+  var ing=(d.ingepland||[]).map(function(p){
+    var terug=p.soort==='terugkerend';
+    var tag=terug?'<span class="tag terug">🔁 botpost</span>':'<span class="tag eenm">📜 '+(p.kanaal==='test'?'test':'eigen')+'</span>';
+    var attr=terug?("'terugkerend','"+encodeURIComponent(p.key)+"',"+p.ts+",''"):("'eenmalig','',0,'"+esc(p.id)+"'");
+    var wanneer=new Date(p.ts).toLocaleString('nl-NL',{weekday:'short',day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'});
+    return '<div class="sched"><div class="when"><b>'+wanneer+'</b></div><div class="body">'+tag+'<span class="lbl2">'+esc(p.label)+'</span></div>'
+      +'<button class="skip" onclick="skip('+attr+')">overslaan</button></div>';
+  }).join('')||'<span class="muted">niets ingepland</span>';
+  ohtml+=card('Geplande posts'+tip('De eerstvolgende vijf geplande posts — terugkerende botposts (🔁) en je eigen geplande verkondigingen (📜). Met "overslaan" sla je die ene uitvoering over.'),ing);
+  // Activiteit
+  var fd=d.activiteit.map(function(e){return '<div class="row"><span class="t">'+new Date(e.ts).toLocaleString('nl-NL',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})+'</span> · <b>'+esc(e.type)+'</b> '+(e.naam?esc(e.naam)+' — ':'')+' <span class="muted">'+esc(e.beschrijving||'')+'</span>'+(e.actorNaam?' <span class="muted" style="font-size:0.85em;opacity:0.7">— door '+esc(e.actorNaam)+'</span>':'')+'</div>';}).join('')||'<span class="muted">geen activiteit deze week</span>';
+  loghtml+=card('Activiteit (deze week)','<div class="feed">'+fd+'</div>');
+
+  // ── Spel-tab: troon, gouden kroket, kroket-gok, quiz, bingo, verbonden ──────
+  var sp=d.spel||{};
+  var troonInhoud=sp.troon
+    ? '<div class="big">👑 '+esc(sp.troon.koning)+'</div><div class="muted">op de troon sinds '+new Date(sp.troon.sinds).toLocaleDateString('nl-NL',{day:'numeric',month:'long'})+' · '+sp.troon.score+' kroketpunten · ontvangt dagelijks +1 kroontribuut</div>'
+    : '<div class="muted">De troon staat leeg — de eerste uitdager wordt zonder strijd gekroond.</div>';
+  shtml+=card('👑 Troon van de Frituur'+tip('De zittende Frituurkoning ontvangt elke dag om 12:00 +1 kroontribuut. Uitdagen kost 3 punten inzet; de koning houdt stand met 55% kans.'),troonInhoud);
+  var gkS=sp.goudenKroket||{};
+  var gkInhoud;
+  if(gkS.gepakt)gkInhoud='<div>🥇 Gegrepen door <b>'+esc(gkS.winnaar||'?')+'</b>. De volgende jacht wordt maandag 09:35 ingepland.</div>';
+  else if(gkS.geplaatst)gkInhoud='<div style="color:var(--gold);font-weight:700">⚡ Ligt NU in het kanaal — nog niet gegrepen!</div>';
+  else if(gkS.geplandVoor)gkInhoud='<div>🕰️ Verschijnt <b>'+new Date(gkS.geplandVoor).toLocaleString('nl-NL',{weekday:'long',hour:'2-digit',minute:'2-digit'})+'</b><div class="muted">alleen jij ziet dit — de leden weten van niets</div></div>';
+  else gkInhoud='<div class="muted">Geen jacht gepland — de volgende wordt maandag 09:35 ingepland.</div>';
+  shtml+=card('🥇 Gouden Kroket'+tip('De wekelijkse schatzoektocht: op een geheim moment (ma–vr overdag) plaatst de Raad de Gouden Kroket; de eerste :lekker_kroketje:-reactie wint +3. Dit paneel toont het geplande moment — dat is jouw admin-geheim.'),gkInhoud);
+  var kgok=sp.kroketGok||{};
+  var gokRows=(kgok.gokken||[]).map(function(g){return '<tr><td>'+esc(g.naam)+'</td><td>'+(g.keuze==='krokant'?'🥖 krokant':'💀 slap korstje')+'</td></tr>';}).join('');
+  var kInhoud=(kgok.kroket
+      ? '<div><b>'+esc(kgok.kroket)+'</b> <span class="muted">'+(kgok.actief?'· stemming loopt':'· wacht op uitslag')+'</span></div>'
+      : '<div class="muted">nog geen kroket vandaag</div>')
+    +(gokRows?'<div class="lbl" style="margin-top:8px">Verzegelde voorspellingen</div><table>'+gokRows+'</table>':'<div class="muted" style="margin-top:6px">nog geen voorspellingen</div>');
+  shtml+=card('🥖 Kroket v/d dag & 🔮 gok'+tip('De kroket van vandaag en de verzegelde voorspellingen van de leden (juist = +2 bij de uitslag). De leden zien elkaars gok niet — jij wel.'),kInhoud);
+  var qz=sp.quiz;
+  shtml+=card('🧠 Quiz'+tip('De lopende quizvraag (ma/wo/do 10:15). Eerste juiste antwoord +2, latere juiste antwoorden +1. Onthulling om 16:00 of via de knop op het Beheer-tabblad.'),
+    qz?('<div>'+esc(qz.vraag)+'</div><div class="muted" style="margin-top:4px">'+(qz.afgerond?'afgerond — antwoord onthuld':'loopt — onthulling na '+new Date(qz.deadline).toLocaleTimeString('nl-NL',{hour:'2-digit',minute:'2-digit'}))+'</div>'):'<span class="muted">geen actieve quiz</span>');
+  var bg=sp.bingo;
+  var bgInhoud=bg?bg.opdrachten.map(function(o){return '<div class="row">'+o.nr+'. '+esc(o.tekst)+(o.claims.length?' <span style="color:var(--green)">✓ '+esc(o.claims.join(', '))+'</span>':'')+'</div>';}).join(''):'<span class="muted">geen bingokaart deze week</span>';
+  shtml+=card('🎯 Kroket-bingo'+tip('De wekelijkse bingokaart (maandag 10:30) met per opdracht wie hem geclaimd heeft (+1 per geslaagde claim).'),bgInhoud);
+  var alRows=(sp.allianties||[]).map(function(x){return '<div class="row">⚔️ '+esc(x.a)+' ↔ '+esc(x.b)+'</div>';}).join('')||'<div class="muted">geen actieve allianties</div>';
+  var heldRows=(sp.heldentitels||[]).map(function(h){return '<div class="row">🏅 '+esc(h.naam)+' — '+h.aantal+'×</div>';}).join('');
+  var strRows=(sp.streaks||[]).map(function(s){return '<div class="row">🔥 '+esc(s.naam)+' — '+s.huidig+' (record '+s.record+')</div>';}).join('');
+  shtml+=card('⚔️ Verbonden & eer'+tip('Actieve allianties (gedeelde zegen en bescherming), gewonnen heldentitels van de vrijdagstemming en vrijdagstreaks.'),
+    alRows+(heldRows?'<div class="lbl" style="margin-top:8px">Heldentitels</div>'+heldRows:'')+(strRows?'<div class="lbl" style="margin-top:8px">Vrijdagstreaks</div>'+strRows:''));
+
+  // ── KPI-tegels op het Overzicht ─────────────────────────────────────────────
+  var kpiPunten=0;d.stats.ranglijst.forEach(function(r){kpiPunten+=r.score||0;});
+  var kpiEvents=0;apd.forEach(function(x){kpiEvents+=x.aantal;});
+  function kpi(v,l){return '<div class="kpi"><div class="v">'+v+'</div><div class="l">'+l+'</div></div>';}
+  document.getElementById('kpis').innerHTML=
+    kpi(d.stats.leden,'Volgelingen')+
+    kpi(kpiPunten,'Punten deze week')+
+    kpi((wk.actief||[]).length,'Actieve power-ups')+
+    kpi(kpiEvents,'Events deze week')+
+    kpi(d.stats.bans.length,'Verbannen')+
+    kpi(d.stats.achievements,'Relikwieën');
+
+  // ── Verdeel de kaarten over de tabbladen ────────────────────────────────────
+  document.getElementById('c_overzicht').innerHTML=ohtml;
+  document.getElementById('c_spel').innerHTML=shtml;
+  document.getElementById('c_llm').innerHTML=lhtml;
+  document.getElementById('c_beheer').innerHTML=bhtml;
+  document.getElementById('c_logs').innerHTML=loghtml;
+  var zoekEl=document.getElementById('logzoek');
+  if(zoekEl&&zoekEl.value)filterLogs();
+}
+var ingesteld=false;
+var personasIngesteld=false;
+var _personas={};
+function renderPersonaForm(){
+  var html='<div class="card"><h2>👥 Personas <span id="p_status" class="muted" style="font-weight:400;text-transform:none;margin-left:8px"></span></h2>'
+    +'<div id="persona_lijst" class="muted">Laden…</div>'
+    +'<div class="lbl" style="margin-top:14px;border-top:1px solid var(--line);padding-top:13px">Nieuwe persona toevoegen / bewerken'+tip('Een persona is een nevenentiteit die net als de Kroket God in het kanaal post, maar onder een eigen naam en avatar — bv. een rivaliserende snackgod. Ze reageren als iemand hun trefwoord noemt, en optioneel af en toe ongevraagd.')+'</div>'
+    +'<div class="setgrid">'
+    +'<div><div class="lbl">Naam</div><input type="text" id="p_naam" placeholder="bv. De Heilige Mr. Satébal" maxlength="60"></div>'
+    +'<div><div class="lbl">Avatar'+tip('Een Slack-emoji-shortcode (bv. :peanuts:, of een custom emoji die je zelf hebt geüpload in Slack — dubbele punten mogen weg), OF een directe afbeeldings-URL die begint met http(s)://.')+'</div>'
+      +'<div style="display:flex;align-items:center;gap:8px">'
+      +'<input type="text" id="p_icoon" placeholder=":peanuts: of https://.../avatar.png" maxlength="500" style="flex:1">'
+      +'<img id="p_icoon_preview" style="display:none;width:32px;height:32px;border-radius:6px;object-fit:cover;border:1px solid var(--line)">'
+      +'</div></div>'
+    +'</div>'
+    +'<div style="margin-top:8px"><button class="btn" data-persona-vragen>✨ Vul in met AI — bedenk 3 vragen</button>'+tip('Vul eerst alleen de naam in en klik hier. De AI bedenkt 3 ontwerpvragen; op basis van jouw antwoorden schrijft hij het volledige profiel (prompt, trefwoorden en een passend icoon) in dezelfde stijl als Satébal. Kost 2 LLM-calls. Je kunt alles daarna nog aanpassen voor je opslaat.')+'</div>'
+    +'<div id="p_wizard_vragen"></div>'
+    +'<div class="lbl" style="margin-top:10px">Trefwoord(en)'+tip('Kommagescheiden lijst. Zodra iemand in het kanaal een van deze woorden typt, reageert deze persona direct. Accenten maken niet uit (satebal = satébal). Matching is op woordbegin: "sate" raakt ook "satebal" en "satéballen".')+'</div>'
+    +'<input type="text" id="p_trefwoord" placeholder="bv. sate, satebal" style="width:100%">'
+    +'<div class="lbl" style="margin-top:10px">Prompt / tone of voice'+tip('Beschrijf wie deze entiteit is: karakter, toon, waar ze wel/niet op reageert. Dit wordt als karakterbeschrijving meegegeven aan het taalmodel — hoe specifieker, hoe raker.')+'</div>'
+    +'<textarea id="p_prompt" rows="6" placeholder="bv. Een zelfingenomen spotvogel die de kroket belachelijk vindt en gelooft in de superioriteit van saté met satésaus. Kort, droog, nooit persoonlijk kwetsend." style="width:100%"></textarea>'
+    +'<div style="margin-top:10px">'
+    +'<label class="tog"><input type="checkbox" id="p_ongevraagd"> Mag ook af en toe ongevraagd invallen'+tip('Als dit aanstaat krijgt de persona daarnaast een kleine, willekeurige kans om spontaan te reageren op een bericht van de Kroket God of een lid — los van het trefwoord.')+'</label>'
+    +' <label class="tog"><input type="checkbox" id="p_actief" checked> Actief</label>'
+    +'</div>'
+    +'<input type="hidden" id="p_id" value="">'
+    +'<div style="margin-top:10px"><button class="btn gold" data-persona-save>💾 Opslaan</button> <button class="btn" data-persona-cancel>✕ Annuleer bewerken</button></div>'
+    +'</div>';
+  var host=document.getElementById('personas');
+  host.innerHTML=html;
+  host.onclick=function(e){var b=e.target.closest('button');if(!b)return;if(b.hasAttribute('data-persona-save'))personaOpslaan();else if(b.hasAttribute('data-persona-cancel'))personaAnnuleer();else if(b.hasAttribute('data-persona-vragen'))personaVragen();else if(b.hasAttribute('data-persona-genereer'))personaGenereer();};
+  host.oninput=function(e){if(e.target.id==='p_icoon')updateIconPreview();};
+}
+var _wizardVragen=[];
+function personaVragen(){
+  var naam=document.getElementById('p_naam').value.trim();
+  var st=document.getElementById('p_status');
+  if(!naam){if(st)st.textContent='Vul eerst een naam in.';return;}
+  if(st)st.textContent='De AI bedenkt 3 vragen…';
+  var tok=getToken();
+  fetch('/api/persona/vragen',{method:'POST',headers:{'Content-Type':'application/json','Authorization':tok?'Bearer '+tok:''},body:JSON.stringify({naam:naam})})
+    .then(function(r){return r.json();})
+    .then(function(j){
+      if(j.error&&j.error.indexOf('DASHBOARD_TOKEN')!==-1){showLogin();return;}
+      if(!j.ok){if(st)st.textContent='Fout: '+(j.error||'');return;}
+      _wizardVragen=j.vragen;
+      var html=j.vragen.map(function(v,i){
+        return '<div class="lbl" style="margin-top:8px">'+(i+1)+'. '+esc(v)+'</div><input type="text" id="p_antwoord_'+i+'" style="width:100%">';
+      }).join('')
+      +'<div style="margin-top:10px"><button class="btn gold" data-persona-genereer>✨ Genereer persona</button></div>';
+      document.getElementById('p_wizard_vragen').innerHTML=html;
+      if(st)st.textContent='Beantwoord de vragen en klik Genereer persona.';
+    })
+    .catch(function(){if(st)st.textContent='Fout bij het ophalen van de vragen.';});
+}
+function personaGenereer(){
+  var naam=document.getElementById('p_naam').value.trim();
+  var st=document.getElementById('p_status');
+  if(!naam||_wizardVragen.length<3){if(st)st.textContent='Doorloop eerst stap 1 (bedenk vragen).';return;}
+  var antwoorden=_wizardVragen.map(function(v,i){var el=document.getElementById('p_antwoord_'+i);return el?el.value.trim():'';});
+  if(!antwoorden.some(function(a){return a;})){if(st)st.textContent='Beantwoord minstens één vraag.';return;}
+  if(st)st.textContent='De AI schrijft het profiel… (kan ~15 sec duren)';
+  var tok=getToken();
+  fetch('/api/persona/genereer',{method:'POST',headers:{'Content-Type':'application/json','Authorization':tok?'Bearer '+tok:''},body:JSON.stringify({naam:naam,vragen:_wizardVragen,antwoorden:antwoorden})})
+    .then(function(r){return r.json();})
+    .then(function(j){
+      if(j.error&&j.error.indexOf('DASHBOARD_TOKEN')!==-1){showLogin();return;}
+      if(!j.ok){if(st)st.textContent='Fout: '+(j.error||'');return;}
+      document.getElementById('p_icoon').value=j.icoon||'';
+      document.getElementById('p_trefwoord').value=j.trefwoord||'';
+      document.getElementById('p_prompt').value=j.systemPrompt||'';
+      updateIconPreview();
+      document.getElementById('p_wizard_vragen').innerHTML='';
+      _wizardVragen=[];
+      if(st)st.textContent='Profiel gegenereerd ✓ — controleer, pas aan waar nodig en klik Opslaan.';
+    })
+    .catch(function(){if(st)st.textContent='Fout bij het genereren.';});
+}
+function updateIconPreview(){
+  var inp=document.getElementById('p_icoon');var img=document.getElementById('p_icoon_preview');
+  if(!inp||!img)return;
+  var v=inp.value.trim();
+  if(/^https?:\/\//i.test(v)){img.src=v;img.style.display='';img.onerror=function(){img.style.display='none';};}
+  else{img.style.display='none';img.removeAttribute('src');}
+}
+function renderPersonaLijst(d){
+  _personas={};(d.personas||[]).forEach(function(p){_personas[p.id]=p;});
+  var rows=(d.personas||[]).map(function(p){
+    var isUrl=/^https?:\/\//i.test(p.icoon||'');
+    var avatar=isUrl
+      ? '<img src="'+esc(p.icoon)+'" style="width:20px;height:20px;border-radius:4px;object-fit:cover;vertical-align:middle" onerror="this.style.display=\'none\'">'
+      : esc(p.icoon||'');
+    return '<tr><td>'+avatar+' '+esc(p.naam)+'</td><td class="muted">'+esc(p.trefwoord||'—')+'</td>'
+      +'<td>'+(p.actief!==false?'actief':'uit')+(p.ongevraagd?' · spontaan':'')+'</td>'
+      +'<td><button class="btn" onclick="personaBewerk(\''+esc(p.id)+'\')">bewerk</button> '
+      +'<button class="btn" onclick="personaSchakel(\''+esc(p.id)+'\')">'+(p.actief!==false?'zet uit':'zet aan')+'</button> '
+      +'<button class="btn" onclick="personaVerwijder(\''+esc(p.id)+'\')">verwijder</button></td></tr>';
+  }).join('');
+  var host=document.getElementById('persona_lijst');
+  if(!host)return;
+  host.innerHTML=(d.personas&&d.personas.length)?('<table>'+rows+'</table>'):'<span class="muted">Nog geen persona\'s — voeg er hieronder een toe.</span>';
+}
+function personaBewerk(id){
+  var p=_personas[id];if(!p)return;
+  document.getElementById('p_id').value=id;
+  document.getElementById('p_naam').value=p.naam||'';
+  document.getElementById('p_icoon').value=p.icoon||'';
+  document.getElementById('p_trefwoord').value=p.trefwoord||'';
+  document.getElementById('p_prompt').value=p.systemPrompt||'';
+  document.getElementById('p_ongevraagd').checked=!!p.ongevraagd;
+  document.getElementById('p_actief').checked=p.actief!==false;
+  var st=document.getElementById('p_status');if(st)st.textContent='Bewerkt: '+p.naam;
+  updateIconPreview();
+}
+function personaAnnuleer(){
+  document.getElementById('p_id').value='';
+  ['p_naam','p_icoon','p_trefwoord','p_prompt'].forEach(function(id){document.getElementById(id).value='';});
+  document.getElementById('p_ongevraagd').checked=false;
+  document.getElementById('p_actief').checked=true;
+  var st=document.getElementById('p_status');if(st)st.textContent='';
+  document.getElementById('p_wizard_vragen').innerHTML='';
+  _wizardVragen=[];
+  updateIconPreview();
+}
+function personaOpslaan(){
+  var naam=document.getElementById('p_naam').value.trim();
+  var prompt=document.getElementById('p_prompt').value.trim();
+  var st=document.getElementById('p_status');
+  if(!naam||!prompt){if(st)st.textContent='Naam en prompt zijn verplicht.';return;}
+  var body={
+    id:document.getElementById('p_id').value||undefined,
+    naam:naam,
+    icoon:document.getElementById('p_icoon').value.trim(),
+    trefwoord:document.getElementById('p_trefwoord').value.trim(),
+    systemPrompt:prompt,
+    ongevraagd:document.getElementById('p_ongevraagd').checked,
+    actief:document.getElementById('p_actief').checked,
+  };
+  post('/api/persona',body,'Persona opgeslagen','p_status');
+  personaAnnuleer();
+  setTimeout(tick,800);
+}
+function personaSchakel(id){
+  var p=_personas[id];if(!p)return;
+  post('/api/persona',{id:id,naam:p.naam,icoon:p.icoon,trefwoord:p.trefwoord,systemPrompt:p.systemPrompt,ongevraagd:p.ongevraagd,actief:p.actief===false},'Bijgewerkt','p_status');
+  setTimeout(tick,800);
+}
+function personaVerwijder(id){
+  var p=_personas[id];if(!p)return;
+  if(!confirm('Persona "'+p.naam+'" verwijderen?'))return;
+  post('/api/persona/delete',{id:id},'Verwijderd','p_status');
+  setTimeout(tick,800);
+}
+function renderInstellingen(d){
+  var s=d.instellingen;
+  var wLeden=((d.winkel&&d.winkel.leden)||[]).map(function(r){return '<option value="'+esc(r.id)+'">'+esc(r.naam)+'</option>';}).join('');
+  var wItems=((d.winkel&&d.winkel.catalogus)||[]).map(function(c){return '<option value="'+esc(c.key)+'">'+c.icoon+' '+esc(c.naam)+' ('+c.prijs+' pt)</option>';}).join('');
+  var moods=['<option value="">— automatisch —</option>'].concat(d.stemmingOpties.map(function(m){return '<option value="'+m+'"'+(s.stemmingOverride===m?' selected':'')+'>'+m+'</option>';})).join('');
+  function chk(id,v,l,t){return '<label class="tog"><input type="checkbox" id="'+id+'"'+(v?' checked':'')+'> '+l+(t?tip(t):'')+'</label>';}
+  function num(id,v,l,t){return '<label class="numl">'+l+(t?tip(t):'')+' <input type="number" min="0" max="100" id="'+id+'" value="'+Math.round(v*100)+'">%</label>';}
+  var provs=d.providerOpties.map(function(p){return '<label class="tog"><input type="checkbox" data-prov="'+p+'"'+(s.providerUit.indexOf(p)>=0?' checked':'')+'> '+p+'</label>';}).join('');
+  var html='<div class="card"><h2>⚙️ Instellingen <span id="i_status" class="muted" style="font-weight:400;text-transform:none;margin-left:8px"></span></h2><div class="setgrid">'
+    +'<div><div class="lbl">Dagstemming'+tip('De dagelijkse bui die alle reacties kleurt. Automatisch kiest elke dag een vaste stemming op basis van de datum; of kies er zelf een. Werkt direct na opslaan.')+'</div><select id="i_stemming">'+moods+'</select></div>'
+    +'<div><div class="lbl">Modi</div>'
+      +chk('i_stil',s.stilModus,'Stil-modus (mute)','De Kroket God reageert nergens meer op, behalve in het testkanaal. Handig bij onderhoud.')
+      +chk('i_weekend',s.weekendRust,'Weekend-rust','Aan = rust in het weekend (geen reacties). Uit = reageert ook in het weekend.')
+      +chk('i_test',s.alleenTestkanaal,'Alleen testkanaal','Reageert uitsluitend in het testkanaal (bruin-schaap), om te testen zonder het hoofdkanaal te storen.')
+      +chk('i_spaar',s.spaarstand,'Spaarstand (licht)','Forceert het lichte, goedkope model en slaat Gemini en Cerebras over. Bespaart schaarse quota, iets lagere kwaliteit.')
+    +'</div>'
+    +'<div><div class="lbl">Providers uit'+tip('Vink een LLM-provider aan om hem tijdelijk uit de antwoord-keten te halen, bv. bij een storing. Er blijft altijd minstens een werkend model over.')+'</div>'+provs+'</div>'
+    +'<div><div class="lbl">Kansen</div>'
+      +num('i_kortaf',s.kortafKans,'Kortaf-grap','Kans dat de Kroket God op een mention van een enkel woord (bv. kroket) heel droog antwoordt met OK of een emoji, i.p.v. een tirade.')
+      +num('i_warrig',s.warrigKans,'Warrig','Kans dat een reactie het warrige formaat krijgt: de Kroket God dwaalt af alsof hij te lang in de frituurwalm stond.')
+      +num('i_vrijdag',s.vrijdagAppendKans,'Vrijdag-append','Kans dat er een aftelling tot het heilige vrijdagmoment (12:00) aan een reactie wordt geplakt.')
+    +'</div>'
+    +'</div>'
+    +'<div class="lbl" style="margin-top:12px">Decreet van de dag'+tip('Vrije tekst die als extra instructie in de system prompt wordt geinjecteerd. Geef de Kroket God een tijdelijk thema, bv. spreek vandaag uitsluitend in haiku. Werkt direct na opslaan.')+'</div>'
+    +'<textarea id="i_decreet" rows="2" placeholder="bv. Vandaag spreekt de Kroket God uitsluitend in haiku.">'+esc(s.decreetVanDeDag)+'</textarea>'
+    +'<div class="lbl" style="margin-top:10px">Heftigheid van het decreet'+tip('Hoe sterk de Kroket God het decreet doorvoert: links = subtiele vleug, rechts = absolute obsessie die elke reactie doordrenkt.')+' <span id="i_decreetIntPct" class="muted" style="text-transform:none;font-weight:400">'+Math.round(s.decreetIntensiteit*100)+'%</span></div>'
+    +'<input type="range" min="0" max="100" id="i_decreetInt" value="'+Math.round(s.decreetIntensiteit*100)+'" style="width:100%;accent-color:var(--amber)">'
+    +'<div style="margin-top:12px"><button class="btn gold" data-save>💾 Opslaan</button>'
+    +'<button class="btn" data-actie="kroketVanDeDag">🥖 Kroket vd dag</button>'
+    +'<button class="btn" data-actie="quizStarten">🧠 Quiz</button>'
+    +'<button class="btn" data-actie="quizOnthul">📖 Onthul</button>'
+    +'<button class="btn" data-actie="resetCooldowns">♻️ Reset cooldowns</button>'
+    +'<button class="btn" data-actie="ververseQuota">📊 Ververs quota</button></div>'
+    +'<div class="lbl" style="margin-top:16px;border-top:1px solid var(--line);padding-top:13px">⚔️ Spellen nu starten'+tip('Start de Bamischijf-raid of de Grote Veiling direct, zonder te wachten op dinsdag/vrijdag. Beide krijgen een korte looptijd van 4 uur. De borden in Slack hebben klikbare knoppen; met Ontsnap/Hamer sluit je een testronde meteen af.')+'</div>'
+    +'<div><button class="btn" data-actie="bamischijfSpawn">🐉 Raid starten</button>'
+    +'<button class="btn" data-actie="bamischijfOntsnap">🌫️ Raid afsluiten</button>'
+    +'<button class="btn" data-actie="veilingOpen">🔨 Veiling openen</button>'
+    +'<button class="btn" data-actie="veilingHamer">⚖️ Hamer laten vallen</button>'
+    +'<button class="btn" data-actie="appHomeVerversen">🏠 App Home verversen</button></div>'
+    +'<div class="lbl" style="margin-top:16px;border-top:1px solid var(--line);padding-top:13px">📜 Verkondig namens de Kroket God'+tip('Typ je boodschap in gewone taal. Vertaal herschrijft hem in de tone of voice van de Kroket God (kost 1 LLM-call); je kunt het resultaat nog bijschaven. Verkondig plaatst het in het gekozen kanaal (geen extra call).')+'</div>'
+    +'<textarea id="i_v_in" rows="2" placeholder="bv. vergeet niet dat het vrijdag kroketdag is"></textarea>'
+    +'<div style="display:flex;gap:8px;align-items:center;margin-top:6px;flex-wrap:wrap"><select id="i_v_kanaal" style="width:auto"><option value="hoofd">Hoofdkanaal</option><option value="test">Testkanaal</option></select>'
+    +'<button class="btn" data-verkondig="vertaal">✨ Vertaal</button>'
+    +'<button class="btn gold" data-verkondig="post">📜 Verkondig nu</button></div>'
+    +'<textarea id="i_v_out" rows="3" placeholder="(hier verschijnt de Kroket God-versie — je kunt nog bijschaven voor je verkondigt)" style="margin-top:6px"></textarea>'
+    +'<div style="display:flex;gap:8px;align-items:center;margin-top:6px;flex-wrap:wrap"><span class="lbl" style="margin:0">🗓️ Inplannen op'+tip('Kies een datum/tijd in de toekomst om de verkondiging dan automatisch te plaatsen. Een 1-minuut-controle verstuurt geplande berichten op tijd. Ingeplande berichten verschijnen in de "Ingepland"-kaart en kun je daar overslaan.')+'</span>'
+    +'<input type="datetime-local" id="i_v_tijd" style="width:auto;background:#16100a;color:var(--txt);border:1px solid var(--line);border-radius:8px;padding:6px 8px;font:inherit">'
+    +'<button class="btn" data-verkondig="plan">🗓️ Inplannen</button></div>'
+    +'<div class="lbl" style="margin-top:16px;border-top:1px solid var(--line);padding-top:13px">🛒 Aflatenhandel — beheer'+tip('Geef of verwijder een power-up bij een lid zonder kroketpunten te rekenen. Met "aankondigen" plaatst de Frituurraad dezelfde plechtige melding in het hoofdkanaal als bij een echte aankoop; bij een vloek blijft de afzender ook dan verborgen voor het kanaal. Alles komt in de aankoophistorie en het audit-log.')+'</div>'
+    +'<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><select id="w_lid" style="width:auto">'+wLeden+'</select>'
+    +'<select id="w_item" style="width:auto">'+wItems+'</select>'
+    +'<label class="tog" style="margin:0"><input type="checkbox" id="w_aankondig" checked> aankondigen</label>'
+    +'<button class="btn gold" data-winkel="geef">🎁 Geef</button>'
+    +'<button class="btn" data-winkel="verwijder">🗑️ Verwijder</button></div>'
+    +'<div class="lbl" style="margin-top:16px;border-top:1px solid var(--line);padding-top:13px">🧪 Test-console'+tip('Stuur een prompt naar de Kroket God en zie zijn antwoord hier — er wordt NIETS in Slack geplaatst. Handig om de tone of voice, het decreet of een stemming te testen. Kost 1 LLM-call.')+'</div>'
+    +'<textarea id="test_prompt" rows="2" placeholder="bv. wat vindt de Kroket God van bitterballen?"></textarea>'
+    +'<div style="margin-top:6px"><button class="btn" data-test>🧪 Test</button></div>'
+    +'<pre id="test_out" style="margin-top:8px;white-space:pre-wrap;background:#16100a;border:1px solid var(--line);border-radius:8px;padding:10px;font:inherit;color:var(--txt);min-height:20px"></pre>'
+    +'</div>';
+  var host=document.getElementById('instellingen');
+  host.innerHTML=html;
+  host.onclick=function(e){var b=e.target.closest('button');if(!b)return;if(b.hasAttribute('data-save'))bewaar();else if(b.hasAttribute('data-test'))testPrompt();else if(b.getAttribute('data-verkondig'))verkondig(b.getAttribute('data-verkondig'));else if(b.getAttribute('data-winkel'))winkelBeheer(b.getAttribute('data-winkel'));else if(b.getAttribute('data-actie'))doeActie(b.getAttribute('data-actie'));};
+  host.oninput=function(e){if(e.target.id==='i_decreetInt'){var p=document.getElementById('i_decreetIntPct');if(p)p.textContent=e.target.value+'%';}};
+}
+function bewaar(){
+  var uit=[];document.querySelectorAll('[data-prov]').forEach(function(c){if(c.checked)uit.push(c.getAttribute('data-prov'));});
+  post('/api/instellingen',{stemmingOverride:document.getElementById('i_stemming').value,stilModus:document.getElementById('i_stil').checked,weekendRust:document.getElementById('i_weekend').checked,alleenTestkanaal:document.getElementById('i_test').checked,spaarstand:document.getElementById('i_spaar').checked,providerUit:uit,kortafKans:(+document.getElementById('i_kortaf').value||0)/100,warrigKans:(+document.getElementById('i_warrig').value||0)/100,vrijdagAppendKans:(+document.getElementById('i_vrijdag').value||0)/100,decreetVanDeDag:document.getElementById('i_decreet').value,decreetIntensiteit:(+document.getElementById('i_decreetInt').value||0)/100},'Opgeslagen');
+}
+function doeActie(a){post('/api/actie',{actie:a},'Uitgevoerd');}
+function skip(soort,key,ts,id){post('/api/overslaan',{soort:soort,key:key?decodeURIComponent(key):'',ts:ts,id:id},'Overgeslagen');}
+function verkondig(modus){
+  var st=document.getElementById('i_status');
+  if(modus==='vertaal'){
+    var inp=document.getElementById('i_v_in').value.trim();
+    if(!inp){if(st)st.textContent='Typ eerst een boodschap.';return;}
+    if(st)st.textContent='Vertalen…';
+    var tok=getToken();
+    fetch('/api/verkondig',{method:'POST',headers:{'Content-Type':'application/json','Authorization':tok?'Bearer '+tok:''},body:JSON.stringify({tekst:inp,vertaal:true})}).then(function(r){return r.json();}).then(function(j){if(j.error&&j.error.indexOf('DASHBOARD_TOKEN')!==-1){showLogin();return;}if(j.ok){document.getElementById('i_v_out').value=j.verkondiging;if(st)st.textContent='Vertaald ✓ — controleer en klik Verkondig nu of Inplannen';}else if(st)st.textContent='Fout: '+(j.error||'');}).catch(function(){if(st)st.textContent='Fout';});
+  }else{
+    var out=document.getElementById('i_v_out').value.trim();
+    if(!out){if(st)st.textContent='Klik eerst Vertaal (of typ zelf de Kroket God-tekst in het onderste veld).';return;}
+    var kanaal=document.getElementById('i_v_kanaal').value;
+    if(modus==='plan'){
+      var tv=document.getElementById('i_v_tijd').value;
+      if(!tv){if(st)st.textContent='Kies eerst een datum/tijd om in te plannen.';return;}
+      var ms=new Date(tv).getTime();
+      if(!ms||ms<Date.now()){if(st)st.textContent='Kies een tijdstip in de toekomst.';return;}
+      post('/api/verkondig',{tekst:out,kanaal:kanaal,vertaal:false,wanneer:ms},'Ingepland');
+    }else{
+      post('/api/verkondig',{tekst:out,kanaal:kanaal,vertaal:false},'Verkondigd');
+    }
+  }
+}
+function getToken(){return localStorage.getItem('dashboard_token')||'';}
+function scoreDelta(uid,delta){post('/api/score',{userId:uid,delta:delta},'Score aangepast');setTimeout(tick,800);}
+function banActie(uid,actie){post('/api/ban',{userId:uid,actie:actie,uren:4},actie==='opheffen'?'Ban opgeheven':'Ban verlengd');setTimeout(tick,800);}
+function winkelBeheer(actie){post('/api/winkel',{actie:actie,userId:document.getElementById('w_lid').value,item:document.getElementById('w_item').value,aankondig:document.getElementById('w_aankondig').checked},actie==='geef'?'Gegeven':'Verwijderd');setTimeout(tick,800);}
+function winkelVerwijder(uid,item){post('/api/winkel',{actie:'verwijder',userId:uid,item:item},'Verwijderd');setTimeout(tick,800);}
+function testPrompt(){
+  var inp=document.getElementById('test_prompt');var out=document.getElementById('test_out');
+  if(!inp||!inp.value.trim())return;
+  out.textContent='De Kroket God overdenkt…';
+  var tok=getToken();
+  fetch('/api/test',{method:'POST',headers:{'Content-Type':'application/json','Authorization':tok?'Bearer '+tok:''},body:JSON.stringify({prompt:inp.value.trim()})})
+    .then(function(r){return r.json();})
+    .then(function(j){if(j.error&&j.error.indexOf('DASHBOARD_TOKEN')!==-1){showLogin();out.textContent='';return;}out.textContent=j.ok?j.antwoord:('Fout: '+(j.error||''));})
+    .catch(function(){out.textContent='Fout bij aanroep';});
+}
+function post(url,body,okmsg,statusId){var st=document.getElementById(statusId||'i_status');if(st)st.textContent='…';var tok=getToken();fetch(url,{method:'POST',headers:{'Content-Type':'application/json','Authorization':tok?'Bearer '+tok:''},body:JSON.stringify(body)}).then(function(r){return r.json();}).then(function(j){if(j.error&&j.error.indexOf('DASHBOARD_TOKEN')!==-1){showLogin();return;}if(st)st.textContent=(j.ok?((j.bericht||okmsg)+' ✓'):('Fout: '+(j.error||'')));}).catch(function(){if(st)st.textContent='Fout';});}
+function showLogin(){var el=document.getElementById('login_overlay');if(el)el.style.display='flex';}
+function saveToken(){var t=document.getElementById('login_token').value.trim();if(t){localStorage.setItem('dashboard_token',t);document.getElementById('login_overlay').style.display='none';}}
+function tick(){var tok=getToken();fetch('/api/stats',{headers:tok?{'Authorization':'Bearer '+tok}:{}}).then(function(r){if(r.status===401){showLogin();document.getElementById('status').textContent='toegangscode vereist';document.getElementById('status').className='pill off';return null;}return r.json();}).then(function(d){if(!d)return;render(d);if(!ingesteld){renderInstellingen(d);ingesteld=true;}if(!personasIngesteld){renderPersonaForm();personasIngesteld=true;}renderPersonaLijst(d);}).catch(function(){document.getElementById('status').textContent='offline';document.getElementById('status').className='pill off';});}
+// ── Tab-navigatie (2.0): actieve tab onthouden in localStorage ────────────────
+function switchTab(t){
+  document.querySelectorAll('.tab').forEach(function(b){b.classList.toggle('act',b.getAttribute('data-tab')===t);});
+  document.querySelectorAll('.tabpane').forEach(function(p){p.classList.toggle('act',p.id==='tab-'+t);});
+  try{localStorage.setItem('dash_tab',t);}catch(_){}
+}
+document.getElementById('tabs').onclick=function(e){var b=e.target.closest('.tab');if(b)switchTab(b.getAttribute('data-tab'));};
+switchTab((function(){try{return localStorage.getItem('dash_tab');}catch(_){return null;}})()||'overzicht');
+// Logs-zoekfilter: verbergt niet-matchende regels in alle feeds op het Logs-tabblad
+function filterLogs(){
+  var q=(document.getElementById('logzoek').value||'').toLowerCase();
+  document.querySelectorAll('#c_logs .feed .row').forEach(function(r){
+    r.style.display=r.textContent.toLowerCase().indexOf(q)>=0?'':'none';
+  });
+}
+tick();setInterval(tick,15000);
+</script></body></html>
