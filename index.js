@@ -38,6 +38,9 @@ if (ontbrekendeVars.length) {
 //   home      (ctx) => blocks[]       → sectie in de App Home; ctx = { userId, members, ... }
 //   homeOrde  lager = hoger in de App Home (standaard 50)
 // ── Interne modules (zie lib/) ────────────────────────────────────────────────
+const { FEATURES, registreerFeature } = require('./lib/registry.js');
+const { BACKUP_BASIS, backupBestanden, controleerBackupDekking, maakBackup } = require('./lib/backup.js');
+const { dashboardAuth, logAudit, leesDashboardHtml } = require('./lib/dashboardkern.js');
 const { readJSON, writeJSON } = require('./lib/state.js');
 const { isWeekendAms, getAmsOffsetMs, getMondayOfWeek, secondenTotVrijdagMiddag } = require('./lib/tijd.js');
 const { isHoofdletterSpam, kapAfOpZinsgrens, normaliseerOndertekening, AFKORTING_VOOR_PUNT } = require('./lib/tekst.js');
@@ -50,43 +53,11 @@ const {
   providerCooldownTot, geminiKeyCooldownTot, REDENEER_HEADROOM,
 } = require('./lib/llm.js');
 
-const FEATURES = [];
-function registreerFeature(feature) {
-  FEATURES.push(feature);
-  return feature;
-}
 
 // ── Dashboard authenticatie ────────────────────────────────────────────────────
 // Schrijvende API-endpoints vereisen een DASHBOARD_TOKEN als Bearer-token in de
 // Authorization-header. Zonder token: 401. Zonder env var: geen beveiliging (dev-mode).
-const crypto = require('crypto');
-function dashboardAuth(req, res) {
-  const vereistToken = process.env.DASHBOARD_TOKEN;
-  if (!vereistToken) return true; // geen token geconfigureerd → open (dev)
-  const authHeader = req.headers['authorization'] || '';
-  const aangeboden = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
-  // Constant-time vergelijking — buffers moeten even lang zijn voor timingSafeEqual
-  const a = Buffer.from(aangeboden);
-  const b = Buffer.from(vereistToken);
-  if (a.length === b.length && crypto.timingSafeEqual(a, b)) return true;
-  res.writeHead(401, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
-  res.end(JSON.stringify({ ok: false, error: 'Onbevoegd. DASHBOARD_TOKEN vereist.' }));
-  return false;
-}
 
-// Audit-log: elke geslaagde schrijfactie via het dashboard wordt vastgelegd (laatste 200).
-// fs/path zijn hier al geladen; readJSON/writeJSON nog niet gedefinieerd op module-load,
-// dus we gebruiken een lazy require-vrije implementatie via een functie-aanroep later.
-function logAudit(endpoint, samenvatting) {
-  try {
-    const file = path.join(__dirname, 'auditlog.json');
-    let data = { items: [] };
-    try { data = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (_) {}
-    data.items.push({ ts: Date.now(), endpoint, samenvatting: String(samenvatting).substring(0, 200) });
-    data.items = data.items.slice(-200);
-    fs.writeFileSync(file, JSON.stringify(data, null, 2));
-  } catch (_) {}
-}
 
 // ── App initialisatie ──────────────────────────────────────────────────────────
 let isReady = false; // wordt true na app.start() — gebruikt door health endpoint
@@ -9067,71 +9038,9 @@ async function laadTestKanaalIds(client) {
 // Kopieert alle data-bestanden naar backups/ met datumstempel.
 // Houdt de laatste 7 backups per dag — oudere worden automatisch verwijderd.
 
-// Basislijst: state van de kern (scores, leden, straffen, geschiedenis). Feature-eigen state
-// komt uit de registry, zie backupBestanden().
-const BACKUP_BASIS = [
-  'scores.json', 'members.json', 'verbanning.json', 'achievements.json',
-  'streaks.json', 'stemmen.json', 'allianties.json', 'geleKaarten.json',
-  'vergrijpen.json', 'weekgebeurtenissen.json', 'eerGegeven.json',
-  'verdacht.json', 'missie.json', 'roem.json', 'statistiekhistorie.json',
-  'geplandeberichten.json', 'personas.json', 'powerups.json', 'winkelhistorie.json',
-  // Kern-spelstaat die niet bij één feature hoort.
-  'troon.json', 'troonduel.json', 'cooldowns.json', 'duels.json', 'vetbad.json',
-  'kroketgok.json', 'kroket_van_de_dag.json', 'goudenkroket.json', 'profetie.json',
-  'weekreset.json', 'kroketevent.json',
-  // Opgebouwde inhoud & configuratie — kost de meeste moeite om terug te krijgen.
-  'kennisbank.json', 'instellingen.json', 'quiz.json', 'geluk.json',
-];
 
-// Basislijst + alles wat features declareren. Functie (geen const) omdat features zich
-// tijdens het laden van de module registreren, ná deze definitie.
-function backupBestanden() {
-  return [...new Set([...BACKUP_BASIS, ...FEATURES.flatMap(f => f.state || [])])];
-}
 
-// Startup-controle op drift: staat er state op schijf die niemand backupt? Dat is precies hoe
-// de veiling-escrow buiten de backup viel. Waarschuwt alleen — nooit blokkeren bij opstarten.
-const BACKUP_NEGEER = new Set([
-  'package.json', 'package-lock.json', 'members.json',
-  // Puur afgeleid of triviaal herbouwbaar:
-  'auditlog.json', 'llmstats.json', 'frituurlog.json', 'overslaan.json',
-  'geschiedenis.json', 'test_kanalen.json',
-]);
-function controleerBackupDekking() {
-  try {
-    const gedekt = new Set(backupBestanden());
-    const opSchijf = fs.readdirSync(__dirname).filter(f => f.endsWith('.json'));
-    const vergeten = opSchijf.filter(f => !gedekt.has(f) && !BACKUP_NEGEER.has(f));
-    if (vergeten.length) {
-      console.warn(`⚠️ Niet in de backup: ${vergeten.join(', ')} — registreer ze bij een feature (state) of in BACKUP_BASIS.`);
-    }
-  } catch (_) {}
-}
 
-function maakBackup() {
-  try {
-    const backupDir = path.join(__dirname, 'backups');
-    if (!fs.existsSync(backupDir)) fs.mkdirSync(backupDir);
-
-    const datumStempel = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
-    for (const bestand of backupBestanden()) {
-      const bron = path.join(__dirname, bestand);
-      if (!fs.existsSync(bron)) continue;
-      const doel = path.join(backupDir, `${datumStempel}_${bestand}`);
-      fs.copyFileSync(bron, doel);
-    }
-
-    // Verwijder backups ouder dan 7 dagen
-    const grens = Date.now() - 7 * 24 * 60 * 60 * 1000;
-    for (const f of fs.readdirSync(backupDir)) {
-      const p = path.join(backupDir, f);
-      if (fs.statSync(p).mtimeMs < grens) fs.unlinkSync(p);
-    }
-    console.log(`💾 Backup gemaakt (${datumStempel})`);
-  } catch (err) {
-    console.error('⚠️ Backup mislukt:', err.message);
-  }
-}
 
 // ── Kroket van de Dag ─────────────────────────────────────────────────────────
 
@@ -9945,21 +9854,6 @@ async function voerDashboardActie(actie) {
   }
 }
 
-// Dashboard-HTML staat sinds de 2.0-upgrade in een los bestand (dashboard.html) — makkelijker
-// te onderhouden dan een inline template. mtime-cache zodat een deploy direct zichtbaar is.
-let _dashboardHtmlCache = { mtimeMs: 0, html: '' };
-function leesDashboardHtml() {
-  const p = path.join(__dirname, 'dashboard.html');
-  try {
-    const stat = fs.statSync(p);
-    if (stat.mtimeMs !== _dashboardHtmlCache.mtimeMs) {
-      _dashboardHtmlCache = { mtimeMs: stat.mtimeMs, html: fs.readFileSync(p, 'utf8') };
-    }
-    return _dashboardHtmlCache.html;
-  } catch (_) {
-    return '<h1>dashboard.html ontbreekt op de server</h1>';
-  }
-}
 
 // ── Crashdetectie ──────────────────────────────────────────────────────────────
 // Vangt onverwachte uitzonderingen op en herstart via PM2.
