@@ -6300,6 +6300,7 @@ const CRON_LABELS = {
   '59 23 * * 0':     { label: 'Weekkampioen + reset' },
   '30 10 * * 1':     { label: 'Kroket-bingo' },
   '0 10 * * 1':      { label: 'Wekelijkse rang-gunst' },
+  '30 12 * * 1-5':   { label: 'Dagelijkse steun' },
   '30 9 * * 5':      { label: 'Grote Veiling (opening)' },
   '45 14 * * 5':     { label: 'Grote Veiling (hamer)' },
   // Kansgebaseerd/willekeurig (komen soms wel, soms niet):
@@ -6990,15 +6991,17 @@ function planWillekeurigKroketEvent(client) {
   const event = KROKET_EVENTS[Math.floor(Math.random() * KROKET_EVENTS.length)];
   const members = loadMembers();
 
-  // Inhaalmechaniek: weeg de ±1 op basis van roem-achterstand zodat de stand niet te ver uiteenloopt.
-  // Wie ver onder het gemiddelde zit, krijgt veel meer kans op +1; koplopers juist op −1.
-  const roemData = loadRoem();
-  const roems = Object.keys(members).map(id => roemData[id] || 0);
-  const gemRoem = roems.reduce((a, b) => a + b, 0) / Math.max(1, roems.length);
-  const maxAfw = Math.max(1, ...roems.map(r => Math.abs(r - gemRoem)));
+  // Inhaalmechaniek: weeg de ±1 op basis van puntenachterstand zodat de stand niet te ver
+  // uiteenloopt. Woog eerst op ROEM, en dat was fout: roem loopt nauwelijks uiteen (107–134)
+  // terwijl de kroketpunten 1 tegen 59 stonden. Het mechanisme zag dus een balans die er niet
+  // was. Nu op de weekscore, dezelfde grootheid die daadwerkelijk ontspoort.
+  const puntData = loadScores();
+  const punten = Object.keys(members).map(id => puntData[id] || 0);
+  const gemPunten = punten.reduce((a, b) => a + b, 0) / Math.max(1, punten.length);
+  const maxAfw = Math.max(1, ...punten.map(p => Math.abs(p - gemPunten)));
 
   for (const [userId, lid] of Object.entries(members)) {
-    const afwijking = (gemRoem - (roemData[userId] || 0)) / maxAfw; // achter → positief, voor → negatief
+    const afwijking = (gemPunten - (puntData[userId] || 0)) / maxAfw; // achter → positief, voor → negatief
     const kansPlus = Math.min(0.82, Math.max(0.18, 0.5 + 0.32 * afwijking));
     let delta;
     if (Math.random() < kansPlus) {
@@ -7623,10 +7626,48 @@ async function voerRoof(client, userId, doelId, channelId) {
 // Bereik wordt geclampt op ±0,25 zodat een spel nooit volledig voorspelbaar wordt.
 //   { "U0XXXX": 0.15 }  → 15 procentpunt meer kans op een gunstige uitkomst
 const GELUK_MAX = 0.25;
+
+// Automatische inhaalbonus, gemeten op KROKETPUNTEN — de stand die daadwerkelijk uiteenloopt.
+// Waarom dit nodig was: de enige inhaalweging die bestond zat in het kroket-event en woog op
+// ROEM. Roem loopt nauwelijks uiteen (107–134) terwijl de punten 1 tegen 59 stonden, dus dat
+// mechanisme kón het probleem niet zien. Nu wordt de achterstand t.o.v. de koploper gemeten:
+//   koploper        → 0 (en een kleine malus, zodat een uitloop niet oneindig doorzet)
+//   halverwege      → ~halve bonus
+//   (bijna) nul     → maximale bonus
+// Alleen kansspelen worden bijgestuurd; verdiende punten (eer, opdrachten, relikwieën) niet.
+const INHAAL_MAX = 0.18;      // maximale bonus voor wie helemaal achteraan staat
+const KOPLOPER_MALUS = 0.05;  // lichte rem op de koploper
+function inhaalBonus(userId) {
+  try {
+    const members = loadMembers();
+    const scores = loadScores();
+    const eigen = scores[userId] || 0;
+    const alle = Object.keys(members).map(id => scores[id] || 0);
+    if (alle.length < 2) return 0;
+    const leider = Math.max(...alle);
+    // Iedereen staat gelijk (of niemand heeft punten) → niets bij te sturen.
+    if (leider <= 0) return 0;
+    if (eigen >= leider) return -KOPLOPER_MALUS;
+    const achterstand = (leider - eigen) / leider; // 0 = koploper, 1 = op nul
+    return Math.min(INHAAL_MAX, achterstand * INHAAL_MAX);
+  } catch (_) { return 0; }
+}
+
+// Totale kansmodificator: automatische inhaalbonus plus een eventuele handmatige correctie uit
+// geluk.json. Samen geclampt op ±GELUK_MAX zodat geen enkel spel volledig voorspelbaar wordt.
+//
+// ⚠️ ALLEEN voor NULSOM-spelen: duel, roof en troonuitdaging. Daar verschuift een bonus punten
+// tussen leden en ontstaat er niets bij. Het Grote Vetbad is bewust UITGESLOTEN, want dat speelt
+// tegen de bank: de EV is normaal −5% per ingezet punt (een put, zoals bedoeld), maar kantelt al
+// boven 2,6 procentpunt bonus naar winstgevend. Bij +15 werd het +23,5% per punt — een
+// geldmachine die in één week een verschil van 59 tegen 1 punt opleverde. Wie achterloopt helpen
+// via een kansspel tegen de bank betekent dus punten bijprinten; die correctie hoort in de
+// puntenBRONNEN (zie de dagelijkse steun en de inhaalweging van het kroket-event).
 function getGeluk(userId) {
   try {
-    const v = Number(readJSON('geluk.json', {})[userId]) || 0;
-    return Math.max(-GELUK_MAX, Math.min(GELUK_MAX, v));
+    const handmatig = Number(readJSON('geluk.json', {})[userId]) || 0;
+    const totaal = handmatig + inhaalBonus(userId);
+    return Math.max(-GELUK_MAX, Math.min(GELUK_MAX, totaal));
   } catch (_) { return 0; }
 }
 
@@ -7766,6 +7807,14 @@ async function voerOffer(client, userId, inzet, channelId) {
   if ((scores[userId] || 0) < inzet) {
     return { ok: false, tekst: `_U bezit ${scores[userId] || 0} kroketpunt(en) — te weinig voor een offer van ${inzet}. Het Vetbad lacht om lege handen._` };
   }
+  // Inzetplafond: hoogstens de helft van uw bezit (altijd minstens 1). Zonder deze rem kon één
+  // ongelukkige middag een heel weeksaldo verdampen — 7 offers van 5 tot 10 punten leverden in
+  // de praktijk −48 op, waarna terugkomen onmogelijk was. Het Vetbad blijft een put, maar geen
+  // bodemloze.
+  const plafond = Math.max(1, Math.floor((scores[userId] || 0) / 2));
+  if (inzet > plafond) {
+    return { ok: false, tekst: `_Het Vetbad aanvaardt hoogstens de helft van uw bezit: *${plafond}* kroketpunt${plafond === 1 ? '' : 'en'} (u bezit er ${scores[userId] || 0}). De Hoge Frituurraad beschermt u tegen uzelf._` };
+  }
   // Max 5 offers per dag — het Vetbad is geen gokhal.
   const vetbad = readJSON('vetbad.json', {});
   const vandaagKey = new Intl.DateTimeFormat('nl-NL', { timeZone: 'Europe/Amsterdam' }).format(new Date());
@@ -7778,12 +7827,11 @@ async function voerOffer(client, userId, inzet, channelId) {
   writeJSON('vetbad.json', vetbad);
 
   const bijnaam = members[userId].bijnaam;
-  // Geluksfactor verkleint ALLEEN de verliesband: een verlies wordt met kans `geluk/0,5`
-  // omgezet in een gunstige uitkomst, evenredig verdeeld over jackpot/verdubbeld/push.
-  // Niet de hele worp opschuiven — dat zou de jackpot van 6% naar 21% jagen en dus opvallen.
-  let roll = Math.random();
-  const geluk = getGeluk(userId);
-  if (geluk > 0 && roll >= 0.50 && Math.random() < geluk / 0.50) roll = Math.random() * 0.50;
+  // GEEN geluksfactor hier: het Vetbad speelt tegen de bank, dus elke kansbonus verandert de EV
+  // van −5% naar positief en maakt er een geldmachine van (zie de toelichting bij getGeluk).
+  // Voor iedereen exact dezelfde kansen; bescherming loopt via het inzetplafond hierboven en de
+  // redistributie via de puntenbronnen.
+  const roll = Math.random();
   let delta, kop, regel;
   if (roll < 0.06) {                 // 6% — jackpot (×3)
     delta = inzet * 3;
@@ -8915,6 +8963,41 @@ planCron('30 8 * * *', async () => {
     }
   } catch (error) {
     console.error('Fout bij verjaardagscheck:', error);
+  }
+}, { timezone: 'Europe/Amsterdam' });
+
+// ── Dagelijkse steun van de Frituurraad ────────────────────────────────────────
+// Waar de redistributie WEL hoort: bij de puntenbronnen. Wie ver achterloopt op de koploper
+// krijgt elke werkdag een kleine steun. Bewust hier en niet in het Vetbad: een kansbonus tegen
+// de bank print punten bij (EV van −5% naar +23%), een begrensde bron doet dat niet.
+// Gedempt: hoogstens STEUN_MAX per dag per lid, en alleen onder de drempel.
+const STEUN_DREMPEL = 0.35;  // onder 35% van de koploper kom je in aanmerking
+const STEUN_MAX = 2;         // hoogstens twee punten per dag
+
+planCron('30 12 * * 1-5', async () => {
+  try {
+    const members = loadMembers();
+    const scores = loadScores();
+    const alle = Object.keys(members).map(id => scores[id] || 0);
+    const leider = Math.max(...alle, 0);
+    if (leider < 10) return; // nog geen echte kloof; niets te nivelleren
+    const grens = leider * STEUN_DREMPEL;
+    const geholpen = [];
+    for (const [id, lid] of Object.entries(members)) {
+      if (isVerbannen(id)) continue;
+      const eigen = scores[id] || 0;
+      if (eigen >= grens) continue;
+      // Hoe verder achter, hoe meer steun — maar nooit meer dan STEUN_MAX.
+      const bedrag = Math.max(1, Math.min(STEUN_MAX, Math.ceil((grens - eigen) / grens * STEUN_MAX)));
+      await pasScoreAanMetCheck(app.client, id, bedrag, { channelId: process.env.SLACK_CHANNEL_ID });
+      logGebeurtenis('bedelarij', id, `${lid.bijnaam} ontving ${bedrag} kroketpunt(en) steun van de Frituurraad (stand ${eigen}, koploper ${leider})`);
+      geholpen.push(`*${lid.bijnaam}* +${bedrag}`);
+    }
+    if (!geholpen.length) return;
+    await postToChannel(app.client, process.env.SLACK_CHANNEL_ID,
+      `🥔 *STEUN VAN DE HOGE FRITUURRAAD* 🥔\n\n> De Raad duldt geen honger in het genootschap. Wie ver achterop is geraakt ontvangt bijstand:\n> ${geholpen.join(' · ')}\n> _De frituur is voor allen._\n\n— De Hoge Frituurraad`);
+  } catch (err) {
+    console.error('Fout bij dagelijkse steun:', err);
   }
 }, { timezone: 'Europe/Amsterdam' });
 
