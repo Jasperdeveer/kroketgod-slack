@@ -27,6 +27,23 @@ if (ontbrekendeVars.length) {
   process.exit(1);
 }
 
+// ── Feature-registry ───────────────────────────────────────────────────────────
+// Elke feature declareert naast haar eigen code wat ze nodig heeft; de afgeleide lijsten
+// (backup, help, App Home) worden hieruit opgebouwd. Aanleiding: 16 state-bestanden vielen
+// buiten de backup — waaronder de veiling-escrow — omdat registreren op vijf plekken
+// duizenden regels uit elkaar gebeurde. Wat hier staat, kan niet meer vergeten worden.
+//
+//   naam      korte id, alleen voor logging
+//   state     ['x.json']              → gaat mee in de backup
+//   help      [{gebruik, verwacht}]   → verschijnt in /kroketgod help
+//   home      (ctx) => blocks[]       → sectie in de App Home; ctx = { userId, members, ... }
+//   homeOrde  lager = hoger in de App Home (standaard 50)
+const FEATURES = [];
+function registreerFeature(feature) {
+  FEATURES.push(feature);
+  return feature;
+}
+
 // ── Dashboard authenticatie ────────────────────────────────────────────────────
 // Schrijvende API-endpoints vereisen een DASHBOARD_TOKEN als Bearer-token in de
 // Authorization-header. Zonder token: 401. Zonder env var: geen beveiliging (dev-mode).
@@ -2408,10 +2425,6 @@ const COMMANDO_LIJST = [
   { gebruik: '/kroketgod ranglijst',  verwacht: 'wie staat waar in de hiërarchie' },
   { gebruik: '/kroketgod duel [naam]', verwacht: 'heilig frituurduel — winnaar pakt het punt van de verliezer (1x/dag)' },
   { gebruik: '/kroketgod roof [naam]', verwacht: 'de Grote Kroketroof — 40% kans op een flinke buit (tot 8 punten), anders 2 punten smartengeld (1x/week)' },
-  { gebruik: '/kroketgod aanval',      verwacht: 'val de Bamischijf der Duisternis aan als die rondwaart (1x/dag; `aanval offer` = extra schade) — of klik ⚔️ op het raid-bord' },
-  { gebruik: '/kroketgod bied [aantal]', verwacht: 'bied op het artefact van de Grote Veiling (vrijdag 09:30–14:45) — of klik 💰 op het veilingbord' },
-  { gebruik: '/kroketgod zegen [naam]', verwacht: 'alleen de Profeet van de Week (weekkampioen): deel één heilige zegen uit (+1)' },
-  { gebruik: '/kroketgod bingo',      verwacht: 'bekijk de wekelijkse bingokaart; claim met `bingo [nummer] [bewijs]` — de Raad weegt uw bewijs (+1 punt)' },
   { gebruik: '/kroketgod offer [aantal]', verwacht: 'offer kroketpunten aan het Grote Vetbad — fortuin of ondergang (5x/dag)' },
   { gebruik: '/kroketgod troon',      verwacht: 'aanschouw de Frituurkoning; grijp de kroon met `troon uitdagen`' },
   { gebruik: '/kroketgod winkel',     verwacht: 'de Heilige Aflatenhandel — besteed kroketpunten aan power-ups en status (ook met koopknoppen in de Home-tab van de bot)' },
@@ -2419,8 +2432,14 @@ const COMMANDO_LIJST = [
   { gebruik: '/kroketgod frituur [beschrijving]', verwacht: 'de Kroket God fritueert een visioen (afbeelding, 1x/uur)' },
 ];
 
+// Basislijst + wat features zelf declareren (zie registreerFeature). Functie i.p.v. const,
+// omdat features zich pas tijdens het laden van de module registreren.
+function alleCommandos() {
+  return [...COMMANDO_LIJST, ...FEATURES.flatMap(f => f.help || [])];
+}
+
 function buildHelpText() {
-  const regels = COMMANDO_LIJST
+  const regels = alleCommandos()
     .map(c => `\`${c.gebruik}\` — _${c.verwacht}_`)
     .join('\n');
   return `⚜️ *KROKET GOD* ⚜️\n\n${regels}`;
@@ -7741,6 +7760,12 @@ planCron('* * * * *', async () => {
   }
 }, { timezone: 'Europe/Amsterdam' });
 
+registreerFeature({
+  naam: 'kroket-bingo',
+  state: ['bingo.json'],
+  help: [{ gebruik: '/kroketgod bingo', verwacht: 'bekijk de wekelijkse bingokaart; claim met `bingo [nummer] [bewijs]` — de Raad weegt uw bewijs (+1 punt)' }],
+});
+
 // ── Cron: maandag 10:30 — wekelijkse kroket-bingokaart ────────────────────────
 // Drie opdrachten uit de pool; leden claimen via /kroketgod bingo [nummer] (+1 punt).
 
@@ -7776,6 +7801,14 @@ planCron('30 10 * * 1', async () => {
     console.error('Fout bij bingo-kaart:', err);
   }
 }, { timezone: 'Europe/Amsterdam' });
+
+// Feature-registratie: de state gaat hierdoor automatisch mee in de backup en de help
+// verschijnt automatisch in /kroketgod help — geen losse lijsten meer bijwerken.
+registreerFeature({
+  naam: 'bamischijf-raid',
+  state: ['bamischijf.json'],
+  help: [{ gebruik: '/kroketgod aanval', verwacht: 'val de Bamischijf der Duisternis aan als die rondwaart (1x/dag; `aanval offer` = extra schade) — of klik ⚔️ op het raid-bord' }],
+});
 
 // ── Bamischijf-Raid: coöperatieve strijd tegen een gezamenlijke vijand ─────────
 // Dinsdag 09:30 is er 50% kans dat de Bamischijf der Duisternis oprijst. Leden vallen aan
@@ -8512,6 +8545,19 @@ function bouwAppHomeBlocks(userId, melding = '') {
   }));
   blocks.push({ type: 'section', text: { type: 'mrkdwn', text: rijen.length ? homeBalken(rijen) : '_Nog geen punten deze week._' } });
 
+  // ── Secties die features zelf aanleveren (zie registreerFeature) ──
+  // Zo kan een nieuwe feature in de App Home verschijnen zonder deze functie aan te raken.
+  const featureCtx = { userId, members, lid, verbannen, scores, eigenScore, vandaagKey };
+  for (const f of [...FEATURES].sort((a, b) => (a.homeOrde ?? 50) - (b.homeOrde ?? 50))) {
+    if (typeof f.home !== 'function') continue;
+    try {
+      const eigen = f.home(featureCtx);
+      if (Array.isArray(eigen) && eigen.length) blocks.push(...eigen);
+    } catch (err) {
+      console.error(`⚠️ App Home-sectie van feature "${f.naam}" faalde:`, err.message);
+    }
+  }
+
   blocks.push({ type: 'actions', elements: [
     { type: 'button', text: { type: 'plain_text', text: '🔄 Verversen', emoji: true }, action_id: 'home_verversen' },
   ] });
@@ -8785,6 +8831,12 @@ planCron('50 14 * * 5', async () => {
   }
 }, { timezone: 'Europe/Amsterdam' });
 
+registreerFeature({
+  naam: 'grote-veiling',
+  state: ['veiling.json'],
+  help: [{ gebruik: '/kroketgod bied [aantal]', verwacht: 'bied op het artefact van de Grote Veiling (vrijdag 09:30–14:45) — of klik 💰 op het veilingbord' }],
+});
+
 // ── De Grote Veiling: vrijdags één artefact onder de hamer ─────────────────────
 // Opening 09:30 (LLM-aankondiging), hamer 14:45 (templated — transactie moet exact kloppen).
 // Bieden met `/kroketgod bied [aantal]`; de hoogste bieder die zijn bod op hamertijd nog kan
@@ -8887,6 +8939,8 @@ planCron('45 14 * * 5', async () => {
     console.error('Fout bij veiling-hamer:', err);
   }
 }, { timezone: 'Europe/Amsterdam' });
+
+registreerFeature({ naam: 'premiejacht', state: ['premie.json'] });
 
 // ── Cron: woensdag 11:00 — kans op een premiejacht ─────────────────────────────
 // 50% kans: de Kroket God zet een premie (+3) op het hoofd van een willekeurig lid.
@@ -8992,6 +9046,12 @@ planCron('30 8 * * *', async () => {
   }
 }, { timezone: 'Europe/Amsterdam' });
 
+registreerFeature({
+  naam: 'profeet-van-de-week',
+  state: ['profeet.json'],
+  help: [{ gebruik: '/kroketgod zegen [naam]', verwacht: 'alleen de Profeet van de Week (weekkampioen): deel één heilige zegen uit (+1)' }],
+});
+
 // ── Cron: zondag 23:59 — weekkampioen & wekelijkse kroketpunten-reset ──────────
 // Kroketpunten resetten elke week (zondagnacht); roempunten blijven permanent staan.
 
@@ -9073,15 +9133,15 @@ async function laadTestKanaalIds(client) {
 // Kopieert alle data-bestanden naar backups/ met datumstempel.
 // Houdt de laatste 7 backups per dag — oudere worden automatisch verwijderd.
 
-const BACKUP_BESTANDEN = [
+// Basislijst: state van de kern (scores, leden, straffen, geschiedenis). Feature-eigen state
+// komt uit de registry, zie backupBestanden().
+const BACKUP_BASIS = [
   'scores.json', 'members.json', 'verbanning.json', 'achievements.json',
   'streaks.json', 'stemmen.json', 'allianties.json', 'geleKaarten.json',
   'vergrijpen.json', 'weekgebeurtenissen.json', 'eerGegeven.json',
   'verdacht.json', 'missie.json', 'roem.json', 'statistiekhistorie.json',
   'geplandeberichten.json', 'personas.json', 'powerups.json', 'winkelhistorie.json',
-  // Spelstaat & voortgang (V2) — zonder deze kan een Pi-storing lopende spellen, claims,
-  // cooldowns en (bij de veiling) betaalde escrow-inzetten onherstelbaar wissen.
-  'veiling.json', 'bamischijf.json', 'premie.json', 'profeet.json', 'bingo.json',
+  // Kern-spelstaat die niet bij één feature hoort.
   'troon.json', 'troonduel.json', 'cooldowns.json', 'duels.json', 'vetbad.json',
   'kroketgok.json', 'kroket_van_de_dag.json', 'goudenkroket.json', 'profetie.json',
   'weekreset.json', 'kroketevent.json',
@@ -9089,13 +9149,38 @@ const BACKUP_BESTANDEN = [
   'kennisbank.json', 'instellingen.json', 'quiz.json', 'geluk.json',
 ];
 
+// Basislijst + alles wat features declareren. Functie (geen const) omdat features zich
+// tijdens het laden van de module registreren, ná deze definitie.
+function backupBestanden() {
+  return [...new Set([...BACKUP_BASIS, ...FEATURES.flatMap(f => f.state || [])])];
+}
+
+// Startup-controle op drift: staat er state op schijf die niemand backupt? Dat is precies hoe
+// de veiling-escrow buiten de backup viel. Waarschuwt alleen — nooit blokkeren bij opstarten.
+const BACKUP_NEGEER = new Set([
+  'package.json', 'package-lock.json', 'members.json',
+  // Puur afgeleid of triviaal herbouwbaar:
+  'auditlog.json', 'llmstats.json', 'frituurlog.json', 'overslaan.json',
+  'geschiedenis.json', 'test_kanalen.json',
+]);
+function controleerBackupDekking() {
+  try {
+    const gedekt = new Set(backupBestanden());
+    const opSchijf = fs.readdirSync(__dirname).filter(f => f.endsWith('.json'));
+    const vergeten = opSchijf.filter(f => !gedekt.has(f) && !BACKUP_NEGEER.has(f));
+    if (vergeten.length) {
+      console.warn(`⚠️ Niet in de backup: ${vergeten.join(', ')} — registreer ze bij een feature (state) of in BACKUP_BASIS.`);
+    }
+  } catch (_) {}
+}
+
 function maakBackup() {
   try {
     const backupDir = path.join(__dirname, 'backups');
     if (!fs.existsSync(backupDir)) fs.mkdirSync(backupDir);
 
     const datumStempel = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
-    for (const bestand of BACKUP_BESTANDEN) {
+    for (const bestand of backupBestanden()) {
       const bron = path.join(__dirname, bestand);
       if (!fs.existsSync(bron)) continue;
       const doel = path.join(backupDir, `${datumStempel}_${bestand}`);
@@ -10004,7 +10089,9 @@ process.on('SIGINT',  () => gracefulShutdown('SIGINT'));
   backfillAchievements();
   backfillRoem();
   seedStatHistorie(); // vul de trendgrafieken met de events van deze week (alleen als nog leeg)
+  controleerBackupDekking(); // waarschuwt over state die buiten de backup valt
   maakBackup(); // direct backup bij opstarten
+  console.log(`🧩 ${FEATURES.length} features geregistreerd; ${backupBestanden().length} bestanden in de backup.`);
   await app.start();
   isReady = true;
   console.log('⚜️ De Kroket God is wakker. Health: http://localhost:3001/health');
