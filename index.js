@@ -3985,6 +3985,172 @@ function buildIntakeModal(triggerId) {
   };
 }
 
+// ── Tabel-gedreven verkondigingen ──────────────────────────────────────────────
+// Ruim twintig commando's deden precies hetzelfde: prompt bouwen → LLM → in het kanaal
+// plaatsen. Elk was een eigen if-blok van 8–15 regels, en de schrijf-familie was daarbovenop
+// nog een if/else-keten. Hier is dat data geworden: een nieuwe verkondiging toevoegen is één
+// regel, en de afhandeling (LLM-aanroep, posten, foutafhandeling) staat op één plek.
+//
+// Velden:
+//   trigger  string → exacte match op de input | RegExp → test op de hele input
+//   prompt   (ctx) => string, met ctx = { arg, aanvrager, doelwit, extern, input }
+//   tokens   max_tokens (standaard 400)
+//   niveau   'slim' (standaard) of 'licht' voor formulematige teksten (spaart quota)
+//   argUit   RegExp waarvan de rest ná de match het argument is (standaard: de trigger zelf)
+//   standaardArg  gebruikt als het argument leeg is
+//   doelwit  true → het argument opzoeken als lidnaam; valt terug op de aanvrager zelf
+//   keuze    array → er wordt willekeurig één element gekozen, beschikbaar als ctx.keuze
+//   extern   async () => string|null — externe data (bv. een advies-API), als ctx.extern
+const VERKONDIGINGEN = [
+  // ── Korte uitspraken ──
+  {
+    trigger: 'quote', tokens: 250, niveau: 'licht',
+    prompt: () => 'Geef één korte kroket-wijsheid of quote. Maximaal twee zinnen. Geen header, gewoon de quote in stijl. Geen inleidingszin.',
+  },
+  {
+    trigger: 'nieuws', tokens: 400,
+    prompt: () => 'Genereer een dramatisch breaking news bericht vanuit het Grote Vetbad. Gebruik een ⚜️ SPOEDMELDING header. Verzin een absurd maar geloofwaardig kroket-gerelateerd nieuwtje als officieel persbericht. Geen inleidingszin.',
+  },
+  {
+    trigger: /^kroket vs bitterbal/, tokens: 400,
+    prompt: () => 'Spreek het definitieve goddelijke oordeel uit in de eeuwenoude strijd: kroket versus bitterbal. Structuur: 1 argument PRO kroket, 1 argument PRO bitterbal, dan het finale vonnis. De uitkomst is NIET neutraal — er is een winnaar. Verwijs naar de snackleer. Max 5 zinnen. Geen inleidingszin.',
+  },
+  {
+    trigger: /kroket-grondwet|^grondwet$/, tokens: 500,
+    prompt: () => 'Stel een kroket-grondwet op voor de Kroket Illuminati. Format: preambule (1 zin), dan vijf Artikelen genummerd I t/m V. Elk artikel is één concrete rechtsregel van de snackleer. Juridische taal. Geen inleidingszin.',
+  },
+  {
+    trigger: /aristoteles|aristotle/, tokens: 400,
+    prompt: () => `Citeer fictief wat Aristoteles zou zeggen over de kroket. Gebruik Aristotelische begrippen (deugd, vorm, materie, het Goede, de gouden middenweg). Concludeer welk filosofisch begrip de kroket belichaamt. Sluit af met het oordeel van de Kroket God over Aristoteles' inzicht. Max 5 zinnen. Geen inleidingszin.`,
+  },
+
+  // ── Met externe data ──
+  {
+    trigger: 'advies', tokens: 250, extern: () => haalAdvies(),
+    prompt: ({ extern }) => extern
+      ? `Het Orakel van het Vetbad heeft gesproken. Het advies luidt: "${extern}". ` +
+        'Presenteer dit als een onweerlegbaar goddelijk decreet van de Kroket God. Vertaal het naar het Nederlands als nodig. Max 3 zinnen. Geen inleidingszin.'
+      : 'De Kroket God deelt een willekeurig maar onweerlegbaar stuk levensadvies. Max 2 zinnen. Geen inleidingszin.',
+  },
+  {
+    trigger: 'bs', tokens: 200, extern: () => haalCorporateBs(),
+    prompt: ({ extern }) => extern
+      ? `De Hoge Frituurraad heeft zojuist het volgende statement vrijgegeven: "${extern}". ` +
+        'Presenteer deze corporate onzin met absolute plechtigheid alsof het een heilige openbaring is. Max 2 zinnen. Geen inleidingszin.'
+      : 'De Kroket God spreekt in verheven managementtaal. Max 2 zinnen nietszeggend maar gezaghebbend. Geen inleidingszin.',
+  },
+
+  // ── Met een vrij argument ──
+  {
+    trigger: /^rap /, argUit: /^rap\s+/i, tokens: 500,
+    prompt: ({ arg }) => `Schrijf een korte rap (4-8 regels) in de stijl van de Kroket God over: "${arg}". De rap heeft rijm, ritme en kroket-metaforen. Eindig met een drooppin'-lijn over de snackleer. Geen inleidingszin.`,
+  },
+  {
+    trigger: /^debat /, argUit: /^debat\s+/i, tokens: 500,
+    prompt: ({ arg }) => `De Kroket God debatteert de stelling: "${arg}". Geef kort een VOOR-argument en een TEGEN-argument, beide in Kroket God stijl. Sluit af met een definitief oordeel. Geen inleidingszin.`,
+  },
+  {
+    trigger: /ted\s*talk/, argUit: /.*ted\s*talk\s*(over\s*)?/i, standaardArg: 'de universele waarde van de kroket', tokens: 500,
+    prompt: ({ arg }) => `Houd een ultra-korte TED talk (3-4 alinea's) over: "${arg}", vertaald naar kroket-filosofie. Structuur: pakkende openingszin, these, bewijs uit de snackleer, memorabele conclusie. Spreek de zaal aan als "Heren van de Kroket Illuminati". Eindig met een applauswaardig statement. Geen inleidingszin.`,
+  },
+  {
+    trigger: /^oordeel/, argUit: /^oordeel\s*(over\s*(mijn\s*leven\s*[:\-]?\s*)?)?/i, tokens: 450,
+    prompt: ({ arg, aanvrager }) => `${aanvrager} legt zijn leven ter beoordeling voor aan de Kroket God${arg ? `: "${arg}"` : ' — zonder nadere toelichting'}. Spreek het oordeel uit: één concreet punt van lof, één punt van zorg, en een definitief eindvonnis. Verwijs naar het kroket-pad. Max 5 zinnen. Geen inleidingszin.`,
+  },
+
+  // ── Op een persoon gericht (argument wordt als lidnaam opgezocht) ──
+  {
+    trigger: /^straf /, argUit: /^straf\s+/i, doelwit: 'vreemdeling', tokens: 400,
+    prompt: ({ doelwit }) => `Leg een creatieve en passende straf op aan ${doelwit}. Spreek hen uitsluitend aan als "${doelwit}". Dramatisch en specifiek. Geen inleidingszin.`,
+  },
+  {
+    trigger: /^canoniseer/, argUit: /^canoniseer\s+/i, argSchoon: /\s+als\s+(heilige|sint|patron)[^\w]*.*$/i,
+    doelwit: 'buitenstaander', tokens: 400,
+    prompt: ({ doelwit }) => `De Kroket God canoniseert ${doelwit} als heilige van de snackleer. Structuur: de heilige daad die tot canonisering leidt (verzin er één, kroket-gerelateerd), de heiligendag, het beschermpatronaat (over welk aspect van de snackleer?), en de officiële zegen. Max 5 zinnen. Geen inleidingszin.`,
+  },
+  {
+    trigger: /^geef .*therapie/, argUit: /^geef\s+/i, argSchoon: /\s*een\s+kroket-therapie(sessie)?.*$/i,
+    doelwit: 'buitenstaander', tokens: 450,
+    prompt: ({ doelwit }) => `De Kroket God houdt een kroket-therapiesessie voor ${doelwit}. Structuur: diagnose (één kroket-gerelateerde aandoening met een quasi-medische naam), behandelplan (twee concrete oefeningen uit de snackleer), prognose. Toon: klinisch maar warm. Max 6 zinnen. Geen inleidingszin.`,
+  },
+
+  // ── Met een willekeurige keuze ──
+  {
+    trigger: /spirit-kroket|^onthul/, tokens: 350,
+    keuze: ['Goulashkroket', 'Satékroket', 'Chorizo kroket', 'Boeuf Bourgignonkroket', 'Kaaskroket',
+            'Groentekroket', 'Carpaccio kroket', 'Truffelkroket', 'Mosterdkroket', 'Mexicaanse kroket'],
+    prompt: ({ aanvrager, keuze }) => `De Kroket God onthult aan ${aanvrager} dat hun spirit-kroket de ${keuze} is. Leg in twee zinnen uit waarom dit kroket hun karakter weerspiegelt. Voeg één profetische implicatie toe. Plechtig en definitief. Geen inleidingszin.`,
+  },
+
+  // ── Schrijf-familie (was één lange if/else-keten) ──
+  {
+    trigger: /^schrijf .*lied.*(melodie|melody)/, argUit: /.*melodie van\s*/i, standaardArg: 'Bohemian Rhapsody', tokens: 600,
+    prompt: ({ arg }) => `Schrijf een kroket-lied op de melodie van "${arg}". Twee coupletten + refrein. Rijm is verplicht. Kroket-metaforen en snackleer-referenties verwerkt. Eindig met de ondertekening van de Kroket God. Geen inleidingszin.`,
+  },
+  {
+    trigger: /^schrijf .*testament/, argUit: /.*testament voor\s*/i, doelwit: 'citaat', tokens: 600,
+    prompt: ({ doelwit }) => `Schrijf een kroket-testament voor ${doelwit} — alsof zij binnenkort alles nalaten aan de snackleer. Drie specifieke nalatenschappen aan andere leden of de Hoge Frituurraad. Juridische taal met kroket-metaforen. Ondertekend door de Kroket God als notaris. Geen inleidingszin.`,
+  },
+  {
+    trigger: /^schrijf .*necrologie/, tokens: 600,
+    prompt: () => 'Schrijf een kroket-necrologie voor een fictieve mislukte kroket. De overledene had een naam (verzin er één), een levensverhaal, en een tragisch einde (te vet, te lang gefrituurd, of niet opgegeten). Toon: waardig rouwbericht. Eindig met een oproep tot stilte. Geen inleidingszin.',
+  },
+  {
+    trigger: /^schrijf .*sollicitatiebrief/, argUit: /.*sollicitatiebrief voor\s*/i, doelwit: 'citaat', tokens: 600,
+    prompt: ({ doelwit }) => `Schrijf een kroket-sollicitatiebrief voor ${doelwit}. Functie: Beëdigd Lid van de Hoge Frituurraad. Motivatie gebaseerd op de snackleer. Noem één kroket-zonde als te overwinnen punt en één bewezen kroket-verdienste. Formele toon. Max 5 zinnen. Geen inleidingszin.`,
+  },
+  {
+    trigger: /^schrijf .*huwelijksaanzoek/, tokens: 600,
+    prompt: () => 'Schrijf een kroket-huwelijksaanzoek — van een volgeling aan de frituurcultuur, of van kroket aan mosterd. Romantisch, plechtig en absurd. Twee alinea\'s: de verklaring en het eigenlijke aanzoek. Eindig met een dramatisch moment. Geen inleidingszin.',
+  },
+  {
+    trigger: /^schrijf .*horror/, tokens: 600,
+    prompt: () => 'Schrijf een kort kroket-horrorscenario (2 alinea\'s). Het horror: een wereld zonder kroketten of een invasie van de Saladesekte. Opbouw in spanning en ontzetting. Eindig met een waarschuwing van de Kroket God. Geen inleidingszin.',
+  },
+  {
+    trigger: /^schrijf .*encycliek/, argUit: /.*encycliek over\s*/i, standaardArg: 'de heilige kroket', tokens: 600,
+    prompt: ({ arg }) => `Schrijf een korte encycliek van de Kroket God over: "${arg}". Format: titel in hoofdletters, dan drie stellingen genummerd I t/m III als pauselijke decreten, en de plechtige ondertekening. Quasi-religieuze taal. Geen inleidingszin.`,
+  },
+  // Vangnet: elk ander schrijf-verzoek wordt letterlijk uitgevoerd. Staat als laatste in de
+  // tabel, zodat de specifieke schrijf-varianten hierboven eerst matchen.
+  {
+    trigger: /^schrijf/, tokens: 600,
+    prompt: ({ aanvrager, input }) => `${aanvrager} vraagt de Kroket God: "${input}". Voer dit schrijfverzoek letterlijk en creatief uit in de stijl van de Kroket God. Concreet en specifiek. Geen vaagheden. Geen inleidingszin.`,
+  },
+];
+
+// Zoekt de eerste verkondiging die op deze input past (tabelvolgorde = prioriteit).
+function vindVerkondiging(input) {
+  return VERKONDIGINGEN.find(v =>
+    typeof v.trigger === 'string' ? input === v.trigger : v.trigger.test(input));
+}
+
+// Voert een verkondiging uit: argument afleiden, eventueel doelwit opzoeken of externe data
+// ophalen, prompt bouwen, LLM aanroepen en in het kanaal plaatsen.
+async function voerVerkondiging(client, v, { input, aanvrager, channelId }) {
+  let arg = v.argUit ? input.replace(v.argUit, '') : input.replace(v.trigger, '');
+  // Greep het patroon niet (bv. "schrijf een testament" zonder "voor")? Dan is er geen
+  // argument — anders zou de hele invoer als naam worden opgevat.
+  if (arg === input) arg = '';
+  if (v.argSchoon) arg = arg.replace(v.argSchoon, '');
+  arg = arg.trim() || v.standaardArg || '';
+  const ctx = { arg, aanvrager, input, keuze: null, extern: null, doelwit: aanvrager };
+  if (v.keuze) ctx.keuze = v.keuze[Math.floor(Math.random() * v.keuze.length)];
+  if (v.extern) { try { ctx.extern = await v.extern(); } catch (_) { ctx.extern = null; } }
+  if (v.doelwit) {
+    const gevonden = arg ? getMemberByNaam(arg) : null;
+    // Onbekende naam → als buitenstaander benoemen (de variant bepaalt de formulering),
+    // leeg argument → de aanvrager zelf.
+    if (gevonden) ctx.doelwit = gevonden[1].bijnaam;
+    else if (!arg) ctx.doelwit = aanvrager;
+    else if (v.doelwit === 'vreemdeling') ctx.doelwit = `Ongepaneerde vreemdeling genaamd "${arg}"`;
+    else if (v.doelwit === 'buitenstaander') ctx.doelwit = `de buitenstaander "${arg}"`;
+    else ctx.doelwit = `"${arg}"`;
+  }
+  const tekst = await kroketResponse(v.prompt(ctx), v.tokens || 400, false, v.niveau || 'slim');
+  await postToChannel(client, channelId, tekst);
+}
+
 // ── Slash command ──────────────────────────────────────────────────────────────
 
 app.command('/kroketgod', async ({ command, ack, respond, client }) => {
@@ -4416,12 +4582,6 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
       return;
     }
 
-    // ── Quote
-    if (input === 'quote') {
-      const tekst = await kroketResponse('Geef één korte kroket-wijsheid of quote. Maximaal twee zinnen. Geen header, gewoon de quote in stijl. Geen inleidingszin.', 250, false, 'licht');
-      await postToChannel(client, command.channel_id, tekst);
-      return;
-    }
 
     // ── Vrijdag countdown
     if (input === 'vrijdag') {
@@ -4668,39 +4828,8 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
       return;
     }
 
-    // ── Advies — Advice Slip als goddelijk decreet
-    if (input === 'advies') {
-      const advies = await haalAdvies();
-      const prompt = advies
-        ? `Het Orakel van het Vetbad heeft gesproken. Het advies luidt: "${advies}". ` +
-          `Presenteer dit als een onweerlegbaar goddelijk decreet van de Kroket God. Vertaal het naar het Nederlands als nodig. Max 3 zinnen. Geen inleidingszin.`
-        : `De Kroket God deelt een willekeurig maar onweerlegbaar stuk levensadvies. Max 2 zinnen. Geen inleidingszin.`;
-      const tekst = await kroketResponse(prompt, 250, false);
-      await postToChannel(client, command.channel_id, tekst);
-      return;
-    }
 
-    // ── BS — Corporate jargon als goddelijk decreet
-    if (input === 'bs') {
-      const bs = await haalCorporateBs();
-      const prompt = bs
-        ? `De Hoge Frituurraad heeft zojuist het volgende statement vrijgegeven: "${bs}". ` +
-          `Presenteer deze corporate onzin met absolute plechtigheid alsof het een heilige openbaring is. Max 2 zinnen. Geen inleidingszin.`
-        : `De Kroket God spreekt in verheven managementtaal. Max 2 zinnen nietszeggend maar gezaghebbend. Geen inleidingszin.`;
-      const tekst = await kroketResponse(prompt, 200, false);
-      await postToChannel(client, command.channel_id, tekst);
-      return;
-    }
 
-    // ── Straf
-    if (input.startsWith('straf ')) {
-      const invoer = input.replace('straf ', '').trim();
-      const gevonden = getMemberByNaam(invoer);
-      const doelwit = gevonden ? gevonden[1].bijnaam : `Ongepaneerde vreemdeling genaamd "${invoer}"`;
-      const tekst = await kroketResponse(`Leg een creatieve en passende straf op aan ${doelwit}. Spreek hen uitsluitend aan als "${doelwit}". Dramatisch en specifiek. Geen inleidingszin.`, 400, false);
-      await postToChannel(client, command.channel_id, tekst);
-      return;
-    }
 
     // ── Gebod
     if (input.startsWith('gebod')) {
@@ -5289,8 +5418,9 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
         const koningId = troon.koningId;
         const koningNaam = members[koningId].bijnaam;
         const uitdagerNaam = members[command.user_id].bijnaam;
-        // Verdediger heeft thuisvoordeel: 55% kans dat de koning standhoudt.
-        const uitdagerWint = Math.random() < 0.45;
+        // Verdediger heeft thuisvoordeel: 55% kans dat de koning standhoudt. Verschoven met het
+        // verschil in geluksfactor tussen uitdager en koning (zie getGeluk).
+        const uitdagerWint = Math.random() < 0.45 + (getGeluk(command.user_id) - getGeluk(koningId));
         let kop, verhaal;
         if (uitdagerWint) {
           pasScoreAan(koningId, -INZET);
@@ -5436,15 +5566,6 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
       return;
     }
 
-    // ── Nieuws
-    if (input === 'nieuws') {
-      const tekst = await kroketResponse(
-        'Genereer een dramatisch breaking news bericht vanuit het Grote Vetbad. Gebruik een ⚜️ SPOEDMELDING header. Verzin een absurd maar geloofwaardig kroket-gerelateerd nieuwtje als officieel persbericht. Geen inleidingszin.',
-        400, false
-      );
-      await postToChannel(client, command.channel_id, tekst);
-      return;
-    }
 
     // ── Orakel
     if (input.startsWith('orakel')) {
@@ -5489,27 +5610,7 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
       return;
     }
 
-    // ── Rap
-    if (input.startsWith('rap ')) {
-      const onderwerp = input.replace('rap ', '').trim();
-      const tekst = await kroketResponse(
-        `Schrijf een korte rap (4-8 regels) in de stijl van de Kroket God over: "${onderwerp}". De rap heeft rijm, ritme en kroket-metaforen. Eindig met een drooppin'-lijn over de snackleer. Geen inleidingszin.`,
-        500, false
-      );
-      await postToChannel(client, command.channel_id, tekst);
-      return;
-    }
 
-    // ── Debat
-    if (input.startsWith('debat ')) {
-      const stelling = input.replace('debat ', '').trim();
-      const tekst = await kroketResponse(
-        `De Kroket God debatteert de stelling: "${stelling}". Geef kort een VOOR-argument en een TEGEN-argument, beide in Kroket God stijl. Sluit af met een definitief oordeel. Geen inleidingszin.`,
-        500, false
-      );
-      await postToChannel(client, command.channel_id, tekst);
-      return;
-    }
 
     // ── Rechtbank
     if (input.startsWith('rechtbank ')) {
@@ -5802,42 +5903,8 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
       return;
     }
 
-    // ── Oordeel over leven
-    if (input.startsWith('oordeel')) {
-      const beschrijving = input.replace(/^oordeel\s*(over\s*(mijn\s*leven\s*[:\-]?\s*)?)?/i, '').trim();
-      const tekst = await kroketResponse(
-        `${aanvrager} legt zijn leven ter beoordeling voor aan de Kroket God${beschrijving ? ': "' + beschrijving + '"' : ' — zonder nadere toelichting'}. Spreek het oordeel uit: één concreet punt van lof, één punt van zorg, en een definitief eindvonnis. Verwijs naar het kroket-pad. Max 5 zinnen. Geen inleidingszin.`,
-        450
-      );
-      await postToChannel(client, command.channel_id, tekst);
-      return;
-    }
 
-    // ── Kroket vs bitterbal
-    if (input.startsWith('kroket vs bitterbal')) {
-      const tekst = await kroketResponse(
-        `Spreek het definitieve goddelijke oordeel uit in de eeuwenoude strijd: kroket versus bitterbal. Structuur: 1 argument PRO kroket, 1 argument PRO bitterbal, dan het finale vonnis. De uitkomst is NIET neutraal — er is een winnaar. Verwijs naar de snackleer. Max 5 zinnen. Geen inleidingszin.`,
-        400
-      );
-      await postToChannel(client, command.channel_id, tekst);
-      return;
-    }
 
-    // ── Spirit-kroket
-    if (input.includes('spirit-kroket') || input.startsWith('onthul')) {
-      const kroketVarianten = [
-        'Goulashkroket', 'Satékroket', 'Chorizo kroket', 'Boeuf Bourgignonkroket',
-        'Kaaskroket', 'Groentekroket', 'Carpaccio kroket', 'Truffelkroket',
-        'Mosterdkroket', 'Mexicaanse kroket',
-      ];
-      const kroket = kroketVarianten[Math.floor(Math.random() * kroketVarianten.length)];
-      const tekst = await kroketResponse(
-        `De Kroket God onthult aan ${aanvrager} dat hun spirit-kroket de ${kroket} is. Leg in twee zinnen uit waarom dit kroket hun karakter weerspiegelt. Voeg één profetische implicatie toe. Plechtig en definitief. Geen inleidingszin.`,
-        350
-      );
-      await postToChannel(client, command.channel_id, tekst);
-      return;
-    }
 
     // ── Weersverwachting (met echt Amsterdams weer via open-meteo)
     if (input === 'weer' || input.includes('weersverwachting')) {
@@ -5860,96 +5927,16 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
       return;
     }
 
-    // ── Kroket-grondwet
-    if (input.includes('kroket-grondwet') || input === 'grondwet') {
-      const tekst = await kroketResponse(
-        `Stel een kroket-grondwet op voor de Kroket Illuminati. Format: preambule (1 zin), dan vijf Artikelen genummerd I t/m V. Elk artikel is één concrete rechtsregel van de snackleer. Juridische taal. Geen inleidingszin.`,
-        500
-      );
-      await postToChannel(client, command.channel_id, tekst);
-      return;
-    }
 
-    // ── Canoniseer
-    if (input.startsWith('canoniseer')) {
-      const naamRaw = input.replace(/^canoniseer\s+/i, '').replace(/\s+als\s+(heilige|sint|patron)[^\w]*/i, '').trim();
-      const gevonden = naamRaw ? getMemberByNaam(naamRaw) : null;
-      const doelwit = gevonden ? gevonden[1].bijnaam : (naamRaw ? `de buitenstaander "${naamRaw}"` : aanvrager);
-      const tekst = await kroketResponse(
-        `De Kroket God canoniseert ${doelwit} als heilige van de snackleer. Structuur: de heilige daad die tot canonisering leidt (verzin er één, kroket-gerelateerd), de heiligendag, het beschermpatronaat (over welk aspect van de snackleer?), en de officiële zegen. Max 5 zinnen. Geen inleidingszin.`,
-        400
-      );
-      await postToChannel(client, command.channel_id, tekst);
-      return;
-    }
 
-    // ── Therapie
-    if (input.startsWith('geef') && (input.includes('therapie') || input.includes('therapiesessie'))) {
-      const naamRaw = input.replace(/^geef\s+/i, '').replace(/\s+een\s+kroket-therapie(sessie)?/i, '').trim();
-      const gevonden = naamRaw ? getMemberByNaam(naamRaw) : null;
-      const doelwit = gevonden ? gevonden[1].bijnaam : (naamRaw ? `Buitenstaander "${naamRaw}"` : aanvrager);
-      const tekst = await kroketResponse(
-        `De Kroket God houdt een kroket-therapiesessie voor ${doelwit}. Structuur: diagnose (één kroket-gerelateerde aandoening met een quasi-medische naam), behandelplan (twee concrete oefeningen uit de snackleer), prognose. Toon: klinisch maar warm. Max 6 zinnen. Geen inleidingszin.`,
-        450
-      );
-      await postToChannel(client, command.channel_id, tekst);
-      return;
-    }
 
-    // ── Aristoteles
-    if (input.includes('aristoteles') || input.includes('aristotle')) {
-      const tekst = await kroketResponse(
-        `Citeer fictief wat Aristoteles zou zeggen over de kroket. Gebruik Aristotelische begrippen (deugd, vorm, materie, het Goede, de gouden middenweg). Concludeer welk filosofisch begrip de kroket belichaamt. Sluit af met het oordeel van de Kroket God over Aristoteles' inzicht. Max 5 zinnen. Geen inleidingszin.`,
-        400
-      );
-      await postToChannel(client, command.channel_id, tekst);
-      return;
-    }
 
-    // ── TED talk
-    if (input.includes('ted talk') || input.includes('tedtalk')) {
-      const onderwerp = input.replace(/.*ted\s*talk\s*(over\s*)?/i, '').trim() || 'de universele waarde van de kroket';
-      const tekst = await kroketResponse(
-        `Houd een ultra-korte TED talk (3-4 alinea's) over: "${onderwerp}", vertaald naar kroket-filosofie. Structuur: pakkende openingszin, these, bewijs uit de snackleer, memorabele conclusie. Spreek de zaal aan als "Heren van de Kroket Illuminati". Eindig met een applauswaardig statement. Geen inleidingszin.`,
-        500
-      );
-      await postToChannel(client, command.channel_id, tekst);
-      return;
-    }
 
-    // ── Schrijf-familie (lied, testament, necrologie, sollicitatiebrief, huwelijksaanzoek, horror, encycliek)
-    if (input.startsWith('schrijf')) {
-      const opdracht = input.replace(/^schrijf\s+/i, '').toLowerCase().trim();
-      let prompt;
 
-      if (opdracht.includes('lied') && (opdracht.includes('melodie') || opdracht.includes('melody'))) {
-        const melodie = input.replace(/.*melodie van\s*/i, '').trim() || 'Bohemian Rhapsody';
-        prompt = `Schrijf een kroket-lied op de melodie van "${melodie}". Twee coupletten + refrein. Rijm is verplicht. Kroket-metaforen en snackleer-referenties verwerkt. Eindig met de ondertekening van de Kroket God. Geen inleidingszin.`;
-      } else if (opdracht.includes('testament')) {
-        const naamRaw = input.replace(/.*testament voor\s*/i, '').trim();
-        const gevonden = naamRaw && naamRaw !== input ? getMemberByNaam(naamRaw) : null;
-        const doelwit = gevonden ? gevonden[1].bijnaam : (naamRaw && naamRaw !== input ? `"${naamRaw}"` : aanvrager);
-        prompt = `Schrijf een kroket-testament voor ${doelwit} — alsof zij binnenkort alles nalaten aan de snackleer. Drie specifieke nalatenschappen aan andere leden of de Hoge Frituurraad. Juridische taal met kroket-metaforen. Ondertekend door de Kroket God als notaris. Geen inleidingszin.`;
-      } else if (opdracht.includes('necrologie')) {
-        prompt = `Schrijf een kroket-necrologie voor een fictieve mislukte kroket. De overledene had een naam (verzin er één), een levensverhaal, en een tragisch einde (te vet, te lang gefrituurd, of niet opgegeten). Toon: waardig rouwbericht. Eindig met een oproep tot stilte. Geen inleidingszin.`;
-      } else if (opdracht.includes('sollicitatiebrief')) {
-        const naamRaw = input.replace(/.*sollicitatiebrief voor\s*/i, '').trim();
-        const gevonden = naamRaw && naamRaw !== input ? getMemberByNaam(naamRaw) : null;
-        const doelwit = gevonden ? gevonden[1].bijnaam : (naamRaw && naamRaw !== input ? `"${naamRaw}"` : aanvrager);
-        prompt = `Schrijf een kroket-sollicitatiebrief voor ${doelwit}. Functie: Beëdigd Lid van de Hoge Frituurraad. Motivatie gebaseerd op de snackleer. Noem één kroket-zonde als te overwinnen punt en één bewezen kroket-verdienste. Formele toon. Max 5 zinnen. Geen inleidingszin.`;
-      } else if (opdracht.includes('huwelijksaanzoek')) {
-        prompt = `Schrijf een kroket-huwelijksaanzoek — van een volgeling aan de frituurcultuur, of van kroket aan mosterd. Romantisch, plechtig en absurd. Twee alinea's: de verklaring en het eigenlijke aanzoek. Eindig met een dramatisch moment. Geen inleidingszin.`;
-      } else if (opdracht.includes('horror')) {
-        prompt = `Schrijf een kort kroket-horrorscenario (2 alinea's). Het horror: een wereld zonder kroketten of een invasie van de Saladesekte. Opbouw in spanning en ontzetting. Eindig met een waarschuwing van de Kroket God. Geen inleidingszin.`;
-      } else if (opdracht.includes('encycliek')) {
-        const thema = input.replace(/.*encycliek over\s*/i, '').trim() || 'de heilige kroket';
-        prompt = `Schrijf een korte encycliek van de Kroket God over: "${thema}". Format: titel in hoofdletters, dan drie stellingen genummerd I t/m III als pauselijke decreten, en de plechtige ondertekening. Quasi-religieuze taal. Geen inleidingszin.`;
-      } else {
-        prompt = `${aanvrager} vraagt de Kroket God: "${input}". Voer dit schrijfverzoek letterlijk en creatief uit in de stijl van de Kroket God. Concreet en specifiek. Geen vaagheden. Geen inleidingszin.`;
-      }
-
-      const tekst = await kroketResponse(prompt, 600);
-      await postToChannel(client, command.channel_id, tekst);
+    // ── Tabel-gedreven verkondigingen (zie VERKONDIGINGEN) ────────────────────
+    const verkondiging = vindVerkondiging(input);
+    if (verkondiging) {
+      await voerVerkondiging(client, verkondiging, { input, aanvrager, channelId: command.channel_id });
       return;
     }
 
@@ -8054,7 +8041,8 @@ async function voerDuel(client, userId, doelId, channelId) {
   duels[userId] = { datum: vandaagKey };
   writeJSON('duels.json', duels);
 
-  const winnaarIsUitdager = Math.random() < 0.5;
+  // 50/50, verschoven met het verschil in geluksfactor tussen beide duellisten (zie getGeluk).
+  const winnaarIsUitdager = Math.random() < 0.5 + (getGeluk(userId) - getGeluk(doelId));
   const [winId, winNaam] = winnaarIsUitdager ? [userId, uitdager.bijnaam] : [doelId, doelLid.bijnaam];
   const [verliesId, verliesNaam] = winnaarIsUitdager ? [doelId, doelLid.bijnaam] : [userId, uitdager.bijnaam];
   // Talisman van de Onverliesbare Korst (Grote Veiling): het eerstvolgende duelverlies
@@ -8130,7 +8118,8 @@ async function voerRoof(client, userId, doelId, channelId) {
 
   // Zegen van de Paneerlaag beschermt het doelwit: de roof kaatst gegarandeerd af.
   const beschermd = heeftPowerup(doelId, 'zegen');
-  const geslaagd = !beschermd && Math.random() < 0.40;
+  // Slaagkans 40%, bijgesteld met de geluksfactor van de dader (zie getGeluk).
+  const geslaagd = !beschermd && Math.random() < 0.40 + getGeluk(userId);
   if (geslaagd) {
     const buit = Math.min(8, Math.max(2, Math.ceil((scores[doelId] || 0) * 0.35)));
     pasScoreAan(doelId, -buit);
@@ -8168,6 +8157,21 @@ async function voerRoof(client, userId, doelId, channelId) {
   return { ok: false, tekst: `🚨 _De roof mislukte${beschermd ? ' (het doelwit was gezegend)' : ''} — u betaalt ${boete} kroketpunten smartengeld._` };
 }
 
+// ── Geluksfactor (stille inhaalmechaniek) ──────────────────────────────────────
+// Per lid een kansmodificator voor de kansspelen, zodat een pechvogel niet blijft afhaken.
+// Zelfde gedachte als de inhaalweging in planWillekeurigKroketEvent, maar handmatig instelbaar.
+// De WAARDEN staan in geluk.json op de Pi (gitignored, niet in /api/stats, niet in de App Home,
+// nergens in een kanaalbericht) — de bot verklapt dus nooit dat iemand bijgestuurd wordt.
+// Bereik wordt geclampt op ±0,25 zodat een spel nooit volledig voorspelbaar wordt.
+//   { "U0XXXX": 0.15 }  → 15 procentpunt meer kans op een gunstige uitkomst
+const GELUK_MAX = 0.25;
+function getGeluk(userId) {
+  try {
+    const v = Number(readJSON('geluk.json', {})[userId]) || 0;
+    return Math.max(-GELUK_MAX, Math.min(GELUK_MAX, v));
+  } catch (_) { return 0; }
+}
+
 const VETBAD_MAX_INZET = 10;
 const VETBAD_MAX_PER_DAG = 5;
 
@@ -8197,7 +8201,12 @@ async function voerOffer(client, userId, inzet, channelId) {
   writeJSON('vetbad.json', vetbad);
 
   const bijnaam = members[userId].bijnaam;
-  const roll = Math.random();
+  // Geluksfactor verkleint ALLEEN de verliesband: een verlies wordt met kans `geluk/0,5`
+  // omgezet in een gunstige uitkomst, evenredig verdeeld over jackpot/verdubbeld/push.
+  // Niet de hele worp opschuiven — dat zou de jackpot van 6% naar 21% jagen en dus opvallen.
+  let roll = Math.random();
+  const geluk = getGeluk(userId);
+  if (geluk > 0 && roll >= 0.50 && Math.random() < geluk / 0.50) roll = Math.random() * 0.50;
   let delta, kop, regel;
   if (roll < 0.06) {                 // 6% — jackpot (×3)
     delta = inzet * 3;
@@ -9077,7 +9086,7 @@ const BACKUP_BESTANDEN = [
   'kroketgok.json', 'kroket_van_de_dag.json', 'goudenkroket.json', 'profetie.json',
   'weekreset.json', 'kroketevent.json',
   // Opgebouwde inhoud & configuratie — kost de meeste moeite om terug te krijgen.
-  'kennisbank.json', 'instellingen.json', 'quiz.json',
+  'kennisbank.json', 'instellingen.json', 'quiz.json', 'geluk.json',
 ];
 
 function maakBackup() {
