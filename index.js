@@ -38,6 +38,12 @@ if (ontbrekendeVars.length) {
 //   help      [{gebruik, verwacht}]   → verschijnt in /kroketgod help
 //   home      (ctx) => blocks[]       → sectie in de App Home; ctx = { userId, members, ... }
 //   homeOrde  lager = hoger in de App Home (standaard 50)
+// ── Interne modules (zie lib/) ────────────────────────────────────────────────
+const { readJSON, writeJSON } = require('./lib/state.js');
+const { isWeekendAms, getAmsOffsetMs, getMondayOfWeek, secondenTotVrijdagMiddag } = require('./lib/tijd.js');
+const { isHoofdletterSpam, kapAfOpZinsgrens, normaliseerOndertekening, AFKORTING_VOOR_PUNT } = require('./lib/tekst.js');
+const { hpBalk, homeTabel, homeBalken, homeVoortgang, homeVoortgangInline, homeKaartKop } = require('./lib/blocks.js');
+
 const FEATURES = [];
 function registreerFeature(feature) {
   FEATURES.push(feature);
@@ -634,51 +640,8 @@ ${TONE_OF_VOICE_SATEBAL}`;
 // ── File cache met mtime-invalidation ─────────────────────────────────────────
 // Voorkomt onnodige disk reads. Bij wijziging op disk wordt automatisch herladen.
 
-const fileCache = new Map();
 
-function readJSON(filename, fallback = undefined) {
-  const filePath = path.join(__dirname, filename);
-  try {
-    const stat = fs.statSync(filePath);
-    const cached = fileCache.get(filename);
-    if (cached && cached.mtimeMs === stat.mtimeMs) return cached.data;
-    const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
-    fileCache.set(filename, { mtimeMs: stat.mtimeMs, data });
-    return data;
-  } catch (err) {
-    // `undefined` = geen fallback opgegeven → gooien. Een expliciete `null` is een geldige
-    // fallback (bv. loadMissie: "geen actieve missie") en wordt gewoon teruggegeven.
-    if (err.code === 'ENOENT' && fallback !== undefined) return fallback;
-    // Corrupt JSON (bv. afgekapt bij stroomuitval op de Pi): bestand veiligstellen en met de
-    // fallback door — anders blijft élke read op dit bestand crashen tot iemand handmatig ingrijpt.
-    if (err instanceof SyntaxError && fallback !== undefined) {
-      try { fs.renameSync(filePath, `${filePath}.corrupt.${Date.now()}`); } catch (_) {}
-      console.error(`⚠️ ${filename} corrupt — veiliggesteld als .corrupt-bestand, fallback gebruikt.`);
-      return fallback;
-    }
-    throw err;
-  }
-}
 
-function writeJSON(filename, data) {
-  const filePath = path.join(__dirname, filename);
-  const tmpPath  = `${filePath}.tmp`;
-  // Atomic write: schrijf naar temp, fsync (anders kan een stroomuitval op de Pi een leeg
-  // bestand achterlaten ondanks de rename), hernoem (rename is atomic op POSIX).
-  const fd = fs.openSync(tmpPath, 'w');
-  try {
-    fs.writeSync(fd, JSON.stringify(data, null, 2));
-    fs.fsyncSync(fd);
-  } finally {
-    fs.closeSync(fd);
-  }
-  fs.renameSync(tmpPath, filePath);
-  // Cache direct bijwerken zodat de volgende read niet onnodig van disk leest
-  try {
-    const stat = fs.statSync(filePath);
-    fileCache.set(filename, { mtimeMs: stat.mtimeMs, data });
-  } catch (_) {}
-}
 
 // ── Instellingen (runtime, aanpasbaar via dashboard) ──────────────────────────
 // Worden uit instellingen.json gelezen (met fallback op deze defaults) en door de relevante
@@ -1622,14 +1585,6 @@ async function pasRoemAan(client, userId, delta) {
 // ── Weekend-check (Amsterdam-tijd) ───────────────────────────────────────────
 // Geeft true als het zaterdag of zondag is in de Amsterdam-tijdzone.
 
-function isWeekendAms() {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'Europe/Amsterdam',
-    weekday: 'short',
-  }).formatToParts(new Date());
-  const dag = parts.find(p => p.type === 'weekday')?.value;
-  return dag === 'Sat' || dag === 'Sun';
-}
 
 // Stuurt een kort, in-karakter weekend-rustbericht als reactie op een verzoek.
 async function stuurWeekendRustBericht(client, channelId, userId) {
@@ -1642,20 +1597,6 @@ async function stuurWeekendRustBericht(client, channelId, userId) {
   await postToChannel(client, channelId, userId ? `<@${userId}>\n\n${tekst}` : tekst);
 }
 
-// ── Amsterdam-offset helper ───────────────────────────────────────────────────
-// Geeft de UTC-offset van Amsterdam in milliseconden (bijv. UTC+2 → 7200000).
-// Veilig bij DST-wisselingen omdat Intl.DateTimeFormat de actuele offset berekent.
-function getAmsOffsetMs(date = new Date()) {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'Europe/Amsterdam',
-    year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', second: '2-digit',
-    hour12: false,
-  }).formatToParts(date);
-  const get = (type) => parseInt(parts.find(p => p.type === type)?.value || '0');
-  const amsMs = Date.UTC(get('year'), get('month') - 1, get('day'), get('hour'), get('minute'), get('second'));
-  return amsMs - date.getTime(); // positief voor UTC+ zones
-}
 
 // Geeft een Date terug dat overeenkomt met het opgegeven AMS-uur op dezelfde AMS-dag.
 // Voorbeeld: amsKlokTijdNaarUtc(now, 18, 0) → vandaag 18:00 AMS als UTC Date.
@@ -1666,42 +1607,9 @@ function amsKlokTijdNaarUtc(date, uurAms, minAms = 0) {
   return new Date(startVanAmsdag + uurAms * 3_600_000 + minAms * 60_000 - offset);
 }
 
-function getMondayOfWeek(date = new Date()) {
-  // Gebruik Amsterdam-tijd voor dag-bepaling zodat dit rond middernacht correct blijft.
-  // toLocaleString met timeZone geeft een string die we als lokale tijd parsen —
-  // zo krijgen we de juiste weekdag voor Amsterdam zonder timezone-drift.
-  const amsDate = new Date(date.toLocaleString('en-US', { timeZone: 'Europe/Amsterdam' }));
-  const day = amsDate.getDay(); // 0=zondag, 1=maandag, ...
-  const diff = amsDate.getDate() - day + (day === 0 ? -6 : 1);
-  amsDate.setDate(diff);
-  const y = amsDate.getFullYear();
-  const m = String(amsDate.getMonth() + 1).padStart(2, '0');
-  const d = String(amsDate.getDate()).padStart(2, '0');
-  return `${y}-${m}-${d}`;
-}
 
 // ── Vrijdag-countdown (wiskundige berekening — AI mag getallen NIET aanpassen) ─
 
-function secondenTotVrijdagMiddag() {
-  const nu = new Date();
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'Europe/Amsterdam',
-    weekday: 'short', hour: 'numeric', minute: 'numeric', second: 'numeric',
-    hour12: false,
-  }).formatToParts(nu);
-  const get = (type) => parts.find(p => p.type === type)?.value;
-  const weekdagMap = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
-  const weekdag  = weekdagMap[get('weekday')] ?? 0;
-  const uur      = parseInt(get('hour'));
-  const minuut   = parseInt(get('minute'));
-  const seconde  = parseInt(get('second'));
-
-  const secondenVandaag = uur * 3600 + minuut * 60 + seconde;
-  const DOEL = 12 * 3600; // vrijdag 12:00:00
-  let dagenTot = (5 - weekdag + 7) % 7;
-  if (dagenTot === 0 && secondenVandaag >= DOEL) dagenTot = 7;
-  return Math.max(0, dagenTot * 86400 + DOEL - secondenVandaag);
-}
 
 // True tijdens het weekend-venster: vrijdag VANAF 12:00 t/m zondag. In dat venster is het heilige
 // frituurmoment net voltrokken — dan geen aftelling naar volgende week, maar een weekendgroet.
@@ -2788,14 +2696,6 @@ async function callOpenAICompat({ url, apiKey, envNaam, body }) {
 
 // ── Karakter-validatie & prompt-injectie detectie ─────────────────────────────
 
-// Detecteert of een tekst grotendeels in hoofdletters is (zoals 8B-model output)
-function isHoofdletterSpam(tekst) {
-  if (!tekst || tekst.length < 30) return false;
-  const letters = tekst.replace(/[^a-zA-Z]/g, '');
-  if (letters.length < 20) return false;
-  const hoofdletters = letters.replace(/[^A-Z]/g, '').length;
-  return (hoofdletters / letters.length) > 0.65; // meer dan 65% hoofdletters = fout
-}
 
 // Detecteert responses waarbij de AI uit karakter valt.
 const UIT_KARAKTER_PATRONEN = [
@@ -2882,41 +2782,7 @@ function isUitKarakter(tekst) {
   return UIT_KARAKTER_PATRONEN.some(p => p.test(tekst));
 }
 
-// Bekende afkortingen die op een punt eindigen — een punt hierachter is GEEN zinseinde. Zonder
-// deze lijst zou een afgekapte "…uw bondgenoot Mr." als "afgeronde zin" gelden en bleef de halve
-// zin staan (precies de bug die we zagen).
-const AFKORTING_VOOR_PUNT = /(?:^|[\s(«"'([])(bijv|bv|nr|dhr|mevr|mej|mr|mrs|ms|dr|drs|ir|mw|prof|ing|enz|etc|blz|pag|vgl|zgn|ca|resp|incl|excl|max|min|tel|o\.a|t\.o\.v|a\.u\.b|z\.o\.z|i\.p\.v|d\.w\.z|m\.a\.w|e\.d|n\.a\.v|i\.v\.m|d\.d)\.?$/i;
 
-// Kapt een (door de tokenlimiet) afgebroken respons netjes af op de laatste volledige zin, zodat de
-// Kroket God nooit een halve zin de wereld in stuurt. In plaats van blind op het laatste leesteken
-// te knippen (dan blijft een afgekapte "…Mr." staan), zoekt hij ECHTE zinsgrenzen: een . ! ? …
-// gevolgd door witruimte, en niet direct achter een afkorting. Eindigt de tekst zelf al op een echt
-// zinseinde, dan blijft hij ongemoeid. Vindt hij geen bruikbare grens (heel korte respons), dan laat
-// hij de tekst staan — liever een korte gedachte dan niets.
-function kapAfOpZinsgrens(tekst) {
-  if (!tekst || typeof tekst !== 'string') return tekst;
-  const s = tekst.trimEnd();
-  if (s.length < 15) return s;
-  // Verzamel alle ÉCHTE zinsgrenzen: leesteken(s) + optionele sluit-aanhaling, gevolgd door
-  // witruimte, waarbij het leesteken niet direct op een afkorting volgt.
-  const grenzen = [];
-  const re = /[.!?…]+["'”’)\]]?(?=\s)/g;
-  let m;
-  while ((m = re.exec(s)) !== null) {
-    if (AFKORTING_VOOR_PUNT.test(s.slice(0, m.index))) continue; // afkorting → geen zinsgrens
-    grenzen.push(m.index + m[0].length);
-  }
-  // Eindigt de tekst zelf al op een echt zinseinde (leesteken, geen afkorting)? Dan niets afgekapt.
-  // Strip ook afsluitende markdown-tekens (*_~`) — "…gesproken._" is een compleet einde.
-  const kern = s.replace(/["'”’)\]*_~`]+$/, '');
-  if (/[.!?…]$/.test(kern) && !AFKORTING_VOOR_PUNT.test(kern.slice(0, -1))) return s;
-  // Anders: terugknippen tot de laatste volledige zin.
-  if (grenzen.length) {
-    const geknipt = s.slice(0, grenzen[grenzen.length - 1]).trimEnd();
-    if (geknipt.length >= 15) return geknipt;
-  }
-  return s; // geen bruikbare grens → liever de (afgekapte) tekst dan een leeg bericht
-}
 
 function isRijksgrensOvertreding(tekst) {
   if (!tekst) return false;
@@ -3309,18 +3175,6 @@ function vervangNamen(tekst) {
   return resultaat;
 }
 
-// Normaliseer ondertekening — de Kroket God ondertekent ALTIJD als "De Almachtige Kroket God"
-function normaliseerOndertekening(tekst) {
-  if (!tekst) return tekst;
-  // Vang elke variatie van "— [evt. de] [evt. bijvoeglijke naamwoorden] Kroket God", maar
-  // ALLEEN als handtekening: verankerd op het einde van een regel ($ met m-flag). Zonder anker
-  // herschreef dit ook lopende tekst ("— de tempel van de Kroket God staat centraal") en de
-  // vaste EER-footer ("— _De Kroket God heeft gesproken_ …").
-  return tekst.replace(
-    /([—–-])\s*(?:de\s+)?(?:\w+\s+){0,4}kroket\s*god\b\.?\s*$/gim,
-    '$1 De Almachtige Kroket God'
-  );
-}
 
 // Combineerde output-filter: namen vervangen + ondertekening normaliseren
 const schoonOutput = (tekst) => normaliseerOndertekening(vervangNamen(
@@ -7887,11 +7741,6 @@ registreerFeature({
 // Verslagen vóór vrijdag 15:00 → elke strijder +2, de zwaarste slager +3. Niet verslagen →
 // het monster plundert de top 3 van de ranglijst (−1 elk).
 
-function hpBalk(hp, maxHp) {
-  const blokken = 10;
-  const vol = Math.round((Math.max(0, hp) / Math.max(1, maxHp)) * blokken);
-  return `[${'▓'.repeat(vol)}${'░'.repeat(blokken - vol)}]`;
-}
 
 // ── V2: live raid-bord (Block Kit) ─────────────────────────────────────────────
 // Eén bordbericht per raid dat via chat.update wordt bijgewerkt: HP-balk, laatste aanvallen
@@ -8718,46 +8567,10 @@ registreerFeature({
 // visuele taal van het web-dashboard na met monospace codeblokken: uitgelijnde kaarten en
 // horizontale balken, net als de `hbars` op het dashboard.
 
-// Uitgelijnde sleutel/waarde-regels — de tegenhanger van een dashboard-kaart.
-function homeTabel(paren) {
-  const w = Math.max(...paren.map(([l]) => l.length));
-  return '```\n' + paren.map(([l, v]) => `${l.padEnd(w)}  ${v}`).join('\n') + '\n```';
-}
 
-// Horizontale balkgrafiek — de Block Kit-tegenhanger van de dashboard-hbars: label,
-// proportionele balk (t.o.v. de hoogste waarde) en het getal.
-function homeBalken(rijen, breedte = 12) {
-  if (!rijen.length) return '_geen data_';
-  const max = Math.max(1, ...rijen.map(r => r.waarde));
-  const lw = Math.min(26, Math.max(...rijen.map(r => r.label.length)));
-  return '```\n' + rijen.map(r => {
-    const vol = Math.max(1, Math.round((Math.max(0, r.waarde) / max) * breedte));
-    const label = (r.label.length > lw ? `${r.label.slice(0, lw - 1)}…` : r.label).padEnd(lw);
-    return `${label} ${'▓'.repeat(vol)}${'░'.repeat(Math.max(0, breedte - vol))} ${String(r.waarde).padStart(3)}`;
-  }).join('\n') + '\n```';
-}
 
-// Voortgangsbalk naar een doel (bv. de volgende rang) — anders dan homeBalken, waar de
-// balken relatief zijn t.o.v. de hoogste waarde, is deze absoluut: waarde/doel.
-function homeVoortgang(label, waarde, doel, breedte = 14) {
-  const vol = Math.max(0, Math.min(breedte, Math.round((Math.max(0, waarde) / Math.max(1, doel)) * breedte)));
-  return '```\n' + `${label}  ${'▓'.repeat(vol)}${'░'.repeat(breedte - vol)}  ${waarde}/${doel}` + '\n```';
-}
 
-// Compacte voortgang voor gebruik ín een tekstregel (niet in een codeblok, want daar zou de
-// omringende tekst mee in monospace gaan). Vaste breedte, dus lijstjes blijven rustig.
-function homeVoortgangInline(waarde, doel, breedte = 5) {
-  const vol = Math.max(0, Math.min(breedte, Math.round((Math.max(0, waarde) / Math.max(1, doel)) * breedte)));
-  return `\`${'▓'.repeat(vol)}${'░'.repeat(breedte - vol)}\` *${waarde}/${doel}*`;
-}
 
-// Kaarttitel in de stijl van de dashboard-kaartkoppen (h2): scheidingslijn + vette kop.
-function homeKaartKop(titel) {
-  return [
-    { type: 'divider' },
-    { type: 'section', text: { type: 'mrkdwn', text: `*${titel}*` } },
-  ];
-}
 
 function bouwAppHomeBlocks(userId, melding = '') {
   const members = loadMembers();

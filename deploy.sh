@@ -117,6 +117,16 @@ for bestand in "${BESTANDEN[@]}"; do
   fi
 done
 
+# ── Interne modules (lib/). Alles wat index.js require't moet mee, anders start de bot niet.
+# Bewust de hele map, zodat een nieuwe module niet vergeten kan worden.
+if [[ -d "${LOKAAL_PAD}/lib" ]]; then
+  ssh "${PI_USER}@${PI_HOST}" "mkdir -p '${PI_PAD}/lib'"
+  scp -q "${LOKAAL_PAD}/lib/"*.js "${PI_USER}@${PI_HOST}:${PI_PAD}/lib/"
+  info "  lib/ ($(ls -1 "${LOKAAL_PAD}/lib/"*.js | wc -l | tr -d ' ') modules)"
+else
+  warn "  lib/ niet gevonden"
+fi
+
 for bestand in "${PI_EIGEN[@]}"; do
   lokaal="${LOKAAL_PAD}/${bestand}"
   [[ -f "$lokaal" ]] || continue
