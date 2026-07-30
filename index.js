@@ -5201,6 +5201,7 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
         await pasScoreAanMetCheck(client, eerId, punten, { geverId: command.user_id, channelId: command.channel_id, uitgesteldeZegens });
       }
       registreerEer(command.user_id, geeerden.length);
+      await telOpdrachtActie(client, command.user_id, 'eer_gegeven', geeerden.length);
 
       const namen = geeerden.map(([, lid]) => lid.bijnaam);
       const dubbelNamen = geeerden.filter(([id]) => verdubbeld[id]).map(([, lid]) => lid.bijnaam);
@@ -5406,6 +5407,7 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
           return;
         }
         vers.claims[command.user_id].push(nr - 1);
+        await telOpdrachtActie(client, command.user_id, 'bingo_claim');
         writeJSON('bingo.json', vers);
         const uitgesteldeZegens = []; // verbondszegen pas posten ná de bevestiging
         const voorBingo = loadScores()[command.user_id] || 0;
@@ -6009,6 +6011,23 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
 
 
 
+    // ── Opdrachten: eigen voortgang bekijken ──────────────────────────────────
+    if (input === 'opdrachten' || input === 'opdracht') {
+      if (!members[command.user_id]) {
+        await respond({ text: 'Alleen leden van de Kroket Illuminati ontvangen opdrachten.', response_type: 'ephemeral' });
+        return;
+      }
+      const { dag, week } = opdrachtOverzicht(command.user_id);
+      const regel = ({ o, klaar, nu }) => klaar
+        ? `✅ ~${o.tekst}~ — *+${o.beloning}* geïnd`
+        : `${homeVoortgangInline(nu, o.doel)} ${o.tekst} — *+${o.beloning}*`;
+      await respond({
+        text: `📜 *UW OPDRACHTEN* 📜\n\n*Vandaag*\n${dag.map(r => `> ${regel(r)}`).join('\n')}\n\n*Deze week*\n${week.map(r => `> ${regel(r)}`).join('\n')}\n\n_Voortgang loopt automatisch mee zodra u speelt. Ook zichtbaar in de Home-tab van de Kroket God._`,
+        response_type: 'ephemeral',
+      });
+      return;
+    }
+
     // ── Rang-voorrecht: het Decreet van de Dag uitvaardigen (Opperkroket) ─────
     // Zet dezelfde instelling die het dashboard gebruikt, dus het werkt direct door in de
     // system prompt. Alleen wie de hoogste rang heeft bereikt, mag dit.
@@ -6392,6 +6411,7 @@ app.event('app_mention', async ({ event, client }) => {
           await pasScoreAanMetCheck(client, eerId, punten, { geverId: userId, channelId: event.channel, threadTs: thread_ts, uitgesteldeZegens });
         }
         registreerEer(userId, geeerden.length);
+        await telOpdrachtActie(client, userId, 'eer_gegeven', geeerden.length);
         const namen = geeerden.map(([, lid]) => lid.bijnaam);
         const dubbelNamen = geeerden.filter(([id]) => verdubbeld[id]).map(([, lid]) => lid.bijnaam);
         const dubbelZin = dubbelNamen.length
@@ -6702,6 +6722,7 @@ app.event('app_mention', async ({ event, client }) => {
         if (dubbel) punten *= 2;
         await pasScoreAanMetCheck(client, eerId, punten, { geverId: userId, channelId: event.channel, threadTs: thread_ts, uitgesteldeZegens });
         registreerEer(userId, 1);
+        await telOpdrachtActie(client, userId, 'eer_gegeven', 1);
         logGebeurtenis('eer', userId, `${bijnaam} eerde ${eerLid.bijnaam} organisch via mention (+${punten})`);
         tekst += `\n\n⚜️ *EER-COMMANDO* ⚜️\n\n> *${eerLid.bijnaam}* ontvangt *${punten} kroketpunt${punten > 1 ? 'en' : ''}* van de Hoge Frituurraad.${dubbel ? '\n> ✨ _Verdubbeld door de Dubbele Eer-zegen._' : ''}\n\n— _De Kroket God heeft gesproken_ :illuminati-kroket:`;
       } else {
@@ -7781,6 +7802,7 @@ async function grijpGoudenKroket(client, userId) {
   const uitgesteldeZegens = [];
   await pasScoreAanMetCheck(client, userId, 3, { channelId: gk.kanaal, uitgesteldeZegens });
   logGebeurtenis('goudenkroket', userId, `${winnaarNaam} greep de Gouden Kroket (+3)`);
+  await telOpdrachtActie(client, userId, 'gouden_kroket');
   await postToChannel(client, gk.kanaal,
     `🥇 *DE GOUDEN KROKET IS GEGREPEN* 🥇\n\n` +
     `> *${winnaarNaam}* was de snelste van het genootschap en grijpt de Gouden Kroket uit het kokende vet — *+3 kroketpunten*.\n\n` +
@@ -7990,12 +8012,14 @@ async function voerBamischijfAanval(client, userId, metOffer) {
   if (raid.hp <= 0) {
     raid.actief = false;
     writeJSON('bamischijf.json', raid);
+    await telOpdrachtActie(client, userId, 'raid_aanval'); // ook de genadeslag is een aanval
     await updateRaidBericht(client, raid);
     await beslechtBamischijfOverwinning(client, kanaal, raid, userId);
     return { ok: true, tekst: `⚔️ _Uw uithaal van −${schade} HP was de GENADESLAG — de Bamischijf is verslagen!_` };
   }
   writeJSON('bamischijf.json', raid);
   logGebeurtenis('bamischijf', userId, `${bijnaam} deed ${schade} schade aan de Bamischijf (${raid.hp}/${raid.maxHp} HP over)`);
+  await telOpdrachtActie(client, userId, 'raid_aanval');
   await updateRaidBericht(client, raid);
   // Activiteit zichtbaar zonder kanaal-spam: korte reply in de thread onder het bord.
   // Geen bord (raid van vóór de borden)? Dan de oude losse kanaalpost.
@@ -8122,6 +8146,7 @@ async function plaatsVeilingBod(client, userId, bod) {
     await postToChannel(client, kanaal,
       `🔨 *NIEUW HOOGSTE BOD* 🔨\n\n> *${bijnaam}* biedt *${bod} kroketpunten* op ${veiling.artefact?.naam || 'het artefact'}.\n\n_Overbieden kan met \`/kroketgod bied [aantal]\` — om 14:45 valt de hamer._\n\n— De Hoge Frituurraad`);
   }
+  await telOpdrachtActie(client, userId, 'veiling_bod');
   return { ok: true, tekst: `_Uw bod van ${bod} kroketpunten is geplaatst en in bewaring genomen. U bent nu de hoogste bieder._` };
 }
 
@@ -8208,6 +8233,10 @@ async function voerDuel(client, userId, doelId, channelId) {
   await postToChannel(client, channelId, duelTekst + premieBlok + talismanBlok + standBlok);
   // Nu pas de verbondszegen, ná het vonnis — logische volgorde op Slack.
   for (const post of uitgesteldeZegens) await post();
+  // Opdracht-voortgang: deelnemen telt voor beide, winnen alleen voor de winnaar.
+  await telOpdrachtActie(client, userId, 'duel');
+  await telOpdrachtActie(client, doelId, 'duel');
+  await telOpdrachtActie(client, winId, 'duel_gewonnen');
   return { ok: true, tekst: `⚔️ _Het duel is beslecht: *${winNaam}* won. Zie het kanaal voor het vonnis._` };
 }
 
@@ -8241,6 +8270,7 @@ async function voerRoof(client, userId, doelId, channelId) {
   cooldowns.roof = cooldowns.roof || {};
   cooldowns.roof[userId] = weekStart;
   writeJSON('cooldowns.json', cooldowns);
+  await telOpdrachtActie(client, userId, 'roof_poging'); // de wáágdaad telt, niet de uitkomst
 
   // Zegen van de Paneerlaag beschermt het doelwit: de roof kaatst gegarandeerd af.
   const beschermd = heeftPowerup(doelId, 'zegen');
@@ -8356,6 +8386,7 @@ async function voerOffer(client, userId, inzet, channelId) {
   const nieuweStand = loadScores()[userId] || 0;
   await postToChannel(client, channelId,
     `⚜️ *HET GROTE VETBAD* ⚜️\n\n${kop}\n\n> ${regel}\n\n_Nieuwe stand: *${nieuweStand} kroketpunten*_\n\n— De Hoge Frituurraad`);
+  await telOpdrachtActie(client, userId, 'offer');
   return { ok: true, tekst: `_Het Vetbad heeft gesproken: ${delta > 0 ? `+${delta}` : delta} kroketpunt${Math.abs(delta) === 1 ? '' : 'en'}. Nieuwe stand: ${nieuweStand}._` };
 }
 
@@ -8407,8 +8438,162 @@ async function koopWinkelItem(client, userId, itemKey, doelId, channelId) {
   }[itemKey] || `> *${koperNaam}* heeft *${item.naam}* verworven in de Aflatenhandel.`;
   await postToChannel(client, channelId,
     `${item.icoon} *DE AFLATENHANDEL LEVERT* ${item.icoon}\n\n${aankondiging}\n\n_Prijs: ${prijs} kroketpunten._\n\n— De Hoge Frituurraad`);
+  await telOpdrachtActie(client, userId, 'winkel_koop');
   return { ok: true, tekst: `_${item.naam} is verworven. Nieuw saldo: ${saldo - prijs} kroketpunten._` };
 }
+
+// ── Opdracht-engine: dagelijkse en wekelijkse opdrachten ───────────────────────
+// Eén engine voor alle opdrachten. Voorheen waren bingo, stille missies en de premiejacht
+// drie losse implementaties van hetzelfde idee (voorwaarde → voortgang → beloning); nieuwe
+// gamification is nu een regel data in OPDRACHTEN.
+//
+// Voortgang komt van telOpdrachtActie(), die op de vaste plekken in de spellogica wordt
+// aangeroepen. Welke opdrachten vandaag/deze week gelden wordt DETERMINISTISCH uit de datum
+// berekend — geen cron, geen state om te missen. Lag de bot een dag stil, dan zijn de
+// opdrachten van vandaag alsnog exact dezelfde voor iedereen.
+//
+// Velden: id (uniek, ook de opslagsleutel) · soort 'dag'|'week' · actie (zie de hooks)
+//         doel (aantal) · beloning (kroketpunten) · tekst (weergave)
+const OPDRACHTEN = [
+  // ── Dagelijks: klein, haalbaar, stuurt naar de spellen ──
+  { id: 'd-offer',    soort: 'dag',  actie: 'offer',          doel: 1, beloning: 1, tekst: 'Offer aan het Grote Vetbad' },
+  { id: 'd-eer',      soort: 'dag',  actie: 'eer_gegeven',    doel: 1, beloning: 1, tekst: 'Eer een medelid' },
+  { id: 'd-duel',     soort: 'dag',  actie: 'duel',           doel: 1, beloning: 1, tekst: 'Ga een heilig frituurduel aan' },
+  { id: 'd-raid',     soort: 'dag',  actie: 'raid_aanval',    doel: 1, beloning: 2, tekst: 'Val de Bamischijf aan (als die rondwaart)' },
+  { id: 'd-eer2',     soort: 'dag',  actie: 'eer_gegeven',    doel: 2, beloning: 2, tekst: 'Eer twee mede-leden' },
+  { id: 'd-winkel',   soort: 'dag',  actie: 'winkel_koop',    doel: 1, beloning: 1, tekst: 'Doe een aankoop in de Aflatenhandel' },
+  { id: 'd-duelwin',  soort: 'dag',  actie: 'duel_gewonnen',  doel: 1, beloning: 2, tekst: 'Win een duel' },
+  { id: 'd-bingo',    soort: 'dag',  actie: 'bingo_claim',    doel: 1, beloning: 2, tekst: 'Claim een bingo-opdracht met bewijs' },
+
+  // ── Wekelijks: groter, vraagt volhouden ──
+  { id: 'w-duelwin',  soort: 'week', actie: 'duel_gewonnen',  doel: 3, beloning: 4, tekst: 'Win drie duels deze week' },
+  { id: 'w-offer',    soort: 'week', actie: 'offer',          doel: 5, beloning: 4, tekst: 'Offer vijf keer aan het Vetbad' },
+  { id: 'w-eer',      soort: 'week', actie: 'eer_gegeven',    doel: 6, beloning: 4, tekst: 'Eer zes keer een medelid' },
+  { id: 'w-raid',     soort: 'week', actie: 'raid_aanval',    doel: 3, beloning: 5, tekst: 'Val de Bamischijf drie keer aan' },
+  { id: 'w-veiling',  soort: 'week', actie: 'veiling_bod',    doel: 1, beloning: 3, tekst: 'Bied op de Grote Veiling' },
+  { id: 'w-roof',     soort: 'week', actie: 'roof_poging',    doel: 1, beloning: 3, tekst: 'Waag een Grote Kroketroof' },
+  { id: 'w-goud',     soort: 'week', actie: 'gouden_kroket',  doel: 1, beloning: 5, tekst: 'Grijp de Gouden Kroket' },
+];
+
+const OPDRACHTEN_PER_DAG = 3;
+const OPDRACHTEN_PER_WEEK = 2;
+
+const loadOpdrachten = () => readJSON('opdrachten.json', {});
+
+function dagSleutel() {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Amsterdam' }).format(new Date());
+}
+
+// Deterministische keuze uit de pool op basis van een sleutel (datum of weekstart). Iedereen
+// krijgt dezelfde opdrachten, en er is geen opgeslagen selectie die kan verdwijnen of
+// verouderen als een cron gemist wordt.
+function kiesOpdrachten(soort, sleutel, aantal) {
+  const pool = OPDRACHTEN.filter(o => o.soort === soort);
+  let h = 2166136261;
+  for (let i = 0; i < sleutel.length; i++) { h ^= sleutel.charCodeAt(i); h = (h * 16777619) >>> 0; }
+  const rest = [...pool];
+  const gekozen = [];
+  for (let i = 0; i < Math.min(aantal, pool.length); i++) {
+    h = (h * 1103515245 + 12345) >>> 0;
+    gekozen.push(...rest.splice(h % rest.length, 1));
+  }
+  return gekozen;
+}
+
+function actieveOpdrachten() {
+  return [
+    ...kiesOpdrachten('dag', dagSleutel(), OPDRACHTEN_PER_DAG),
+    ...kiesOpdrachten('week', getMondayOfWeek(), OPDRACHTEN_PER_WEEK),
+  ];
+}
+
+// Voortgangsbakken van één lid, met automatische reset zodra de dag of week wisselt.
+function opdrachtBakken(userId) {
+  const alles = loadOpdrachten();
+  const eigen = alles[userId] || {};
+  const dagKey = dagSleutel();
+  const weekKey = getMondayOfWeek();
+  return {
+    alles,
+    dag: eigen.dag?.datum === dagKey ? eigen.dag : { datum: dagKey, voortgang: {}, beloond: [] },
+    week: eigen.week?.weekStart === weekKey ? eigen.week : { weekStart: weekKey, voortgang: {}, beloond: [] },
+  };
+}
+
+// Meldt één actie van een lid en rekent de voortgang bij. Wordt vanuit de spellogica
+// aangeroepen; faalt nooit hard (een opdracht mag een spel niet kunnen breken).
+// Beloningen lopen via pasScoreAanMetCheck, dus roem/achievements/verbondszegen tellen mee.
+// Bewust GEEN opdrachten op "punten verdienen" — dat zou zichzelf kunnen voeden.
+async function telOpdrachtActie(client, userId, actie, aantal = 1) {
+  try {
+    if (!userId || !loadMembers()[userId]) return;
+    const actief = actieveOpdrachten().filter(o => o.actie === actie);
+    if (!actief.length) return;
+    const { alles, dag, week } = opdrachtBakken(userId);
+    const voltooid = [];
+    for (const o of actief) {
+      const bak = o.soort === 'dag' ? dag : week;
+      if (bak.beloond.includes(o.id)) continue;
+      bak.voortgang[o.id] = (bak.voortgang[o.id] || 0) + aantal;
+      if (bak.voortgang[o.id] >= o.doel) {
+        bak.beloond.push(o.id);
+        voltooid.push(o);
+      }
+    }
+    alles[userId] = { ...(alles[userId] || {}), dag, week };
+    writeJSON('opdrachten.json', alles);
+
+    for (const o of voltooid) {
+      const bijnaam = loadMembers()[userId]?.bijnaam || 'Een volgeling';
+      await pasScoreAanMetCheck(client, userId, o.beloning, { channelId: process.env.SLACK_CHANNEL_ID });
+      logGebeurtenis('opdracht', userId, `${bijnaam} volbracht de ${o.soort === 'dag' ? 'dagopdracht' : 'weekopdracht'} "${o.tekst}" (+${o.beloning})`);
+      // Dagopdrachten blijven stil (drie per lid per dag zou het kanaal verzuipen) — die zie
+      // je in je App Home. Weekopdrachten zijn zeldzaam genoeg voor een verkondiging.
+      if (o.soort === 'week') {
+        await postToChannel(client, process.env.SLACK_CHANNEL_ID,
+          `📜 *WEEKOPDRACHT VOLBRACHT* 📜\n\n> *${bijnaam}* heeft volbracht: _${o.tekst}_.\n> De Hoge Frituurraad kent *+${o.beloning} kroketpunten* toe.\n\n— De Hoge Frituurraad`);
+      }
+    }
+  } catch (err) {
+    console.error('⚠️ Opdracht-voortgang mislukt:', err.message);
+  }
+}
+
+// Weergaveregels voor de App Home: per actieve opdracht de voortgangsbalk.
+function opdrachtOverzicht(userId) {
+  const { dag, week } = opdrachtBakken(userId);
+  const maak = (o) => {
+    const bak = o.soort === 'dag' ? dag : week;
+    const klaar = bak.beloond.includes(o.id);
+    const nu = Math.min(o.doel, bak.voortgang[o.id] || 0);
+    return { o, klaar, nu };
+  };
+  return {
+    dag: kiesOpdrachten('dag', dagSleutel(), OPDRACHTEN_PER_DAG).map(maak),
+    week: kiesOpdrachten('week', getMondayOfWeek(), OPDRACHTEN_PER_WEEK).map(maak),
+  };
+}
+
+registreerFeature({
+  naam: 'opdrachten',
+  state: ['opdrachten.json'],
+  help: [{ gebruik: '/kroketgod opdrachten', verwacht: 'uw dagelijkse en wekelijkse opdrachten met voortgang en beloning' }],
+  homeOrde: 20, // vlak onder de statuskaart: dit is waar je je dag mee begint
+  home: ({ userId, verbannen }) => {
+    if (verbannen) return [];
+    const { dag, week } = opdrachtOverzicht(userId);
+    const regel = ({ o, klaar, nu }) =>
+      klaar ? `> ✅ ~${o.tekst}~ — *+${o.beloning}* geïnd`
+            : `> ${homeVoortgangInline(nu, o.doel)} ${o.tekst} — *+${o.beloning}*`;
+    return [
+      { type: 'divider' },
+      { type: 'section', text: { type: 'mrkdwn', text:
+        `*📜 OPDRACHTEN VAN VANDAAG*\n${dag.map(regel).join('\n')}` } },
+      { type: 'section', text: { type: 'mrkdwn', text:
+        `*📜 DEZE WEEK*\n${week.map(regel).join('\n')}` } },
+    ];
+  },
+});
 
 // ── V2 fase 2: App Home — persoonlijk Kroket-dashboard ín Slack ────────────────
 // Alles wat leden mogen zien staat hier; niets is buiten Slack zichtbaar. Alleen leden van de
@@ -8445,6 +8630,13 @@ function homeBalken(rijen, breedte = 12) {
 function homeVoortgang(label, waarde, doel, breedte = 14) {
   const vol = Math.max(0, Math.min(breedte, Math.round((Math.max(0, waarde) / Math.max(1, doel)) * breedte)));
   return '```\n' + `${label}  ${'▓'.repeat(vol)}${'░'.repeat(breedte - vol)}  ${waarde}/${doel}` + '\n```';
+}
+
+// Compacte voortgang voor gebruik ín een tekstregel (niet in een codeblok, want daar zou de
+// omringende tekst mee in monospace gaan). Vaste breedte, dus lijstjes blijven rustig.
+function homeVoortgangInline(waarde, doel, breedte = 5) {
+  const vol = Math.max(0, Math.min(breedte, Math.round((Math.max(0, waarde) / Math.max(1, doel)) * breedte)));
+  return `\`${'▓'.repeat(vol)}${'░'.repeat(breedte - vol)}\` *${waarde}/${doel}*`;
 }
 
 // Kaarttitel in de stijl van de dashboard-kaartkoppen (h2): scheidingslijn + vette kop.
