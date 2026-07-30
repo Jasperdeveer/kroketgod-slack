@@ -90,6 +90,11 @@ info "Bestanden uploaden..."
 
 BESTANDEN=(
   "index.js"
+  # package.json + lock MOETEN mee: de npm install hieronder draait op de Pi tegen dit
+  # bestand. Zonder upload wordt een nieuwe dependency daar nooit geinstalleerd (en kwam
+  # ook het versienummer er niet).
+  "package.json"
+  "package-lock.json"
   "dashboard.html"
   "prompt-safety.js"
   "tone_of_voice.txt"
