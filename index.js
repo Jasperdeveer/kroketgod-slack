@@ -944,7 +944,7 @@ async function verlopenMissie(client) {
 const loadEerGegeven = () => readJSON('eerGegeven.json', {});
 const saveEerGegeven = (data) => writeJSON('eerGegeven.json', data);
 
-const EER_DAGELIJKS_MAX = 3;
+const EER_DAGELIJKS_BASIS = 3; // rang-voorrechten kunnen dit verhogen, zie eerLimiet()
 
 // Geeft het aantal eer dat userId vandaag al heeft gegeven.
 function telEerVandaag(userId) {
@@ -1519,18 +1519,66 @@ const saveHeldentitels = (data) => writeJSON('heldentitels.json', data);
 const loadRoem = () => readJSON('roem.json', {});
 const saveRoem  = (data) => writeJSON('roem.json', data);
 
+// Elke rang geeft een CONCREET voorrecht. Zonder dat was klimmen alleen een titel — de
+// klassieke gamification-fout: progressie zonder beloning. Voorrechten zijn cumulatief:
+// wie Frituurridder is, houdt de voorrechten van Volgeling en Paneerknecht.
+//   eerExtra        extra eerbewijzen per dag (bovenop EER_DAGELIJKS_BASIS)
+//   offerExtra      extra Vetbad-offers per dag
+//   duelExtra       extra duels per dag
+//   winkelKorting   fractie korting in de Aflatenhandel (0,2 = 20%)
+//   wekelijkseGunst maandagochtend automatisch een gratis power-up
+//   decreet         mag zelf het Decreet van de Dag uitvaardigen
 const RANGEN = [
-  { drempel: 500, naam: '🔱 Opperkroket der Illuminati',  kort: 'Opperkroket'        },
-  { drempel: 200, naam: '⚜️ Grote Paneermeester',         kort: 'Grote Paneermeester' },
-  { drempel: 100, naam: '🥇 Meester der Ragout',          kort: 'Meester der Ragout'  },
-  { drempel:  50, naam: '🛡️ Frituurridder',               kort: 'Frituurridder'       },
-  { drempel:  25, naam: '🥩 Paneerknecht',                 kort: 'Paneerknecht'        },
-  { drempel:  10, naam: '🧂 Volgeling der Korst',         kort: 'Volgeling der Korst' },
-  { drempel:   0, naam: '🥚 Ongepaneerd Aspirant',        kort: 'Ongepaneerd Aspirant'},
+  { drempel: 500, naam: '🔱 Opperkroket der Illuminati',  kort: 'Opperkroket',
+    voorrecht: { decreet: true }, voorrechtTekst: 'u mag zelf het Decreet van de Dag uitvaardigen (`/kroketgod decreet [tekst]`)' },
+  { drempel: 200, naam: '⚜️ Grote Paneermeester',         kort: 'Grote Paneermeester',
+    voorrecht: { wekelijkseGunst: true }, voorrechtTekst: 'elke maandag een gratis gunst uit de Aflatenhandel' },
+  { drempel: 100, naam: '🥇 Meester der Ragout',          kort: 'Meester der Ragout',
+    voorrecht: { winkelKorting: 0.20 }, voorrechtTekst: '20% korting in de Heilige Aflatenhandel' },
+  { drempel:  50, naam: '🛡️ Frituurridder',               kort: 'Frituurridder',
+    voorrecht: { duelExtra: 1 }, voorrechtTekst: 'een tweede duel per dag' },
+  { drempel:  25, naam: '🥩 Paneerknecht',                 kort: 'Paneerknecht',
+    voorrecht: { offerExtra: 2 }, voorrechtTekst: 'twee extra Vetbad-offers per dag' },
+  { drempel:  10, naam: '🧂 Volgeling der Korst',         kort: 'Volgeling der Korst',
+    voorrecht: { eerExtra: 1 }, voorrechtTekst: 'een extra eerbewijs per dag' },
+  { drempel:   0, naam: '🥚 Ongepaneerd Aspirant',        kort: 'Ongepaneerd Aspirant',
+    voorrecht: {}, voorrechtTekst: 'nog geen voorrechten — verdien roem' },
 ];
 
 function getRang(roem) {
   return RANGEN.find(r => roem >= r.drempel) || RANGEN[RANGEN.length - 1];
+}
+
+// Alle voorrechten van een lid, opgeteld over de bereikte rangen (cumulatief).
+function getVoorrechten(userId) {
+  const roem = loadRoem()[userId] || 0;
+  const totaal = { eerExtra: 0, offerExtra: 0, duelExtra: 0, winkelKorting: 0, wekelijkseGunst: false, decreet: false };
+  for (const r of RANGEN) {
+    if (roem < r.drempel) continue;
+    const v = r.voorrecht || {};
+    totaal.eerExtra += v.eerExtra || 0;
+    totaal.offerExtra += v.offerExtra || 0;
+    totaal.duelExtra += v.duelExtra || 0;
+    totaal.winkelKorting = Math.max(totaal.winkelKorting, v.winkelKorting || 0);
+    totaal.wekelijkseGunst = totaal.wekelijkseGunst || !!v.wekelijkseGunst;
+    totaal.decreet = totaal.decreet || !!v.decreet;
+  }
+  return totaal;
+}
+
+// Rang-afhankelijke daglimieten en prijzen.
+function eerLimiet(userId)   { return EER_DAGELIJKS_BASIS + getVoorrechten(userId).eerExtra; }
+function offerLimiet(userId) { return VETBAD_BASIS_PER_DAG + getVoorrechten(userId).offerExtra; }
+function duelLimiet(userId)  { return 1 + getVoorrechten(userId).duelExtra; }
+function winkelPrijs(userId, item) {
+  const korting = getVoorrechten(userId).winkelKorting;
+  return Math.max(1, Math.ceil(item.prijs * (1 - korting)));
+}
+
+// De voorrechten die bij een rang hóren, als leesbare regels (voor App Home en promotie).
+function voorrechtRegels(roem) {
+  return RANGEN.filter(r => roem >= r.drempel && r.voorrecht && Object.keys(r.voorrecht).length)
+    .map(r => `${r.kort}: ${r.voorrechtTekst}`);
 }
 
 // Voeg roem toe en controleer op rang-upgrade. Geeft { roem, rang, upgrade } terug.
@@ -1549,10 +1597,15 @@ async function pasRoemAan(client, userId, delta) {
     // Rang-upgrade — plechtige aankondiging
     const members = loadMembers();
     const bijnaam = members[userId]?.bijnaam || 'Een volgeling';
+    // Het nieuwe voorrecht expliciet benoemen: een rang moet iets ópleveren, en de
+    // verheffing is het moment waarop dat moet landen.
+    const nieuwVoorrecht = nieuweRang.voorrecht && Object.keys(nieuweRang.voorrecht).length
+      ? `\n> ⚜️ *Nieuw voorrecht:* ${nieuweRang.voorrechtTekst}.`
+      : '';
     const tekst =
       `🔱 *RANG-VERHEFFING* 🔱\n\n` +
       `> *${bijnaam}* heeft de rang van *${nieuweRang.naam}* bereikt.\n` +
-      `> Dit is verdiend. Dit is permanent. De Hoge Frituurraad buigt het hoofd.\n\n` +
+      `> Dit is verdiend. Dit is permanent. De Hoge Frituurraad buigt het hoofd.${nieuwVoorrecht}\n\n` +
       `— De Almachtige Kroket God :illuminati-kroket:`;
     try {
       await postToChannel(client, process.env.SLACK_CHANNEL_ID, tekst);
@@ -5094,15 +5147,15 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
       // Daglimiet: max 3x eer geven per dag
       const reedsBesteed = telEerVandaag(command.user_id);
       const nodigVoor = geeerden.length;
-      if (reedsBesteed >= EER_DAGELIJKS_MAX) {
+      if (reedsBesteed >= eerLimiet(command.user_id)) {
         await respond({
-          text: `_Uw dagelijkse eerlimiet is bereikt. De Hoge Frituurraad staat slechts ${EER_DAGELIJKS_MAX} eerbewijzen per dag toe. Morgen hervat de vrijgevigheid._`,
+          text: `_Uw dagelijkse eerlimiet is bereikt. De Hoge Frituurraad staat slechts ${eerLimiet(command.user_id)} eerbewijzen per dag toe. Morgen hervat de vrijgevigheid._`,
           response_type: 'ephemeral',
         });
         return;
       }
       // Bij meerdere namen: alleen zoveel eren als de dagelijkse limiet toestaat
-      const resterend = EER_DAGELIJKS_MAX - reedsBesteed;
+      const resterend = eerLimiet(command.user_id) - reedsBesteed;
       if (nodigVoor > resterend) {
         geeerden.splice(resterend); // kap af op het resterende aantal
         await respond({
@@ -5472,7 +5525,11 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
         .filter(p => p.item !== 'vloek') // een vloek op uzelf hoort een verrassing te blijven
         .map(p => `${WINKEL_ITEMS[p.item]?.icoon || '•'} ${WINKEL_ITEMS[p.item]?.naam || p.item} (nog ~${Math.max(1, Math.ceil((p.tot - Date.now()) / 3_600_000))} uur)`);
       const regels = Object.entries(WINKEL_ITEMS)
-        .map(([key, w]) => `${w.icoon} *${w.naam}* — *${w.prijs} pt* — \`koop ${key}\`\n> _${w.uitleg}_`)
+        .map(([key, w]) => {
+          const p = winkelPrijs(command.user_id, w);
+          const kortingZin = p < w.prijs ? ` (~${w.prijs}~ rangkorting)` : '';
+          return `${w.icoon} *${w.naam}* — *${p} pt*${kortingZin} — \`koop ${key}\`\n> _${w.uitleg}_`;
+        })
         .join('\n');
       await respond({
         text: `⚜️ *DE HEILIGE AFLATENHANDEL* ⚜️\n\n${regels}\n\n` +
@@ -5952,6 +6009,34 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
 
 
 
+    // ── Rang-voorrecht: het Decreet van de Dag uitvaardigen (Opperkroket) ─────
+    // Zet dezelfde instelling die het dashboard gebruikt, dus het werkt direct door in de
+    // system prompt. Alleen wie de hoogste rang heeft bereikt, mag dit.
+    if (input === 'decreet' || input.startsWith('decreet ')) {
+      if (!getVoorrechten(command.user_id).decreet) {
+        const rang = getRang(loadRoem()[command.user_id] || 0);
+        const nodig = RANGEN.find(r => r.voorrecht?.decreet);
+        await respond({ text: `_Slechts de ${nodig.kort} mag decreten uitvaardigen. Uw rang: ${rang.naam} — u heeft ${Math.max(0, nodig.drempel - (loadRoem()[command.user_id] || 0))} roem te gaan._`, response_type: 'ephemeral' });
+        return;
+      }
+      const decreetTekst = input.replace(/^decreet\s*/, '').trim();
+      if (!decreetTekst) {
+        const huidig = (instelling('decreetVanDeDag') || '').trim();
+        await respond({ text: huidig
+          ? `_Huidig decreet: "${huidig}". Overschrijf met \`decreet [tekst]\`, of wis met \`decreet wis\`._`
+          : '_Er geldt geen decreet. Vaardig er een uit met `decreet [tekst]` — bijvoorbeeld: `decreet vandaag spreekt de Kroket God uitsluitend in haiku`._', response_type: 'ephemeral' });
+        return;
+      }
+      const wissen = /^wis$|^leeg$|^geen$/i.test(decreetTekst);
+      saveInstellingen({ decreetVanDeDag: wissen ? '' : decreetTekst.slice(0, 500) });
+      const bijnaamDec = loadMembers()[command.user_id]?.bijnaam || 'De Opperkroket';
+      logGebeurtenis('decreet', command.user_id, wissen ? `${bijnaamDec} wiste het decreet` : `${bijnaamDec} vaardigde een decreet uit: ${decreetTekst.slice(0, 120)}`);
+      await postToChannel(client, command.channel_id, wissen
+        ? `🔱 *HET DECREET IS INGETROKKEN* 🔱\n\n> *${bijnaamDec}*, ${getRang(loadRoem()[command.user_id] || 0).kort}, trekt het decreet in. De frituur keert terug tot haar gewone aard.\n\n— De Hoge Frituurraad`
+        : `🔱 *DECREET VAN DE DAG* 🔱\n\n> Bij het voorrecht van zijn rang vaardigt *${bijnaamDec}* uit:\n> _"${decreetTekst}"_\n> De Kroket God zal hiernaar handelen.\n\n— De Hoge Frituurraad`);
+      return;
+    }
+
     // ── Tabel-gedreven verkondigingen (zie VERKONDIGINGEN) ────────────────────
     const verkondiging = vindVerkondiging(input);
     if (verkondiging) {
@@ -6259,13 +6344,13 @@ app.event('app_mention', async ({ event, client }) => {
         const thread_ts = event.thread_ts || (event.parent_user_id ? event.ts : undefined);
         // Daglimiet — zelfde regel als de slash command: max 3 eerbewijzen per dag
         const reedsBesteed = telEerVandaag(userId);
-        if (reedsBesteed >= EER_DAGELIJKS_MAX) {
+        if (reedsBesteed >= eerLimiet(userId)) {
           await postEphemeral(client, event.channel, userId,
-            `_Uw dagelijkse eerlimiet is bereikt. De Hoge Frituurraad staat slechts ${EER_DAGELIJKS_MAX} eerbewijzen per dag toe. Morgen hervat de vrijgevigheid._`,
+            `_Uw dagelijkse eerlimiet is bereikt. De Hoge Frituurraad staat slechts ${eerLimiet(userId)} eerbewijzen per dag toe. Morgen hervat de vrijgevigheid._`,
             { thread_ts });
           return;
         }
-        const resterend = EER_DAGELIJKS_MAX - reedsBesteed;
+        const resterend = eerLimiet(userId) - reedsBesteed;
         if (geeerden.length > resterend) {
           geeerden.splice(resterend);
           await postEphemeral(client, event.channel, userId,
@@ -6609,7 +6694,7 @@ app.event('app_mention', async ({ event, client }) => {
       const bijnaamTarget = eerTokenMatch[1].trim();
       tekst = tekst.replace(/\[EER:[^\]\n]+\]\s*$/i, '').trim();
       const gevonden = getMemberByNaam(bijnaamTarget);
-      if (gevonden && gevonden[0] !== userId && telEerVandaag(userId) < EER_DAGELIJKS_MAX) {
+      if (gevonden && gevonden[0] !== userId && telEerVandaag(userId) < eerLimiet(userId)) {
         const [eerId, eerLid] = gevonden;
         let punten = Math.floor(Math.random() * 2) + 1;
         // Dubbele Eer (Aflatenhandel): ontvangen eer telt 24 uur dubbel.
@@ -6905,6 +6990,7 @@ const CRON_LABELS = {
   '0 16 * * 5':      { label: 'Wekelijkse held' },
   '59 23 * * 0':     { label: 'Weekkampioen + reset' },
   '30 10 * * 1':     { label: 'Kroket-bingo' },
+  '0 10 * * 1':      { label: 'Wekelijkse rang-gunst' },
   '30 9 * * 5':      { label: 'Grote Veiling (opening)' },
   '45 14 * * 5':     { label: 'Grote Veiling (hamer)' },
   // Kansgebaseerd/willekeurig (komen soms wel, soms niet):
@@ -8060,18 +8146,25 @@ async function voerDuel(client, userId, doelId, channelId) {
   if (getAlliantiePartner(userId) === doelId) {
     return { ok: false, tekst: `_${doelLid.bijnaam} is uw bondgenoot. Een heilig verbond keert zich niet tegen zichzelf — de Kroket God verbiedt dit broederduel._` };
   }
-  // Max 1 duel per dag per uitdager
+  // Duels per dag: 1, plus wat de rang toestaat (Frituurridder krijgt een tweede).
+  // Oud formaat was { datum } zonder teller; dat lezen we als 1 gebruikte poging.
   const duels = readJSON('duels.json', {});
   const vandaagKey = new Intl.DateTimeFormat('nl-NL', { timeZone: 'Europe/Amsterdam' }).format(new Date());
-  if (duels[userId]?.datum === vandaagKey) {
-    return { ok: false, tekst: '_Eén duel per dag. De frituur heeft rust nodig tussen de gevechten._' };
+  const limiet = duelLimiet(userId);
+  const rec = duels[userId]?.datum === vandaagKey
+    ? { datum: vandaagKey, aantal: duels[userId].aantal ?? 1 }
+    : { datum: vandaagKey, aantal: 0 };
+  if (rec.aantal >= limiet) {
+    return { ok: false, tekst: limiet > 1
+      ? `_U heeft vandaag al ${rec.aantal}× gedueld (uw rang staat ${limiet} duels per dag toe). Morgen weer._`
+      : '_Eén duel per dag. De frituur heeft rust nodig tussen de gevechten._' };
   }
   // Beide partijen moeten minstens 1 punt kunnen inzetten
   const scores = loadScores();
   if ((scores[userId] || 0) < 1 || (scores[doelId] || 0) < 1) {
     return { ok: false, tekst: '_Beide duellisten moeten minstens 1 kroketpunt bezitten als inzet._' };
   }
-  duels[userId] = { datum: vandaagKey };
+  duels[userId] = { datum: vandaagKey, aantal: rec.aantal + 1 };
   writeJSON('duels.json', duels);
 
   // 50/50, verschoven met het verschil in geluksfactor tussen beide duellisten (zie getGeluk).
@@ -8206,7 +8299,7 @@ function getGeluk(userId) {
 }
 
 const VETBAD_MAX_INZET = 10;
-const VETBAD_MAX_PER_DAG = 5;
+const VETBAD_BASIS_PER_DAG = 5; // rang-voorrechten kunnen dit verhogen, zie offerLimiet()
 
 async function voerOffer(client, userId, inzet, channelId) {
   const members = loadMembers();
@@ -8226,8 +8319,8 @@ async function voerOffer(client, userId, inzet, channelId) {
   const vetbad = readJSON('vetbad.json', {});
   const vandaagKey = new Intl.DateTimeFormat('nl-NL', { timeZone: 'Europe/Amsterdam' }).format(new Date());
   const rec = vetbad[userId]?.datum === vandaagKey ? vetbad[userId] : { datum: vandaagKey, aantal: 0 };
-  if (rec.aantal >= VETBAD_MAX_PER_DAG) {
-    return { ok: false, tekst: `_U hebt vandaag al ${VETBAD_MAX_PER_DAG}× geofferd. Het Vetbad heeft genoeg van u gezien — keer morgen terug._` };
+  if (rec.aantal >= offerLimiet(userId)) {
+    return { ok: false, tekst: `_U hebt vandaag al ${offerLimiet(userId)}× geofferd. Het Vetbad heeft genoeg van u gezien — keer morgen terug._` };
   }
   rec.aantal += 1;
   vetbad[userId] = rec;
@@ -8274,8 +8367,9 @@ async function koopWinkelItem(client, userId, itemKey, doelId, channelId) {
   const item = WINKEL_ITEMS[itemKey];
   if (!item) return { ok: false, tekst: '_De Aflatenhandel kent dat artikel niet. Bekijk het aanbod met `/kroketgod winkel`._' };
   const saldo = loadScores()[userId] || 0;
-  if (saldo < item.prijs) {
-    return { ok: false, tekst: `_${item.naam} kost ${item.prijs} kroketpunten — u bezit er ${saldo}. De Aflatenhandel geeft geen krediet._` };
+  const prijs = winkelPrijs(userId, item); // rang-korting
+  if (saldo < prijs) {
+    return { ok: false, tekst: `_${item.naam} kost ${prijs} kroketpunten — u bezit er ${saldo}. De Aflatenhandel geeft geen krediet._` };
   }
   const koperNaam = members[userId].bijnaam;
 
@@ -8288,32 +8382,32 @@ async function koopWinkelItem(client, userId, itemKey, doelId, channelId) {
     if (heeftPowerup(doelId, 'vloek')) {
       return { ok: false, tekst: `_Op ${doelLid.bijnaam} rust al een vloek. Stapelen zou onsmakelijk zijn._` };
     }
-    pasScoreAan(userId, -item.prijs);
+    pasScoreAan(userId, -prijs);
     geefPowerup(doelId, 'vloek', { door: userId });
-    registreerWinkelAankoop(userId, 'vloek', item.prijs, doelId);
-    logGebeurtenis('winkel', doelId, `${koperNaam} kocht een Vloek der Slappe Korst en legde die op ${doelLid.bijnaam} (−${item.prijs})`, null, userId);
+    registreerWinkelAankoop(userId, 'vloek', prijs, doelId);
+    logGebeurtenis('winkel', doelId, `${koperNaam} kocht een Vloek der Slappe Korst en legde die op ${doelLid.bijnaam} (−${prijs})`, null, userId);
     await postToChannel(client, channelId,
       `😈 *EEN VLOEK IS GEKOCHT* 😈\n\n> In de schaduwen van de Aflatenhandel heeft een anonieme volgeling een *Vloek der Slappe Korst* gelegd op *${doelLid.bijnaam}*. ` +
       `Diens eerstvolgende puntenwinst kan verbranden in het vet.\n\n— De Hoge Frituurraad`);
-    return { ok: true, tekst: `_De vloek is gelegd op ${doelLid.bijnaam}. Uw naam blijft in de schaduw. Nieuw saldo: ${saldo - item.prijs}._` };
+    return { ok: true, tekst: `_De vloek is gelegd op ${doelLid.bijnaam}. Uw naam blijft in de schaduw. Nieuw saldo: ${saldo - prijs}._` };
   }
 
   // Overige items: op uzelf, niet stapelbaar
   if (heeftPowerup(userId, itemKey)) {
     return { ok: false, tekst: `_${item.naam} is al actief op u. De Aflatenhandel verkoopt geen dubbele lagen._` };
   }
-  pasScoreAan(userId, -item.prijs);
+  pasScoreAan(userId, -prijs);
   geefPowerup(userId, itemKey);
-  registreerWinkelAankoop(userId, itemKey, item.prijs);
-  logGebeurtenis('winkel', userId, `${koperNaam} kocht ${item.naam} in de Aflatenhandel (−${item.prijs})`);
+  registreerWinkelAankoop(userId, itemKey, prijs);
+  logGebeurtenis('winkel', userId, `${koperNaam} kocht ${item.naam} in de Aflatenhandel (−${prijs})`);
   const aankondiging = {
     zegen: `> *${koperNaam}* heeft in de Aflatenhandel de *Zegen van de Paneerlaag* verworven. 24 uur lang ketst elke puntenstraf af op de heilige korst.`,
     dubbele_eer: `> *${koperNaam}* heeft in de Aflatenhandel *Dubbele Eer* verworven. 24 uur lang telt elke ontvangen eer dubbel — eer hen wijselijk.`,
     gouden_korst: `> *${koperNaam}* heeft in de Aflatenhandel de *Gouden Korst* verworven en draagt 24 uur de gouden status. De Kroket God spreekt voortaan van de Gezalfde.`,
   }[itemKey] || `> *${koperNaam}* heeft *${item.naam}* verworven in de Aflatenhandel.`;
   await postToChannel(client, channelId,
-    `${item.icoon} *DE AFLATENHANDEL LEVERT* ${item.icoon}\n\n${aankondiging}\n\n_Prijs: ${item.prijs} kroketpunten._\n\n— De Hoge Frituurraad`);
-  return { ok: true, tekst: `_${item.naam} is verworven. Nieuw saldo: ${saldo - item.prijs} kroketpunten._` };
+    `${item.icoon} *DE AFLATENHANDEL LEVERT* ${item.icoon}\n\n${aankondiging}\n\n_Prijs: ${prijs} kroketpunten._\n\n— De Hoge Frituurraad`);
+  return { ok: true, tekst: `_${item.naam} is verworven. Nieuw saldo: ${saldo - prijs} kroketpunten._` };
 }
 
 // ── V2 fase 2: App Home — persoonlijk Kroket-dashboard ín Slack ────────────────
@@ -8419,7 +8513,15 @@ function bouwAppHomeBlocks(userId, melding = '') {
     ['Bondgenoot', bondgenoot ? (members[bondgenoot]?.bijnaam || 'onbekend') : 'geen verbond'],
   ]) } });
   if (volgende) {
-    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: homeVoortgang(`naar ${volgende.kort}`, eigenRoem, volgende.drempel) } });
+    blocks.push({ type: 'section', text: { type: 'mrkdwn', text:
+      homeVoortgang(`naar ${volgende.kort}`, eigenRoem, volgende.drempel) +
+      `\n_Bij ${volgende.kort}: ${volgende.voorrechtTekst}_` } });
+  }
+  // Verdiende voorrechten — dit is wat een rang waard maakt, dus expliciet benoemen.
+  const verdiend = voorrechtRegels(eigenRoem);
+  if (verdiend.length) {
+    blocks.push({ type: 'section', text: { type: 'mrkdwn', text:
+      `*Uw voorrechten*\n${verdiend.map(r => `> ✔︎ ${r}`).join('\n')}` } });
   }
   if (eretitels.length) {
     blocks.push({ type: 'section', text: { type: 'mrkdwn', text: `*Actief op u*\n${eretitels.map(t => `> ${t}`).join('\n')}` } });
@@ -8436,14 +8538,15 @@ function bouwAppHomeBlocks(userId, melding = '') {
   const offersVandaag = vetbad[userId]?.datum === vandaagKey ? (vetbad[userId].aantal || 0) : 0;
   const raidNu = readJSON('bamischijf.json', {});
   const aanvalGedaan = raidNu.strijders?.[userId]?.laatsteAanval === vandaagKey;
-  const duelKan = duels[userId]?.datum !== vandaagKey;
+  const duelsVandaag = duels[userId]?.datum === vandaagKey ? (duels[userId].aantal ?? 1) : 0;
+  const duelKan = duelsVandaag < duelLimiet(userId);
   const roofKan = cooldowns.roof?.[userId] !== getMondayOfWeek();
-  const offerKan = offersVandaag < VETBAD_MAX_PER_DAG;
+  const offerKan = offersVandaag < offerLimiet(userId);
   blocks.push(...homeKaartKop('WAT KUNT U NU DOEN'));
   blocks.push({ type: 'section', text: { type: 'mrkdwn', text: homeTabel([
-    ['Duel', duelKan ? '✅ beschikbaar (1x per dag)' : '⌛ vandaag al gedueld'],
+    ['Duel', `${duelKan ? '✅' : '⌛'} ${duelsVandaag}/${duelLimiet(userId)} vandaag`],
     ['Kroketroof', roofKan ? '✅ beschikbaar (1x per week)' : '⌛ deze week al geroofd'],
-    ['Vetbad-offer', `${offerKan ? '✅' : '⌛'} ${offersVandaag}/${VETBAD_MAX_PER_DAG} vandaag`],
+    ['Vetbad-offer', `${offerKan ? '✅' : '⌛'} ${offersVandaag}/${offerLimiet(userId)} vandaag`],
     ['Frituur-visioen', frituurRest > 0 ? `⌛ nog ~${Math.ceil(frituurRest / 60_000)} min` : '✅ beschikbaar'],
     ...(raidNu.actief ? [['Raid-aanval', aanvalGedaan ? '⌛ vandaag al aangevallen' : '✅ beschikbaar']] : []),
   ]) } });
@@ -8507,10 +8610,11 @@ function bouwAppHomeBlocks(userId, melding = '') {
     blocks.push({ type: 'section', text: { type: 'mrkdwn', text: `_Uw saldo: *${eigenScore} kroketpunt${eigenScore === 1 ? '' : 'en'}*. Besteden kost weekpunten; uw roem blijft onaangetast._` } });
     for (const [key, w] of Object.entries(WINKEL_ITEMS)) {
       const alActief = key !== 'vloek' && heeftPowerup(userId, key);
-      const teDuur = eigenScore < w.prijs;
+      const prijs = winkelPrijs(userId, w); // rang-korting
+      const teDuur = eigenScore < prijs;
       const blok = {
         type: 'section',
-        text: { type: 'mrkdwn', text: `${w.icoon} *${w.naam}* — *${w.prijs} pt*\n_${w.uitleg}_` },
+        text: { type: 'mrkdwn', text: `${w.icoon} *${w.naam}* — *${prijs} pt*${prijs < w.prijs ? ` _(~${w.prijs}~ rangkorting)_` : ''}\n_${w.uitleg}_` },
       };
       // Knop weglaten als het item al actief is of onbetaalbaar — anders krijgt de gebruiker
       // een knop die gegarandeerd een afwijzing oplevert.
@@ -8521,7 +8625,7 @@ function bouwAppHomeBlocks(userId, melding = '') {
           action_id: `winkel_koop_${key}`,
         };
       } else {
-        blok.text.text += `\n> _${alActief ? 'al actief op u' : `u komt ${w.prijs - eigenScore} punt(en) tekort`}_`;
+        blok.text.text += `\n> _${alActief ? 'al actief op u' : `u komt ${prijs - eigenScore} punt(en) tekort`}_`;
       }
       blocks.push(blok);
     }
@@ -8688,7 +8792,7 @@ app.action('open_offer', async ({ ack, body, client }) => {
         submit: { type: 'plain_text', text: 'Offeren' },
         close: { type: 'plain_text', text: 'Sluiten' },
         blocks: [
-          { type: 'section', text: { type: 'mrkdwn', text: `🎲 *Offer aan het Grote Vetbad.*\n6% jackpot (×3) · 27% verdubbeld · 17% ongedeerd terug · 50% verzwolgen.\nMaximaal ${VETBAD_MAX_INZET} punten per offer, ${VETBAD_MAX_PER_DAG}× per dag.` } },
+          { type: 'section', text: { type: 'mrkdwn', text: `🎲 *Offer aan het Grote Vetbad.*\n6% jackpot (×3) · 27% verdubbeld · 17% ongedeerd terug · 50% verzwolgen.\nMaximaal ${VETBAD_MAX_INZET} punten per offer, ${offerLimiet(body.user.id)}× per dag.` } },
           {
             type: 'input', block_id: 'inzet',
             label: { type: 'plain_text', text: 'Hoeveel kroketpunten offert u?' },
@@ -9045,6 +9149,39 @@ planCron('30 8 * * *', async () => {
     console.error('Fout bij verjaardagscheck:', error);
   }
 }, { timezone: 'Europe/Amsterdam' });
+
+// ── Rang-voorrecht: wekelijkse gunst (Grote Paneermeester en hoger) ────────────
+// Maandagochtend krijgt elke drager van dit voorrecht een gratis power-up uit de
+// Aflatenhandel. Templated (geen LLM-call) — het is een vaste, formulematige gunst.
+const GUNST_POOL = ['zegen', 'dubbele_eer', 'gouden_korst'];
+
+planCron('0 10 * * 1', async () => {
+  try {
+    const members = loadMembers();
+    const begunstigd = [];
+    for (const id of Object.keys(members)) {
+      if (!getVoorrechten(id).wekelijkseGunst || isVerbannen(id)) continue;
+      // Kies een gunst die nog niet op dit lid actief is; alles actief → overslaan.
+      const kandidaten = GUNST_POOL.filter(k => !heeftPowerup(id, k));
+      if (!kandidaten.length) continue;
+      const gunst = kandidaten[Math.floor(Math.random() * kandidaten.length)];
+      geefPowerup(id, gunst);
+      registreerWinkelAankoop(id, gunst, 0, null, 'rangvoorrecht');
+      logGebeurtenis('winkel', id, `${members[id].bijnaam} ontving ${WINKEL_ITEMS[gunst].naam} als wekelijkse rang-gunst`);
+      begunstigd.push(`*${members[id].bijnaam}* — ${WINKEL_ITEMS[gunst].icoon} ${WINKEL_ITEMS[gunst].naam}`);
+    }
+    if (!begunstigd.length) return;
+    await postToChannel(app.client, process.env.SLACK_CHANNEL_ID,
+      `⚜️ *DE WEKELIJKSE GUNST* ⚜️\n\n> De Hoge Frituurraad beloont wie de rang van Grote Paneermeester heeft bereikt:\n> ${begunstigd.join('\n> ')}\n\n— De Hoge Frituurraad`);
+  } catch (err) {
+    console.error('Fout bij wekelijkse rang-gunst:', err);
+  }
+}, { timezone: 'Europe/Amsterdam' });
+
+registreerFeature({
+  naam: 'rang-voorrechten',
+  help: [{ gebruik: '/kroketgod decreet [tekst]', verwacht: 'alleen de Opperkroket: vaardig het Decreet van de Dag uit (`decreet wis` trekt het in)' }],
+});
 
 registreerFeature({
   naam: 'profeet-van-de-week',
