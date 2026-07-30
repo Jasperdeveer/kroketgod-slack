@@ -2279,7 +2279,32 @@ const ACHIEVEMENTS = [
   { id: 'gouden_korst',        drempel: 30,  naam: '🥇 Gouden Korst',             tekst: 'Dertig kroketpunten. Het Boek der Frituur heeft uw naam in goud gegraveerd.' },
   { id: 'platina_frituurmand', drempel: 50,  naam: '⚜️ Platina Frituurmand',     tekst: 'Vijftig kroketpunten. De frituurmand zelf buigt voor u.' },
   { id: 'diamanten_mosterdpot',drempel: 100, naam: '💎 Diamanten Mosterdpot',     tekst: 'Honderd kroketpunten. U behoort tot een zeer select gezelschap.' },
+
+  // ── Daden i.p.v. punten ──
+  // Deze hebben geen `drempel` maar een `actie` + `doel`, en worden gevoed door de
+  // levenslange tellers (zie telActie). De score-gebaseerde checks hierboven slaan ze
+  // automatisch over, omdat `nieuweScore >= undefined` altijd false is.
+  // Elk verdiend relikwie geeft PRESTATIE_ROEM roem, zodat daden ook je rang laten stijgen:
+  // daden → roem → rang → voorrechten.
+  { id: 'duellist',       actie: 'duel_gewonnen', doel: 5,  naam: '⚔️ Duellist',                tekst: 'Vijf duels gewonnen. Uw naam wordt met enige nervositeit uitgesproken.' },
+  { id: 'duelmeester',    actie: 'duel_gewonnen', doel: 20, naam: '🗡️ Duelmeester der Frituur', tekst: 'Twintig duels gewonnen. Men wijkt uiteen als u de frituurzaal betreedt.' },
+  { id: 'eerbiedig',      actie: 'eer_gegeven',   doel: 25, naam: '🙏 Eerbiedige Gever',        tekst: 'Vijfentwintig keer een medelid geëerd. Vrijgevigheid is een deugd der snackleer.' },
+  { id: 'mecenas',        actie: 'eer_gegeven',   doel: 75, naam: '⚜️ Mecenas van de Korst',    tekst: 'Vijfenzeventig eerbewijzen uitgedeeld. U tilt het hele genootschap op.' },
+  { id: 'gokker',         actie: 'offer',         doel: 25, naam: '🎲 Vaste Klant van het Vetbad', tekst: 'Vijfentwintig offers. Het vet kent uw gezicht.' },
+  { id: 'jackpot',        actie: 'jackpot',       doel: 1,  naam: '🌟 Door het Vet Gezegend',   tekst: 'Een goddelijke jackpot uit het Grote Vetbad. Eén keer is genoeg voor de eeuwigheid.' },
+  { id: 'jackpot3',       actie: 'jackpot',       doel: 3,  naam: '💫 Lieveling der Frituurgoden', tekst: 'Drie jackpots. Dit is statistisch verdacht en theologisch onweerlegbaar.' },
+  { id: 'dief',           actie: 'roof_gelukt',   doel: 1,  naam: '🥷 Nachtelijke Kroketdief',  tekst: 'Een geslaagde Grote Kroketroof. De Raad keurt het af en is stil bewonderend.' },
+  { id: 'meesterdief',    actie: 'roof_gelukt',   doel: 5,  naam: '🎭 Meesterdief',             tekst: 'Vijf geslaagde roven. Niemand laat zijn kluis meer onbeheerd.' },
+  { id: 'raidstrijder',   actie: 'raid_aanval',   doel: 10, naam: '⚔️ Bamischijf-Bestrijder',   tekst: 'Tien aanvallen op de oervijand. Het vet onthoudt zulke trouw.' },
+  { id: 'raidheld',       actie: 'raid_overwonnen', doel: 3, naam: '🐉 Drakendoder der Frituur', tekst: 'Drie keer meegestreden in een overwinning op de Bamischijf.' },
+  { id: 'veilingmeester', actie: 'veiling_gewonnen', doel: 1, naam: '🔨 Verzamelaar',           tekst: 'Een artefact veroverd op de Grote Veiling. Bezit is een vorm van eerbied.' },
+  { id: 'goudgrijper',    actie: 'gouden_kroket', doel: 3,  naam: '🥇 Gouden Grijper',          tekst: 'Drie keer de Gouden Kroket gegrepen. Snelheid is een sacrament.' },
+  { id: 'plichtsgetrouw', actie: 'opdracht_klaar', doel: 25, naam: '📜 Plichtsgetrouwe',        tekst: 'Vijfentwintig opdrachten volbracht. De Raad rekent op u — en dat blijkt terecht.' },
+  { id: 'onvermoeibaar',  actie: 'opdracht_klaar', doel: 100, naam: '🏅 Onvermoeibare Dienaar', tekst: 'Honderd opdrachten volbracht. Uw toewijding grenst aan het verontrustende.' },
 ];
+
+// Roem per verdiend daad-relikwie. Zo voeden daden de rangprogressie.
+const PRESTATIE_ROEM = 3;
 
 async function controleerAchievements(client, userId, oudeScore, nieuweScore) {
   const all = loadAchievements();
@@ -2336,6 +2361,46 @@ async function controleerAchievements(client, userId, oudeScore, nieuweScore) {
   if (aangepast) {
     all[userId] = [...eigen];
     saveAchievements(all);
+  }
+}
+
+// ── Levenslange tellers ────────────────────────────────────────────────────────
+// Per lid hoe vaak een daad is verricht. Voedt de daad-relikwieën (en is meteen de basis
+// voor toekomstige statistieken). Wordt gevuld door telActie(), dezelfde funnel als de
+// opdrachten — één hook in de spellogica, meerdere afnemers.
+const loadTellers = () => readJSON('tellers.json', {});
+
+function bumpTeller(userId, actie, aantal = 1) {
+  const data = loadTellers();
+  const eigen = data[userId] || {};
+  eigen[actie] = (eigen[actie] || 0) + aantal;
+  data[userId] = eigen;
+  writeJSON('tellers.json', data);
+  return eigen[actie];
+}
+
+// Controleert de daad-relikwieën voor één actie. Verdiend relikwie → verkondiging + roem,
+// zodat daden de rang laten stijgen. Gooit nooit: een relikwie mag geen spel breken.
+async function controleerPrestaties(client, userId, actie, stand) {
+  try {
+    const kandidaten = ACHIEVEMENTS.filter(a => a.actie === actie && stand >= a.doel);
+    if (!kandidaten.length) return;
+    const all = loadAchievements();
+    const eigen = new Set(all[userId] || []);
+    const nieuw = kandidaten.filter(a => !eigen.has(a.id));
+    if (!nieuw.length) return;
+    const bijnaam = loadMembers()[userId]?.bijnaam || 'Onbekende volgeling';
+    nieuw.forEach(a => eigen.add(a.id));
+    all[userId] = [...eigen];
+    saveAchievements(all);
+    for (const a of nieuw) {
+      logGebeurtenis('achievement', userId, `${bijnaam} verdiende het relikwie "${a.naam}" (${actie}: ${stand})`);
+      await postToChannel(client, process.env.SLACK_CHANNEL_ID,
+        `🏆 *RELIKWIE ONTGRENDELD* 🏆\n\n> ${bijnaam} heeft *${a.naam}* verworven.\n> _${a.tekst}_\n> ⚜️ *+${PRESTATIE_ROEM} roem* — daden wegen zwaarder dan punten.\n\n— De Hoge Frituurraad`);
+      await pasRoemAan(client, userId, PRESTATIE_ROEM);
+    }
+  } catch (err) {
+    console.error('⚠️ Prestatie-controle mislukt:', err.message);
   }
 }
 
@@ -5201,7 +5266,7 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
         await pasScoreAanMetCheck(client, eerId, punten, { geverId: command.user_id, channelId: command.channel_id, uitgesteldeZegens });
       }
       registreerEer(command.user_id, geeerden.length);
-      await telOpdrachtActie(client, command.user_id, 'eer_gegeven', geeerden.length);
+      await telActie(client, command.user_id, 'eer_gegeven', geeerden.length);
 
       const namen = geeerden.map(([, lid]) => lid.bijnaam);
       const dubbelNamen = geeerden.filter(([id]) => verdubbeld[id]).map(([, lid]) => lid.bijnaam);
@@ -5407,7 +5472,7 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
           return;
         }
         vers.claims[command.user_id].push(nr - 1);
-        await telOpdrachtActie(client, command.user_id, 'bingo_claim');
+        await telActie(client, command.user_id, 'bingo_claim');
         writeJSON('bingo.json', vers);
         const uitgesteldeZegens = []; // verbondszegen pas posten ná de bevestiging
         const voorBingo = loadScores()[command.user_id] || 0;
@@ -6411,7 +6476,7 @@ app.event('app_mention', async ({ event, client }) => {
           await pasScoreAanMetCheck(client, eerId, punten, { geverId: userId, channelId: event.channel, threadTs: thread_ts, uitgesteldeZegens });
         }
         registreerEer(userId, geeerden.length);
-        await telOpdrachtActie(client, userId, 'eer_gegeven', geeerden.length);
+        await telActie(client, userId, 'eer_gegeven', geeerden.length);
         const namen = geeerden.map(([, lid]) => lid.bijnaam);
         const dubbelNamen = geeerden.filter(([id]) => verdubbeld[id]).map(([, lid]) => lid.bijnaam);
         const dubbelZin = dubbelNamen.length
@@ -6722,7 +6787,7 @@ app.event('app_mention', async ({ event, client }) => {
         if (dubbel) punten *= 2;
         await pasScoreAanMetCheck(client, eerId, punten, { geverId: userId, channelId: event.channel, threadTs: thread_ts, uitgesteldeZegens });
         registreerEer(userId, 1);
-        await telOpdrachtActie(client, userId, 'eer_gegeven', 1);
+        await telActie(client, userId, 'eer_gegeven', 1);
         logGebeurtenis('eer', userId, `${bijnaam} eerde ${eerLid.bijnaam} organisch via mention (+${punten})`);
         tekst += `\n\n⚜️ *EER-COMMANDO* ⚜️\n\n> *${eerLid.bijnaam}* ontvangt *${punten} kroketpunt${punten > 1 ? 'en' : ''}* van de Hoge Frituurraad.${dubbel ? '\n> ✨ _Verdubbeld door de Dubbele Eer-zegen._' : ''}\n\n— _De Kroket God heeft gesproken_ :illuminati-kroket:`;
       } else {
@@ -7802,7 +7867,7 @@ async function grijpGoudenKroket(client, userId) {
   const uitgesteldeZegens = [];
   await pasScoreAanMetCheck(client, userId, 3, { channelId: gk.kanaal, uitgesteldeZegens });
   logGebeurtenis('goudenkroket', userId, `${winnaarNaam} greep de Gouden Kroket (+3)`);
-  await telOpdrachtActie(client, userId, 'gouden_kroket');
+  await telActie(client, userId, 'gouden_kroket');
   await postToChannel(client, gk.kanaal,
     `🥇 *DE GOUDEN KROKET IS GEGREPEN* 🥇\n\n` +
     `> *${winnaarNaam}* was de snelste van het genootschap en grijpt de Gouden Kroket uit het kokende vet — *+3 kroketpunten*.\n\n` +
@@ -8012,14 +8077,14 @@ async function voerBamischijfAanval(client, userId, metOffer) {
   if (raid.hp <= 0) {
     raid.actief = false;
     writeJSON('bamischijf.json', raid);
-    await telOpdrachtActie(client, userId, 'raid_aanval'); // ook de genadeslag is een aanval
+    await telActie(client, userId, 'raid_aanval'); // ook de genadeslag is een aanval
     await updateRaidBericht(client, raid);
     await beslechtBamischijfOverwinning(client, kanaal, raid, userId);
     return { ok: true, tekst: `⚔️ _Uw uithaal van −${schade} HP was de GENADESLAG — de Bamischijf is verslagen!_` };
   }
   writeJSON('bamischijf.json', raid);
   logGebeurtenis('bamischijf', userId, `${bijnaam} deed ${schade} schade aan de Bamischijf (${raid.hp}/${raid.maxHp} HP over)`);
-  await telOpdrachtActie(client, userId, 'raid_aanval');
+  await telActie(client, userId, 'raid_aanval');
   await updateRaidBericht(client, raid);
   // Activiteit zichtbaar zonder kanaal-spam: korte reply in de thread onder het bord.
   // Geen bord (raid van vóór de borden)? Dan de oude losse kanaalpost.
@@ -8048,6 +8113,8 @@ async function beslechtBamischijfOverwinning(client, channelId, raid, genadeslag
   const zwaarsteNaam = members[zwaarste?.[0]]?.bijnaam || genadeslagNaam;
   const strijderNamen = strijders.map(([uid]) => members[uid]?.bijnaam || uid).join(', ');
   logGebeurtenis('bamischijf', genadeslagId, `De Bamischijf verslagen — genadeslag: ${genadeslagNaam}; zwaarste slager: ${zwaarsteNaam}`);
+  // Iedereen die heeft meegevochten deelt in de overwinning (voedt het 'raidheld'-relikwie).
+  for (const [uid] of strijders) await telActie(client, uid, 'raid_overwonnen');
   const tekst = await kroketResponseMetVangnet(
     `OVERWINNING: de Bamischijf der Duisternis is VERSLAGEN door de verenigde Kroket Illuminati. ` +
     `${genadeslagNaam} deelde de genadeslag uit; ${zwaarsteNaam} richtte in totaal de meeste schade aan. Strijders: ${strijderNamen}. ` +
@@ -8146,7 +8213,7 @@ async function plaatsVeilingBod(client, userId, bod) {
     await postToChannel(client, kanaal,
       `🔨 *NIEUW HOOGSTE BOD* 🔨\n\n> *${bijnaam}* biedt *${bod} kroketpunten* op ${veiling.artefact?.naam || 'het artefact'}.\n\n_Overbieden kan met \`/kroketgod bied [aantal]\` — om 14:45 valt de hamer._\n\n— De Hoge Frituurraad`);
   }
-  await telOpdrachtActie(client, userId, 'veiling_bod');
+  await telActie(client, userId, 'veiling_bod');
   return { ok: true, tekst: `_Uw bod van ${bod} kroketpunten is geplaatst en in bewaring genomen. U bent nu de hoogste bieder._` };
 }
 
@@ -8234,9 +8301,9 @@ async function voerDuel(client, userId, doelId, channelId) {
   // Nu pas de verbondszegen, ná het vonnis — logische volgorde op Slack.
   for (const post of uitgesteldeZegens) await post();
   // Opdracht-voortgang: deelnemen telt voor beide, winnen alleen voor de winnaar.
-  await telOpdrachtActie(client, userId, 'duel');
-  await telOpdrachtActie(client, doelId, 'duel');
-  await telOpdrachtActie(client, winId, 'duel_gewonnen');
+  await telActie(client, userId, 'duel');
+  await telActie(client, doelId, 'duel');
+  await telActie(client, winId, 'duel_gewonnen');
   return { ok: true, tekst: `⚔️ _Het duel is beslecht: *${winNaam}* won. Zie het kanaal voor het vonnis._` };
 }
 
@@ -8270,7 +8337,7 @@ async function voerRoof(client, userId, doelId, channelId) {
   cooldowns.roof = cooldowns.roof || {};
   cooldowns.roof[userId] = weekStart;
   writeJSON('cooldowns.json', cooldowns);
-  await telOpdrachtActie(client, userId, 'roof_poging'); // de wáágdaad telt, niet de uitkomst
+  await telActie(client, userId, 'roof_poging'); // de wáágdaad telt, niet de uitkomst
 
   // Zegen van de Paneerlaag beschermt het doelwit: de roof kaatst gegarandeerd af.
   const beschermd = heeftPowerup(doelId, 'zegen');
@@ -8281,6 +8348,7 @@ async function voerRoof(client, userId, doelId, channelId) {
     pasScoreAan(doelId, -buit);
     pasScoreAan(userId, buit);
     logGebeurtenis('roof', userId, `${dader.bijnaam} beroofde ${doelLid.bijnaam} van ${buit} kroketpunten`);
+    await telActie(client, userId, 'roof_gelukt');
     const tekst = await kroketResponseMetVangnet(
       `${dader.bijnaam} heeft in het holst van de nacht een GROTE KROKETROOF gepleegd op ${doelLid.bijnaam} en maakt ${buit} kroketpunten buit. ` +
       `Beschrijf de overval als een spannende, absurde heist in de snackleer (3-5 zinnen) — vermommingen van paneermeel, een gekraakte frituurkluis, een ontsnapping door het vet. ` +
@@ -8383,10 +8451,11 @@ async function voerOffer(client, userId, inzet, channelId) {
   }
   if (delta !== 0) pasScoreAan(userId, delta);
   logGebeurtenis('offer', userId, `${bijnaam} offerde ${inzet} aan het Vetbad → ${delta >= 0 ? '+' : ''}${delta}`);
+  if (roll < 0.06) await telActie(client, userId, 'jackpot');
   const nieuweStand = loadScores()[userId] || 0;
   await postToChannel(client, channelId,
     `⚜️ *HET GROTE VETBAD* ⚜️\n\n${kop}\n\n> ${regel}\n\n_Nieuwe stand: *${nieuweStand} kroketpunten*_\n\n— De Hoge Frituurraad`);
-  await telOpdrachtActie(client, userId, 'offer');
+  await telActie(client, userId, 'offer');
   return { ok: true, tekst: `_Het Vetbad heeft gesproken: ${delta > 0 ? `+${delta}` : delta} kroketpunt${Math.abs(delta) === 1 ? '' : 'en'}. Nieuwe stand: ${nieuweStand}._` };
 }
 
@@ -8438,7 +8507,7 @@ async function koopWinkelItem(client, userId, itemKey, doelId, channelId) {
   }[itemKey] || `> *${koperNaam}* heeft *${item.naam}* verworven in de Aflatenhandel.`;
   await postToChannel(client, channelId,
     `${item.icoon} *DE AFLATENHANDEL LEVERT* ${item.icoon}\n\n${aankondiging}\n\n_Prijs: ${prijs} kroketpunten._\n\n— De Hoge Frituurraad`);
-  await telOpdrachtActie(client, userId, 'winkel_koop');
+  await telActie(client, userId, 'winkel_koop');
   return { ok: true, tekst: `_${item.naam} is verworven. Nieuw saldo: ${saldo - prijs} kroketpunten._` };
 }
 
@@ -8447,7 +8516,7 @@ async function koopWinkelItem(client, userId, itemKey, doelId, channelId) {
 // drie losse implementaties van hetzelfde idee (voorwaarde → voortgang → beloning); nieuwe
 // gamification is nu een regel data in OPDRACHTEN.
 //
-// Voortgang komt van telOpdrachtActie(), die op de vaste plekken in de spellogica wordt
+// Voortgang komt van telActie(), die op de vaste plekken in de spellogica wordt
 // aangeroepen. Welke opdrachten vandaag/deze week gelden wordt DETERMINISTISCH uit de datum
 // berekend — geen cron, geen state om te missen. Lag de bot een dag stil, dan zijn de
 // opdrachten van vandaag alsnog exact dezelfde voor iedereen.
@@ -8520,13 +8589,20 @@ function opdrachtBakken(userId) {
   };
 }
 
-// Meldt één actie van een lid en rekent de voortgang bij. Wordt vanuit de spellogica
-// aangeroepen; faalt nooit hard (een opdracht mag een spel niet kunnen breken).
+// Eén funnel voor alles wat een lid doet. Drie afnemers, één hook in de spellogica:
+//   1. levenslange teller (voedt de daad-relikwieën)
+//   2. opdracht-voortgang (dag en week)
+//   3. daad-relikwieën
+// Faalt nooit hard: een opdracht of relikwie mag een spel niet kunnen breken.
 // Beloningen lopen via pasScoreAanMetCheck, dus roem/achievements/verbondszegen tellen mee.
 // Bewust GEEN opdrachten op "punten verdienen" — dat zou zichzelf kunnen voeden.
-async function telOpdrachtActie(client, userId, actie, aantal = 1) {
+async function telActie(client, userId, actie, aantal = 1) {
   try {
     if (!userId || !loadMembers()[userId]) return;
+    // Altijd tellen, ook als er vandaag geen opdracht op deze actie staat.
+    const stand = bumpTeller(userId, actie, aantal);
+    await controleerPrestaties(client, userId, actie, stand);
+
     const actief = actieveOpdrachten().filter(o => o.actie === actie);
     if (!actief.length) return;
     const { alles, dag, week } = opdrachtBakken(userId);
@@ -8547,6 +8623,9 @@ async function telOpdrachtActie(client, userId, actie, aantal = 1) {
       const bijnaam = loadMembers()[userId]?.bijnaam || 'Een volgeling';
       await pasScoreAanMetCheck(client, userId, o.beloning, { channelId: process.env.SLACK_CHANNEL_ID });
       logGebeurtenis('opdracht', userId, `${bijnaam} volbracht de ${o.soort === 'dag' ? 'dagopdracht' : 'weekopdracht'} "${o.tekst}" (+${o.beloning})`);
+      // Voltooide opdrachten zijn zelf ook een daad — voedt de 'plichtsgetrouw'-relikwieën.
+      // Directe teller + check i.p.v. telActie(), om herintreden in deze functie te vermijden.
+      await controleerPrestaties(client, userId, 'opdracht_klaar', bumpTeller(userId, 'opdracht_klaar', 1));
       // Dagopdrachten blijven stil (drie per lid per dag zou het kanaal verzuipen) — die zie
       // je in je App Home. Weekopdrachten zijn zeldzaam genoeg voor een verkondiging.
       if (o.soort === 'week') {
@@ -8576,7 +8655,7 @@ function opdrachtOverzicht(userId) {
 
 registreerFeature({
   naam: 'opdrachten',
-  state: ['opdrachten.json'],
+  state: ['opdrachten.json', 'tellers.json'],
   help: [{ gebruik: '/kroketgod opdrachten', verwacht: 'uw dagelijkse en wekelijkse opdrachten met voortgang en beloning' }],
   homeOrde: 20, // vlak onder de statuskaart: dit is waar je je dag mee begint
   home: ({ userId, verbannen }) => {
@@ -8832,6 +8911,20 @@ function bouwAppHomeBlocks(userId, melding = '') {
       `${bingo.opdrachten.map((o, i) => `> ${i + 1}. ${o}${eigen.includes(i) ? ' ✅' : ''}`).join('\n')}\n` +
       '_Claim met_ `/kroketgod bingo [nummer] [bewijs]`' } });
   }
+
+  // ── Kaart: relikwieën (verdiend + de eerstvolgende daad om naar toe te werken) ──
+  const verdiendeIds = new Set(loadAchievements()[userId] || []);
+  const verdiendeRel = ACHIEVEMENTS.filter(a => verdiendeIds.has(a.id));
+  const tellersEigen = loadTellers()[userId] || {};
+  // Bijna-binnen: daad-relikwieën waar al voortgang op zit, dichtstbij eerst.
+  const bijna = ACHIEVEMENTS
+    .filter(a => a.actie && !verdiendeIds.has(a.id) && (tellersEigen[a.actie] || 0) > 0)
+    .sort((a, b) => (b.doel - (tellersEigen[b.actie] || 0) > a.doel - (tellersEigen[a.actie] || 0) ? -1 : 1))
+    .slice(0, 3);
+  blocks.push(...homeKaartKop(`🏆 RELIKWIEËN (${verdiendeRel.length}/${ACHIEVEMENTS.length})`));
+  blocks.push({ type: 'section', text: { type: 'mrkdwn', text:
+    (verdiendeRel.length ? verdiendeRel.map(a => a.naam).join(' · ') : '_Nog geen relikwieën verworven._') +
+    (bijna.length ? `\n\n*Bijna binnen*\n${bijna.map(a => `> ${homeVoortgangInline(Math.min(a.doel, tellersEigen[a.actie] || 0), a.doel)} ${a.naam}`).join('\n')}` : '') } });
 
   // ── Kaart: ranglijst (balkgrafiek in dashboard-stijl) ──
   blocks.push(...homeKaartKop('🏆 RANGLIJST DEZE WEEK'));
@@ -9222,6 +9315,7 @@ async function laatVeilingHamerVallen() {
   geefPowerupMetDuur(geldig.userId, artefact.grantAls || artefact.key, artefact.duurUren || 168);
   const naam = members[geldig.userId]?.bijnaam || 'een volgeling';
   logGebeurtenis('veiling', geldig.userId, `${naam} won ${artefact.naam} op de Grote Veiling voor ${geldig.bod} punten`);
+  await telActie(app.client, geldig.userId, 'veiling_gewonnen');
   await updateVeilingBericht(app.client, veiling); // bord toont nu de winnaar
   await postToChannel(app.client, process.env.SLACK_CHANNEL_ID,
     `🔨 *DE HAMER VALT* 🔨\n\n> ${artefact.naam} gaat voor *${geldig.bod} kroketpunten* naar… *${naam}*!\n> _${artefact.uitleg}._\n\n— De Hoge Frituurraad`);
