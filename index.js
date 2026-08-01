@@ -6875,7 +6875,10 @@ async function stuurWeekSamenvatting(client, { reset = true } = {}) {
 
   // Bouw een leesbare gebeurtenissenlijst voor de AI.
   // @mentions als <@USERID> zodat Slack ze correct rendert — AI mag deze NIET aanpassen.
-  const eventLijst = data.events.map(e => {
+  // De dagelijkse gave hoort niet in de weekrede: vijf regels "ontving de dagelijkse gave" op
+  // rij zouden alsnog laten zien wie er structureel bijgestuurd wordt. Het is bovendien ruis —
+  // de rede kiest hooguit een handvol hoogtepunten.
+  const eventLijst = data.events.filter(e => !/dagelijkse gave/i.test(e.beschrijving || '')).map(e => {
     const isAnoniem = !e.userId;
     const bijnaam = isAnoniem ? 'Anonieme volgeling' : (members[e.userId]?.bijnaam || 'Onbekend');
     const naamDeel = isAnoniem ? 'Anoniem' : `${bijnaam} (<@${e.userId}>)`;
@@ -7790,6 +7793,31 @@ async function voerEer(client, geverId, ontvangerIds, reden, channelId) {
   return { ok: true, tekst: `_${namen.join(' en ')} ${ontvangers.length === 1 ? 'is' : 'zijn'} geëerd. De Kroket God heeft het bevestigd in het kanaal._` };
 }
 
+// Verzachting van Vetbad-verliezen voor wie achterloopt. Bewust géén kansbonus (die maakt het
+// spel winstgevend en print punten bij, zie getGeluk), maar bij een verlies soms één punt terug.
+//
+// Waarom precies zó: de speelruimte is het huisvoordeel van 5%, en die is klein. Een vaste
+// procentuele demping werkt niet met hele punten — 10% van 7 is 6,3, afgerond 6, en dat is een
+// korting van 14% waardoor de EV positief wordt. Daarom een KANS op één punt teruggave:
+//   EV = 0,18·s + 0,27·s − 0,5·s + 0,5·r  met r = teruggavekans
+//   EV ≤ 0  ⟺  r ≤ 0,1·s
+// Bij r = 0,1·s·achterstand blijft de EV exact ≤ 0 bij élke inzet, zonder afrondingslek.
+// Gevolg: hoe hoger je inzet en hoe verder je achterloopt, hoe vaker de Raad de klap dempt.
+function vetbadTeruggave(userId, inzet) {
+  try {
+    if (inzet <= 1) return 0; // van één punt valt niets te dempen zonder het gratis te maken
+    const scores = loadScores();
+    const alle = Object.keys(loadMembers()).map(id => scores[id] || 0);
+    const leider = Math.max(...alle, 0);
+    if (leider <= 0) return 0;
+    const eigen = scores[userId] || 0;
+    if (eigen >= leider) return 0; // koploper krijgt geen demping
+    const achterstand = (leider - eigen) / leider; // 0 = koploper, 1 = op nul
+    const kans = Math.min(1, 0.1 * inzet) * achterstand;
+    return Math.random() < kans ? 1 : 0;
+  } catch (_) { return 0; }
+}
+
 const VETBAD_MAX_INZET = 10;
 const VETBAD_BASIS_PER_DAG = 5; // rang-voorrechten kunnen dit verhogen, zie offerLimiet()
 
@@ -7845,10 +7873,15 @@ async function voerOffer(client, userId, inzet, channelId) {
     delta = 0;
     kop = '〰️ *HET VET BLIJFT KALM* 〰️';
     regel = `Het oppervlak rimpelt nauwelijks. ${bijnaam} krijgt de ${inzet} kroketpunten ongedeerd terug — geen winst, geen verlies.`;
-  } else {                           // 50% — verlies (−inzet)
-    delta = -inzet;
+  } else {                           // 50% — verlies (−inzet, gedempt voor wie achterloopt)
+    // Minstens 1 punt verlies, anders zou een kleine inzet gratis worden en kantelt de EV.
+    const verlies = Math.max(1, inzet - vetbadTeruggave(userId, inzet));
+    delta = -verlies;
     kop = '💀 *HET VET VERZWELGT* 💀';
-    regel = `Een dorre sis, dan stilte. Het Grote Vetbad slokt de ${inzet} kroketpunten van ${bijnaam} op en geeft niets terug.`;
+    // Noem het WERKELIJK verloren aantal, zonder te verklappen dat er gedempt is: het bericht
+    // klopt dan met de saldomutatie, en een grillig vetbad dat niet altijd alles houdt past
+    // binnen het karakter. Wie geholpen wordt, blijft daarmee onzichtbaar.
+    regel = `Een dorre sis, dan stilte. Het Grote Vetbad slokt *${verlies}* kroketpunt${verlies === 1 ? '' : 'en'} van ${bijnaam} op en geeft niets terug.`;
   }
   if (delta !== 0) pasScoreAan(userId, delta);
   logGebeurtenis('offer', userId, `${bijnaam} offerde ${inzet} aan het Vetbad → ${delta >= 0 ? '+' : ''}${delta}`);
@@ -8990,12 +9023,17 @@ planCron('30 12 * * 1-5', async () => {
       // Hoe verder achter, hoe meer steun — maar nooit meer dan STEUN_MAX.
       const bedrag = Math.max(1, Math.min(STEUN_MAX, Math.ceil((grens - eigen) / grens * STEUN_MAX)));
       await pasScoreAanMetCheck(app.client, id, bedrag, { channelId: process.env.SLACK_CHANNEL_ID });
-      logGebeurtenis('bedelarij', id, `${lid.bijnaam} ontving ${bedrag} kroketpunt(en) steun van de Frituurraad (stand ${eigen}, koploper ${leider})`);
+      // Neutraal logtype en neutrale omschrijving: 'bedelarij' met "stand X, koploper Y" verried
+      // in het weekoverzicht precies wie er bijgestuurd werd.
+      logGebeurtenis('score', id, `${lid.bijnaam} ontving de dagelijkse gave (+${bedrag})`);
       geholpen.push(`*${lid.bijnaam}* +${bedrag}`);
     }
     if (!geholpen.length) return;
+    // De gebeurtenis blijft zichtbaar — anders stijgen saldi zonder verklaring — maar de REDEN
+    // niet. Een grillig gulle Kroket God past in het karakter; "wie achterloopt krijgt steun"
+    // zou verklappen wie er geholpen wordt.
     await postToChannel(app.client, process.env.SLACK_CHANNEL_ID,
-      `🥔 *STEUN VAN DE HOGE FRITUURRAAD* 🥔\n\n> De Raad duldt geen honger in het genootschap. Wie ver achterop is geraakt ontvangt bijstand:\n> ${geholpen.join(' · ')}\n> _De frituur is voor allen._\n\n— De Hoge Frituurraad`);
+      `🥔 *DE DAGELIJKSE GAVE* 🥔\n\n> De Kroket God strooit met gunsten zoals het vet met spatten: onberekenbaar, maar nooit zonder reden.\n> Vandaag deelt hij uit aan ${geholpen.join(' · ')}.\n> _De frituur beweegt in raadselen._\n\n— De Hoge Frituurraad`);
   } catch (err) {
     console.error('Fout bij dagelijkse steun:', err);
   }
