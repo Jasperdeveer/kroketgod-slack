@@ -61,6 +61,24 @@ const {
 
 // ── App initialisatie ──────────────────────────────────────────────────────────
 let isReady = false; // wordt true na app.start() — gebruikt door health endpoint
+
+// ── Waakhond op de Slack-verbinding ───────────────────────────────────────────
+// Aanleiding: de Pi verloor tijdelijk DNS, waardoor de bot `slack.com` niet meer kon opzoeken
+// (getaddrinfo EAI_AGAIN). Het proces bleef draaien en /health bleef "ok" melden, terwijl de bot
+// in Slack muisstil was — de storing was alleen te zien door in het foutenlog te kijken.
+// Daarom nu: elke minuut een lichte auth.test, /health vertelt de waarheid, en bij aanhoudende
+// onbereikbaarheid stopt het proces zodat pm2 het opnieuw start (met een frisse verbinding).
+let slackLaatstOk = Date.now();
+let slackFouten = 0;
+let slackLaatsteFout = null;
+let laatsteZelfherstart = 0;
+const SLACK_MAX_FOUTEN = 5;                       // ~5 minuten onbereikbaar
+const ZELFHERSTART_PAUZE_MS = 30 * 60_000;        // hoogstens één zelfherstart per half uur
+
+// Is de bot niet alleen opgestart, maar ook daadwerkelijk verbonden met Slack?
+function slackGezond() {
+  return isReady && slackFouten < SLACK_MAX_FOUTEN;
+}
 let BOT_USER_ID = null; // eigen Slack user-ID — opgehaald bij startup via auth.test
 
 const app = new App({
@@ -78,8 +96,19 @@ const app = new App({
       path: '/health',
       method: ['GET'],
       handler: (req, res) => {
-        res.writeHead(isReady ? 200 : 503, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ status: isReady ? 'ok' : 'starting', ts: Date.now() }));
+        // Eerlijk antwoord: 200 alleen als de bot óók Slack kan bereiken. Voorheen gaf dit "ok"
+        // terwijl de bot al minuten onbereikbaar was, waardoor een storing pas opviel als iemand
+        // klaagde. Een monitoring-ping op dit endpoint ziet het nu direct.
+        const gezond = slackGezond();
+        const status = !isReady ? 'starting' : (gezond ? 'ok' : 'slack-onbereikbaar');
+        res.writeHead(gezond ? 200 : 503, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          status,
+          slackLaatstOkSeconden: Math.round((Date.now() - slackLaatstOk) / 1000),
+          slackMisluktePogingen: slackFouten,
+          slackLaatsteFout: slackLaatsteFout,
+          ts: Date.now(),
+        }));
       },
     },
     {
@@ -8999,6 +9028,40 @@ planCron('30 8 * * *', async () => {
   }
 }, { timezone: 'Europe/Amsterdam' });
 
+// ── Waakhond: elke minuut controleren of Slack bereikbaar is ───────────────────
+// auth.test is de lichtste call die er is (Tier 4, ruim binnen de limieten) en raakt geen
+// LLM-quota. Bij aanhoudende onbereikbaarheid stopt het proces; pm2 start het opnieuw met een
+// frisse Socket Mode-verbinding. Dat is nodig omdat een kapotte verbinding zich niet altijd
+// zelf herstelt: bij de DNS-storing bleef de bot uren stil terwijl het proces gezond leek.
+async function controleerSlackVerbinding() {
+  if (!isReady) return; // nog aan het opstarten
+  try {
+    await app.client.auth.test();
+    if (slackFouten > 0) {
+      console.log(`✓ Slack weer bereikbaar na ${slackFouten} mislukte controle(s).`);
+    }
+    slackLaatstOk = Date.now();
+    slackFouten = 0;
+    slackLaatsteFout = null;
+  } catch (err) {
+    slackFouten++;
+    slackLaatsteFout = err.data?.error || err.code || err.message || 'onbekend';
+    const minuten = Math.round((Date.now() - slackLaatstOk) / 60_000);
+    console.error(`⚠️ Slack onbereikbaar (${slackFouten}× achter elkaar, ${minuten} min): ${slackLaatsteFout}`);
+
+    // Zelfherstel, maar hoogstens één keer per half uur: blijft de oorzaak bestaan (DNS plat,
+    // internet eruit), dan heeft doorstarten geen zin en zou een herstartlus alleen het log
+    // vervuilen en de spelstaat-writes onderbreken.
+    if (slackFouten >= SLACK_MAX_FOUTEN && Date.now() - laatsteZelfherstart > ZELFHERSTART_PAUZE_MS) {
+      laatsteZelfherstart = Date.now();
+      console.error(`🔁 Slack ${SLACK_MAX_FOUTEN} minuten onbereikbaar — proces stopt zodat pm2 opnieuw start.`);
+      setTimeout(() => process.exit(1), 1000); // even ruimte om het log weg te schrijven
+    }
+  }
+}
+
+planCron('* * * * *', controleerSlackVerbinding, { timezone: 'Europe/Amsterdam' });
+
 // ── Dagelijkse steun van de Frituurraad ────────────────────────────────────────
 // Waar de redistributie WEL hoort: bij de puntenbronnen. Wie ver achterloopt op de koploper
 // krijgt elke werkdag een kleine steun. Bewust hier en niet in het Vetbad: een kansbonus tegen
@@ -9792,7 +9855,12 @@ async function bouwDashboardData() {
     providerOpties: [...new Set(providers.map(p => p.provider))],
     nu,
     bot: {
-      status: isReady ? 'online' : 'opstarten',
+      // 'slack-onbereikbaar' is een echte toestand: het proces leeft, maar de bot is stil in
+      // Slack. Zonder dit onderscheid leek een DNS-storing gewoon "online".
+      status: !isReady ? 'opstarten' : (slackGezond() ? 'online' : 'slack-onbereikbaar'),
+      slackLaatstOkSec: Math.round((Date.now() - slackLaatstOk) / 1000),
+      slackMisluktePogingen: slackFouten,
+      slackLaatsteFout: slackLaatsteFout,
       uptimeSec: Math.round(process.uptime()),
       memMb: Math.round(process.memoryUsage().rss / 1048576),
       stemming: stemming?.naam || '—',
