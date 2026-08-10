@@ -9584,12 +9584,11 @@ function bouwDossierBlok(userId) {
 // De tweede drempel ligt veel hoger, want knoppen indrukken is óók meedoen; het duurt alleen
 // langer voordat het als verdwijnen telt.
 const TRIBUNAAL_DREMPEL_DAGEN   = 7;   // volledige stilte waarna een tribunaal mag worden gestart
-const TRIBUNAAL_WOORD_DAGEN     = 21;  // wel spelen, maar zo lang geen woord gezegd
+const TRIBUNAAL_WOORD_DAGEN     = 12;  // wel spelen, maar zo lang geen woord gezegd
 const TRIBUNAAL_POR_DAGEN       = 5;   // vriendelijke por vooraf, alleen naar het lid zelf
-// Twee pormomenten op de zwijg-route: een vriendelijk seintje na een week, en een dringende
-// herinnering kort voor de drempel. Alleen dat laatste zou 14 dagen stilte laten vallen voordat
-// iemand iets hoort; alleen het eerste zou vlak voor de drempel geen waarschuwing meer geven.
-const TRIBUNAAL_WOORD_POR_DAGEN = [7, 18];
+// Por op de zwijg-route: na een week, dus vijf dagen vóór de drempel. Een lijst, zodat er
+// later pormomenten bij kunnen zonder de logica te veranderen.
+const TRIBUNAAL_WOORD_POR_DAGEN = [7];
 const TRIBUNAAL_GENADE_UREN     = 24;  // tussen publieke waarschuwing en opening van de stemming
 const TRIBUNAAL_STEM_UREN       = 48;
 const TRIBUNAAL_QUORUM          = 0.60; // aandeel van de stemgerechtigden dat moet stemmen
@@ -10257,22 +10256,16 @@ async function verwerkTribunaalKlok(client) {
     const porStilte = stil === TRIBUNAAL_POR_DAGEN;
     const porZwijgen = TRIBUNAAL_WOORD_POR_DAGEN.includes(woord);
     if (!porStilte && !porZwijgen) continue;
-    // Vroege por = vriendelijk seintje; late por = het wordt menens.
-    const vroeg = porZwijgen && woord === Math.min(...TRIBUNAAL_WOORD_POR_DAGEN);
     try {
       const tekst = porStilte
         ? `👁️ _${lid.bijnaam}, de Kroket God mist u. U bent ${stil} dagen volledig stil._\n` +
           `_Over ${TRIBUNAAL_DREMPEL_DAGEN - stil} dag(en) kan de Raad een Tribunaal der Vergetelheid tegen u openen._\n` +
           `_Bent u simpelweg weg? Meld het met \`/kroketgod afwezig 14\` en er gebeurt niets. Eén bericht is trouwens al genoeg._`
-        : vroeg
-          ? `👁️ _${lid.bijnaam}, u speelt wel mee, maar heeft een week lang niets gezegd._\n` +
-            `_Geen probleem en geen dreiging — de Kroket God merkt het alleen op. Pas vanaf ${TRIBUNAAL_WOORD_DAGEN} dagen zwijgen kan de Raad er een tribunaal over openen, dus u heeft nog ${TRIBUNAAL_WOORD_DAGEN - woord} dagen._\n` +
-            `_Eén bericht in het kanaal zet de teller terug. Bent u weg? \`/kroketgod afwezig 14\`._`
-          : `👁️ _${lid.bijnaam}, u speelt wel mee maar heeft ${woord} dagen niets gezegd._\n` +
-            `_Over ${TRIBUNAAL_WOORD_DAGEN - woord} dag(en) kan de Raad daarover een Tribunaal der Vergetelheid openen — meespelen weegt daar niet tegen op._\n` +
-            `_Eén bericht in het kanaal is genoeg. Bent u weg? \`/kroketgod afwezig 14\`._`;
+        : `👁️ _${lid.bijnaam}, u speelt wel mee, maar heeft ${woord} dagen niets gezegd._\n` +
+          `_Over ${TRIBUNAAL_WOORD_DAGEN - woord} dag(en) kan de Raad daarover een Tribunaal der Vergetelheid openen — meespelen weegt daar niet tegen op._\n` +
+          `_Eén bericht in het kanaal zet de teller terug. Bent u weg? \`/kroketgod afwezig 14\`._`;
       await postEphemeral(client, process.env.SLACK_CHANNEL_ID, id, tekst);
-      console.log(`👁️ Por gestuurd naar ${lid.bijnaam} (${porStilte ? `${stil} dagen stil` : `${woord} dagen zwijgen${vroeg ? ', vroeg seintje' : ''}`}).`);
+      console.log(`👁️ Por gestuurd naar ${lid.bijnaam} (${porStilte ? `${stil} dagen stil` : `${woord} dagen zwijgen`}).`);
     } catch (_) {}
   }
 }
