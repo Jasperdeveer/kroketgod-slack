@@ -2439,7 +2439,10 @@ const COMMANDO_LIJST = [
   { gebruik: '/kroketgod ranglijst',  verwacht: 'wie staat waar in de hiërarchie' },
   { gebruik: '/kroketgod duel [naam]', verwacht: 'heilig frituurduel — winnaar pakt het punt van de verliezer (1x/dag)' },
   { gebruik: '/kroketgod roof [naam]', verwacht: 'de Grote Kroketroof — 40% kans op een flinke buit (tot 8 punten), anders 2 punten smartengeld (1x/week)' },
-  { gebruik: '/kroketgod offer [aantal]', verwacht: 'offer kroketpunten aan het Grote Vetbad — fortuin of ondergang (5x/dag)' },
+  // GEEN interpolatie van VETBAD_MAX_INZET hier: deze tabel is een module-level literal die bij
+  // het laden wordt geëvalueerd, terwijl die constante veel later wordt gedeclareerd. Dat gaf een
+  // temporal-dead-zone-crash bij opstarten die `node -c` niet ziet.
+  { gebruik: '/kroketgod offer [aantal]', verwacht: 'offer kroketpunten aan het Grote Vetbad — fortuin of ondergang. Hoogstens de helft van uw bezit per offer; `offer` zonder getal toont uw eigen maximum en hoeveel offers u vandaag nog heeft' },
   { gebruik: '/kroketgod troon',      verwacht: 'aanschouw de Frituurkoning; grijp de kroon met `troon uitdagen`' },
   { gebruik: '/kroketgod winkel',     verwacht: 'de Heilige Aflatenhandel — besteed kroketpunten aan power-ups en status (ook met koopknoppen in de Home-tab van de bot)' },
   { gebruik: '/kroketgod gok krokant|slap', verwacht: 'voorspel het oordeel over de Kroket van de Dag (+2 bij juist)' },
@@ -8413,12 +8416,30 @@ function vetbadTeruggave(userId, inzet) {
 const VETBAD_MAX_INZET = 10;
 const VETBAD_BASIS_PER_DAG = 5; // rang-voorrechten kunnen dit verhogen, zie offerLimiet()
 
+// Het maximum dat dit lid NU mag offeren: nooit meer dan VETBAD_MAX_INZET, en nooit meer dan de
+// helft van het bezit. Bestaat als aparte functie omdat de modal, de hulptekst en de toets
+// hetzelfde getal moeten noemen — anders krijg je een invoerveld dat een afwijzing garandeert.
+function offerPlafond(userId) {
+  const punten = loadScores()[userId] || 0;
+  if (punten < 1) return 0;
+  return Math.min(VETBAD_MAX_INZET, Math.max(1, Math.floor(punten / 2)));
+}
+
 async function voerOffer(client, userId, inzet, channelId) {
   const members = loadMembers();
   if (!members[userId]) return { ok: false, tekst: 'Alleen leden van de Kroket Illuminati mogen offeren aan het Grote Vetbad.' };
   if (isVerbannen(userId)) return { ok: false, tekst: '_Een balling mag het heilige Vetbad niet naderen. Toon eerst berouw._' };
   if (!Number.isInteger(inzet) || inzet < 1) {
-    return { ok: false, tekst: '_Hoeveel kroketpunten offert u? Gebruik `/kroketgod offer [aantal]` — bijvoorbeeld `offer 3`._' };
+    // Geen algemeen voorbeeld maar UW cijfers: het plafond hangt van uw bezit af, en zonder dat
+    // getal blijft "offer 10" een raadsel dat elke keer opnieuw wordt afgewezen.
+    const punten = loadScores()[userId] || 0;
+    const max = offerPlafond(userId);
+    const vetbadNu = readJSON('vetbad.json', {});
+    const vandaag = new Intl.DateTimeFormat('nl-NL', { timeZone: 'Europe/Amsterdam' }).format(new Date());
+    const gedaan = vetbadNu[userId]?.datum === vandaag ? (vetbadNu[userId].aantal || 0) : 0;
+    return { ok: false, tekst: max < 1
+      ? `_U bezit ${punten} kroketpunten en kunt dus niets offeren. Verdien eerst iets; het Vetbad neemt geen schuldbrieven._`
+      : `🎲 *HET GROTE VETBAD*\n\n> Uw bezit: *${punten}* kroketpunten\n> U mag nu hoogstens *${max}* per offer inzetten (de helft van uw bezit, met een absoluut plafond van ${VETBAD_MAX_INZET})\n> Offers vandaag: *${gedaan}/${offerLimiet(userId)}*\n\nGebruik \`/kroketgod offer [aantal]\` — bijvoorbeeld \`offer ${max}\`.` };
   }
   if (inzet > VETBAD_MAX_INZET) {
     return { ok: false, tekst: `_Het Vetbad aanvaardt hoogstens ${VETBAD_MAX_INZET} kroketpunten per offer. Hoogmoed wordt niet beloond._` };
@@ -8433,7 +8454,7 @@ async function voerOffer(client, userId, inzet, channelId) {
   // bodemloze.
   const plafond = Math.max(1, Math.floor((scores[userId] || 0) / 2));
   if (inzet > plafond) {
-    return { ok: false, tekst: `_Het Vetbad aanvaardt hoogstens de helft van uw bezit: *${plafond}* kroketpunt${plafond === 1 ? '' : 'en'} (u bezit er ${scores[userId] || 0}). De Hoge Frituurraad beschermt u tegen uzelf._` };
+    return { ok: false, tekst: `_Het Vetbad aanvaardt hoogstens de helft van uw bezit: *${plafond}* kroketpunt${plafond === 1 ? '' : 'en'} (u bezit er ${scores[userId] || 0}). Uw offer van ${inzet} is dus geweigerd — probeer \`offer ${plafond}\`. De Hoge Frituurraad beschermt u tegen uzelf._` };
   }
   // Max 5 offers per dag — het Vetbad is geen gokhal.
   const vetbad = readJSON('vetbad.json', {});
@@ -8442,6 +8463,7 @@ async function voerOffer(client, userId, inzet, channelId) {
   if (rec.aantal >= offerLimiet(userId)) {
     return { ok: false, tekst: `_U hebt vandaag al ${offerLimiet(userId)}× geofferd. Het Vetbad heeft genoeg van u gezien — keer morgen terug._` };
   }
+  console.log(`🎲 Offer van ${members[userId].bijnaam}: ${inzet} punt(en) (bezit ${scores[userId]}, plafond ${plafond}, ${rec.aantal + 1}/${offerLimiet(userId)} vandaag).`);
   rec.aantal += 1;
   vetbad[userId] = rec;
   writeJSON('vetbad.json', vetbad);
@@ -10859,11 +10881,13 @@ app.action('open_offer', async ({ ack, body, client }) => {
         submit: { type: 'plain_text', text: 'Offeren' },
         close: { type: 'plain_text', text: 'Sluiten' },
         blocks: [
-          { type: 'section', text: { type: 'mrkdwn', text: `🎲 *Offer aan het Grote Vetbad.*\n6% jackpot (×3) · 27% verdubbeld · 17% ongedeerd terug · 50% verzwolgen.\nMaximaal ${VETBAD_MAX_INZET} punten per offer, ${offerLimiet(body.user.id)}× per dag.` } },
+          // max_value op het ECHTE plafond (helft van het bezit), niet op de absolute limiet —
+          // anders biedt het veld een getal aan dat gegarandeerd wordt afgewezen.
+          { type: 'section', text: { type: 'mrkdwn', text: `🎲 *Offer aan het Grote Vetbad.*\n6% jackpot (×3) · 27% verdubbeld · 17% ongedeerd terug · 50% verzwolgen.\nU bezit *${loadScores()[body.user.id] || 0}* punten en mag nu hoogstens *${offerPlafond(body.user.id)}* per offer inzetten (helft van uw bezit, absoluut plafond ${VETBAD_MAX_INZET}), ${offerLimiet(body.user.id)}× per dag.` } },
           {
             type: 'input', block_id: 'inzet',
-            label: { type: 'plain_text', text: 'Hoeveel kroketpunten offert u?' },
-            element: { type: 'number_input', action_id: 'aantal', is_decimal_allowed: false, min_value: '1', max_value: String(VETBAD_MAX_INZET) },
+            label: { type: 'plain_text', text: `Hoeveel kroketpunten offert u? (1–${Math.max(1, offerPlafond(body.user.id))})` },
+            element: { type: 'number_input', action_id: 'aantal', is_decimal_allowed: false, min_value: '1', max_value: String(Math.max(1, offerPlafond(body.user.id))) },
           },
         ],
       },
