@@ -5153,41 +5153,26 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
       return;
     }
 
-    // ── Gele kaart (formele waarschuwing)
-    if (input.startsWith('gelekaart ') || input.startsWith('waarschuw ')) {
+    // ── Gele kaart: VOORDRACHT, waar de Raad over stemt (zie startGeleKaartPoll) ──
+    // Dit deelde voorheen direct een kaart uit, en bij een tweede kaart in dezelfde week
+    // meteen een verbanning — één lid kon dus alleen beslissen dat een ander eruit ging.
+    if (input.startsWith('gelekaart ') || input.startsWith('waarschuw ') || input === 'gelekaart' || input === 'waarschuw') {
       const rest = input.replace(/^(gelekaart|waarschuw)\s*/i, '').trim();
       if (!rest) {
-        await respond('_Gebruik: /kroketgod gelekaart [naam] [reden]_');
+        await respond({ text: '_Gebruik: `/kroketgod gelekaart [naam] [reden]`. De Raad stemt daarna vijf minuten met emoji\'s._', response_type: 'ephemeral' });
+        return;
+      }
+      if (!members[command.user_id]) {
+        await respond({ text: 'Alleen leden van de Kroket Illuminati mogen een gele kaart voordragen.', response_type: 'ephemeral' });
         return;
       }
       const { gevonden, reden } = parseerNaamEnReden(rest);
       if (!gevonden) {
-        await respond('De Kroket God kent geen volgeling met die naam.');
+        await respond({ text: 'De Kroket God kent geen volgeling met die naam.', response_type: 'ephemeral' });
         return;
       }
-      const [doelwitId, lid] = gevonden;
-
-      // Check of ze al een gele kaart hebben deze week
-      const hadAl = heeftGeleKaartDezeWeek(doelwitId);
-
-      if (hadAl) {
-        // Tweede overtreding → directe ban met escalatie
-        const redenTekst = reden || 'herhaalde overtreding na gele kaart';
-        await legGeleKaartBanOp(client, command.channel_id, doelwitId, lid.bijnaam, redenTekst, redenTekst, null, command.user_id);
-      } else {
-        // Eerste gele kaart → formele waarschuwing
-        geefGeleKaart(doelwitId, reden || 'overtreding van de snackleer');
-        const redenZin = reden ? `Reden: "${reden}".` : '';
-        const tekst = await kroketResponse(
-          `De Kroket God geeft ${lid.bijnaam} een officiële gele kaart — een formele waarschuwing. ${redenZin} ` +
-          `Dit is geen vonnis, maar een laatste kans. Kondig aan dat bij een volgende overtreding deze week een verbanning volgt. ` +
-          `Gebruik een plechtig maar nog niet veroordelend format — de HERDER-rol past hier beter dan de RECHTER. ` +
-          `Verwijs naar de gele kaart als een heilig instrument van de Hoge Frituurraad. Geen inleidingszin.`,
-          400, false
-        );
-        await postToChannel(client, command.channel_id, `<@${doelwitId}>\n\n${tekst}`);
-        logGebeurtenis('gelekaart', doelwitId, `${lid.bijnaam} ontving een gele kaart${reden ? `: ${reden}` : ''}`, null, command.user_id);
-      }
+      const uitkomst = await startGeleKaartPoll(client, gevonden[0], command.user_id, reden, command.channel_id);
+      await respond({ text: uitkomst.tekst, response_type: 'ephemeral' });
       return;
     }
 
@@ -9582,6 +9567,262 @@ function bouwDossierBlok(userId) {
 
 
 // ══════════════════════════════════════════════════════════════════════════════
+// GELE KAART OP VOORDRACHT: de Raad stemt, de Kroket God weegt dubbel
+// ══════════════════════════════════════════════════════════════════════════════
+// Een gele kaart werd voorheen DIRECT uitgedeeld door wie het commando typte — en bij een
+// tweede kaart in dezelfde week volgde meteen een verbanning. Eén lid kon dus in z'n eentje
+// een ander laten verbannen. Nu is `gelekaart [naam]` een VOORDRACHT: de Raad stemt vijf
+// minuten met emoji's, en de Kroket God stemt mee met een stem die dubbel weegt.
+//
+// De stemmen worden bij SLUITING uit Slack gelezen (`reactions.get`) in plaats van per
+// reactie-event bijgehouden. Daardoor kan geen stem verloren gaan door een gemist of dubbel
+// event, en werkt het terugnemen van een reactie automatisch — geen eigen stemadministratie.
+//
+// Bij gelijkspel volgt GEEN kaart: bij twijfel geen straf, dezelfde regel als bij het tribunaal.
+
+const GELEKAART_POLL_MINUTEN   = 5;
+const GELEKAART_GOD_KANS       = 0.65; // kans dat de Kroket God 'terecht' stemt
+const GELEKAART_GOD_GEWICHT    = 2;    // zijn stem weegt dubbel
+const GELEKAART_JA   = 'large_yellow_square'; // 🟨 terecht — geef de kaart
+const GELEKAART_NEE  = 'large_green_square';  // 🟩 onterecht — laat hem gaan
+const GELEKAART_COOLDOWN_MIN   = 60;   // na een verworpen voordracht tegen hetzelfde lid
+
+const loadGeleKaartPoll = () => readJSON('gelekaartpoll.json', null);
+const saveGeleKaartPoll = (data) => writeJSON('gelekaartpoll.json', data);
+
+// Opent de stemming. Retourneert { ok, tekst } voor de aanroeper (slash-commando).
+async function startGeleKaartPoll(client, doelwitId, aanklagerId, reden, channelId) {
+  const members = loadMembers();
+  const lid = members[doelwitId];
+  if (!lid) return { ok: false, tekst: 'De Kroket God kent geen volgeling met die naam.' };
+  if (doelwitId === aanklagerId) return { ok: false, tekst: '_Uzelf een gele kaart voordragen is een vorm van boetedoening die de Raad niet erkent._' };
+  if (isVerbannen(doelwitId)) return { ok: false, tekst: `_${lid.bijnaam} is al verbannen. Een gele kaart voegt daar niets aan toe._` };
+
+  const lopend = loadGeleKaartPoll();
+  if (lopend?.actief) {
+    const ander = members[lopend.doelwitId]?.bijnaam || 'een volgeling';
+    return { ok: false, tekst: `_Er loopt al een stemming (over ${ander}). De Raad behandelt één voordracht tegelijk._` };
+  }
+  // Cooldown na een verworpen voordracht: voorkomt dat iemand het blijft proberen tot het lukt.
+  if (lopend && !lopend.actief && lopend.doelwitId === doelwitId && lopend.uitkomst === 'onterecht'
+      && Date.now() - (lopend.beslistTs || 0) < GELEKAART_COOLDOWN_MIN * 60_000) {
+    const rest = Math.ceil((GELEKAART_COOLDOWN_MIN * 60_000 - (Date.now() - lopend.beslistTs)) / 60_000);
+    return { ok: false, tekst: `_De Raad heeft een voordracht tegen ${lid.bijnaam} net verworpen. Wacht nog ${rest} minuut/minuten voordat u het opnieuw voorstelt._` };
+  }
+
+  const hadAlKaart = heeftGeleKaartDezeWeek(doelwitId);
+  const aanklagerNaam = members[aanklagerId]?.bijnaam || 'Een volgeling';
+  const sluitTs = Date.now() + GELEKAART_POLL_MINUTEN * 60_000;
+  const poll = {
+    actief: true, doelwitId, aanklagerId, reden: reden || null, hadAlKaart,
+    gestart: Date.now(), sluitTs, kanaal: channelId || process.env.SLACK_CHANNEL_ID,
+  };
+
+  let bericht;
+  try {
+    bericht = await slackLimiter.schedule(() => client.chat.postMessage({
+      channel: poll.kanaal,
+      text: `Voordracht gele kaart tegen ${lid.bijnaam}`,
+      blocks: bouwGeleKaartPollBlocks(poll),
+    }));
+  } catch (err) {
+    console.error('⚠️ Gele-kaart-stemming plaatsen mislukt:', err.data?.error || err.message);
+    return { ok: false, tekst: '_De Raad kon niet bijeenkomen (Slack weigerde het bericht). Probeer het opnieuw._' };
+  }
+  poll.berichtTs = bericht.ts;
+  poll.kanaal = bericht.channel;
+  saveGeleKaartPoll(poll);
+
+  // Beide emoji's voorzetten, zodat stemmen één klik is en niemand hoeft te zoeken.
+  for (const emoji of [GELEKAART_JA, GELEKAART_NEE]) {
+    try {
+      await slackLimiter.schedule(() => client.reactions.add({ channel: poll.kanaal, timestamp: poll.berichtTs, name: emoji }));
+    } catch (err) {
+      console.warn(`⚠️ Reactie ${emoji} voorzetten mislukt:`, err.data?.error || err.message);
+    }
+  }
+  logGebeurtenis('gelekaart', doelwitId,
+    `${aanklagerNaam} droeg ${lid.bijnaam} voor voor een gele kaart${reden ? `: ${reden}` : ''} — stemming ${GELEKAART_POLL_MINUTEN} min`, null, aanklagerId);
+  return { ok: true, tekst: `_Uw voordracht tegen ${lid.bijnaam} staat in het kanaal. De Raad stemt ${GELEKAART_POLL_MINUTEN} minuten._` };
+}
+
+function bouwGeleKaartPollBlocks(poll) {
+  const members = loadMembers();
+  const naam = members[poll.doelwitId]?.bijnaam || 'onbekend';
+  const aanklager = members[poll.aanklagerId]?.bijnaam || 'een volgeling';
+  const blocks = [
+    { type: 'header', text: { type: 'plain_text', text: '🟨 Voordracht: gele kaart', emoji: true } },
+    { type: 'section', text: { type: 'mrkdwn', text:
+      `*Voorgedragen:* ${naam}\n` +
+      `*Door:* ${aanklager}\n` +
+      (poll.reden ? `*Reden:* _"${poll.reden}"_\n` : '') +
+      (poll.hadAlKaart
+        ? `\n⚠️ *${naam} heeft deze week al een gele kaart.* Wordt deze voordracht toegekend, dan volgt een *verbanning*.`
+        : `\nWordt de voordracht toegekend, dan volgt een formele waarschuwing.`) } },
+  ];
+  if (poll.actief) {
+    const min = Math.max(0, Math.ceil((poll.sluitTs - Date.now()) / 60_000));
+    blocks.push({ type: 'section', text: { type: 'mrkdwn', text:
+      `*Stem met een emoji op dit bericht:*\n` +
+      `> :${GELEKAART_JA}:  terecht — geef de kaart\n` +
+      `> :${GELEKAART_NEE}:  onterecht — laat hem gaan\n\n` +
+      `De Raad heeft nog *~${min} minuut/minuten*. De Kroket God stemt zelf ook mee, en zijn stem weegt *dubbel*.` } });
+  } else {
+    const u = poll.uitslag || {};
+    const kop = poll.uitkomst === 'terecht'
+      ? (poll.hadAlKaart ? '⛔ *TOEGEKEND — VERBANNING*' : '🟨 *TOEGEKEND — GELE KAART*')
+      : '🟩 *VERWORPEN — GEEN KAART*';
+    blocks.push({ type: 'section', text: { type: 'mrkdwn', text:
+      `${kop}\n` +
+      `> Terecht: *${u.terecht ?? 0}* · Onterecht: *${u.onterecht ?? 0}*\n` +
+      `> De Kroket God stemde *${u.god || '?'}* (dubbel geteld).` } });
+  }
+  blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text:
+    `Alleen leden stemmen mee; ${naam} mag zelf ook stemmen. Bij gelijkspel volgt geen kaart — bij twijfel geen straf.` }] });
+  return blocks;
+}
+
+// Leest de stemmen uit Slack. Bewust hier en niet in een reaction-handler: zo telt precies wat
+// er op het moment van sluiten op het bericht staat, inclusief teruggenomen reacties, en kan
+// een gemist event niets bederven.
+async function leesGeleKaartStemmen(client, poll) {
+  const members = loadMembers();
+  const uit = { terecht: [], onterecht: [] };
+  try {
+    const res = await slackLimiter.schedule(() => client.reactions.get({
+      channel: poll.kanaal, timestamp: poll.berichtTs, full: true,
+    }));
+    for (const r of res.message?.reactions || []) {
+      const bak = r.name === GELEKAART_JA ? uit.terecht : r.name === GELEKAART_NEE ? uit.onterecht : null;
+      if (!bak) continue;
+      for (const u of r.users || []) {
+        if (u === BOT_USER_ID) continue;      // de voorgezette reacties van de bot tellen niet
+        if (!members[u]) continue;            // alleen leden hebben stemrecht
+        if (!bak.includes(u)) bak.push(u);
+      }
+    }
+  } catch (err) {
+    console.error('⚠️ Stemmen uitlezen mislukt:', err.data?.error || err.message);
+    return null;
+  }
+  // Wie op BEIDE stemt, stemt op niets — anders zou dubbelstemmen gratis gewicht geven.
+  const dubbel = uit.terecht.filter(u => uit.onterecht.includes(u));
+  if (dubbel.length) {
+    uit.terecht = uit.terecht.filter(u => !dubbel.includes(u));
+    uit.onterecht = uit.onterecht.filter(u => !dubbel.includes(u));
+  }
+  return uit;
+}
+
+// Sluit de stemming, laat de Kroket God stemmen en voert de uitkomst uit.
+async function sluitGeleKaartPoll(client) {
+  const poll = loadGeleKaartPoll();
+  if (!poll?.actief) return null;
+  const members = loadMembers();
+  const lid = members[poll.doelwitId];
+  // Doelwit is weg (gearchiveerd of verbannen tijdens de stemming)? Dan vervalt de zaak.
+  if (!lid || isVerbannen(poll.doelwitId)) {
+    poll.actief = false; poll.uitkomst = 'vervallen'; poll.beslistTs = Date.now();
+    saveGeleKaartPoll(poll);
+    await updateGeleKaartPollBericht(client, poll);
+    return poll;
+  }
+
+  const stemmen = await leesGeleKaartStemmen(client, poll);
+  const terecht = stemmen ? stemmen.terecht.length : 0;
+  const onterecht = stemmen ? stemmen.onterecht.length : 0;
+  // De Kroket God stemt: 65% kans op 'terecht', en zijn stem weegt dubbel.
+  const godTerecht = Math.random() < GELEKAART_GOD_KANS;
+  const totaalTerecht = terecht + (godTerecht ? GELEKAART_GOD_GEWICHT : 0);
+  const totaalOnterecht = onterecht + (godTerecht ? 0 : GELEKAART_GOD_GEWICHT);
+  const toegekend = totaalTerecht > totaalOnterecht; // gelijkspel → geen kaart
+
+  poll.actief = false;
+  poll.uitkomst = toegekend ? 'terecht' : 'onterecht';
+  poll.beslistTs = Date.now();
+  poll.uitslag = {
+    terecht: totaalTerecht, onterecht: totaalOnterecht,
+    ledenTerecht: terecht, ledenOnterecht: onterecht,
+    god: godTerecht ? 'terecht' : 'onterecht',
+  };
+  saveGeleKaartPoll(poll); // vóór de trage acties: idempotent, een tweede aanroep valt op !actief
+  await updateGeleKaartPollBericht(client, poll);
+
+  const naam = lid.bijnaam;
+  const stemBlok =
+    `\n\n⚖️ *DE STEMMING*\n` +
+    `> Terecht: *${totaalTerecht}* · Onterecht: *${totaalOnterecht}*\n` +
+    `> De Kroket God stemde *${godTerecht ? 'terecht' : 'onterecht'}* — zijn stem weegt dubbel.`;
+
+  if (!toegekend) {
+    logGebeurtenis('gelekaart', poll.doelwitId, `Voordracht tegen ${naam} verworpen (${totaalTerecht}-${totaalOnterecht})`);
+    const tekst = await kroketResponseMetVangnet(
+      `De Raad heeft gestemd over een voorgedragen gele kaart tegen ${naam}${poll.reden ? ` wegens "${poll.reden}"` : ''} en de voordracht VERWORPEN ` +
+      `(${totaalTerecht} terecht tegen ${totaalOnterecht} onterecht; uw eigen stem woog dubbel en was "${godTerecht ? 'terecht' : 'onterecht'}"). ` +
+      `Spreek dit uit als een mild maar gezaghebbend oordeel: geen kaart, de zaak is gesloten. 3-4 zinnen. Geen inleidingszin.`,
+      400, false,
+      `🟩 *DE VOORDRACHT IS VERWORPEN* 🟩\n\n> *${naam}* krijgt geen gele kaart. De zaak is gesloten.`
+    );
+    await postToChannel(client, poll.kanaal, tekst + stemBlok);
+    return poll;
+  }
+
+  // Toegekend. Had dit lid deze week al een kaart, dan is dit de tweede overtreding → ban.
+  if (poll.hadAlKaart) {
+    const redenTekst = poll.reden || 'herhaalde overtreding na gele kaart';
+    await postToChannel(client, poll.kanaal,
+      `⛔ *DE RAAD HEEFT GESPROKEN* ⛔\n\n> De voordracht tegen *${naam}* is toegekend, en dit was de tweede kaart deze week.${stemBlok}`);
+    await legGeleKaartBanOp(client, poll.kanaal, poll.doelwitId, naam, redenTekst, redenTekst, null, poll.aanklagerId);
+    return poll;
+  }
+
+  geefGeleKaart(poll.doelwitId, poll.reden || 'overtreding van de snackleer');
+  logGebeurtenis('gelekaart', poll.doelwitId, `${naam} ontving een gele kaart na stemming (${totaalTerecht}-${totaalOnterecht})`, null, poll.aanklagerId);
+  const tekst = await kroketResponseMetVangnet(
+    `De Raad heeft gestemd en een gele kaart voor ${naam} TOEGEKEND${poll.reden ? ` wegens "${poll.reden}"` : ''} ` +
+    `(${totaalTerecht} terecht tegen ${totaalOnterecht} onterecht; uw eigen stem woog dubbel en was "terecht"). ` +
+    `Dit is een formele waarschuwing, geen vonnis: bij een volgende overtreding deze week volgt een verbanning. ` +
+    `Spreek plechtig maar nog niet veroordelend — de HERDER past hier beter dan de RECHTER. 3-5 zinnen. Geen inleidingszin.`,
+    450, false,
+    `🟨 *GELE KAART TOEGEKEND* 🟨\n\n> De Raad kent *${naam}* een formele waarschuwing toe. Bij een volgende overtreding deze week volgt verbanning.`
+  );
+  await postToChannel(client, poll.kanaal, `<@${poll.doelwitId}>\n\n${tekst}${stemBlok}`);
+  return poll;
+}
+
+async function updateGeleKaartPollBericht(client, poll) {
+  if (!poll.berichtTs) return;
+  try {
+    await slackLimiter.schedule(() => client.chat.update({
+      channel: poll.kanaal, ts: poll.berichtTs,
+      text: `Voordracht gele kaart: ${poll.uitkomst || 'in stemming'}`,
+      blocks: bouwGeleKaartPollBlocks(poll),
+    }));
+  } catch (err) {
+    console.error('⚠️ Stembericht bijwerken mislukt:', err.data?.error || err.message);
+  }
+}
+
+// Elke minuut: een verstreken stemming sluiten. Een minuut-cron in plaats van een setTimeout,
+// want een setTimeout overleeft de dagelijkse pm2-herstart niet — en een stemming die nooit
+// sluit blokkeert alle volgende voordrachten.
+planCron('* * * * *', async () => {
+  try {
+    const poll = loadGeleKaartPoll();
+    if (poll?.actief && Date.now() >= poll.sluitTs) await sluitGeleKaartPoll(app.client);
+  } catch (err) {
+    console.error('Fout bij sluiten gele-kaart-stemming:', err);
+  }
+}, { timezone: 'Europe/Amsterdam' });
+
+registreerFeature({
+  naam: 'gelekaart-stemming',
+  state: ['gelekaartpoll.json'],
+  help: [{ gebruik: '/kroketgod gelekaart [naam] [reden]', verwacht: `draag een gele kaart voor; de Raad stemt ${GELEKAART_POLL_MINUTEN} minuten met emoji's en de stem van de Kroket God weegt dubbel` }],
+});
+
+
+// ══════════════════════════════════════════════════════════════════════════════
 // HET TRIBUNAAL DER VERGETELHEID
 // ══════════════════════════════════════════════════════════════════════════════
 // Een procedure om een lid dat volledig verdwenen is uit het genootschap te verwijderen.
@@ -12421,6 +12662,14 @@ async function voerDashboardActie(actie) {
       const uit = await backfillActiviteitUitSlack(app.client);
       if (!uit) return 'Backfill mislukt — kanaalhistorie niet op te halen (zie logs).';
       return `Klok herbouwd uit ${uit.doorzocht} berichten (${uit.dagen} dagen terug):\n` + uit.regels.join('\n');
+    }
+    // Een lopende gele-kaart-stemming nu sluiten, zonder de vijf minuten af te wachten.
+    case 'gelekaartSluiten': {
+      const poll = loadGeleKaartPoll();
+      if (!poll?.actief) return 'Er loopt geen gele-kaart-stemming.';
+      const na = await sluitGeleKaartPoll(app.client);
+      const naam = loadMembers()[na?.doelwitId]?.bijnaam || 'het lid';
+      return `Stemming over ${naam} gesloten: ${na?.uitkomst} (${na?.uitslag?.terecht}-${na?.uitslag?.onterecht}, Kroket God stemde ${na?.uitslag?.god}).`;
     }
     case 'tribunaalKlok': {
       await verwerkTribunaalKlok(app.client);
