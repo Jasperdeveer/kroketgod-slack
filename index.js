@@ -9611,7 +9611,6 @@ async function startGeleKaartPoll(client, doelwitId, aanklagerId, reden, channel
   }
 
   const hadAlKaart = heeftGeleKaartDezeWeek(doelwitId);
-  const aanklagerNaam = members[aanklagerId]?.bijnaam || 'Een volgeling';
   const sluitTs = Date.now() + GELEKAART_POLL_MINUTEN * 60_000;
   const poll = {
     actief: true, doelwitId, aanklagerId, reden: reden || null, hadAlKaart,
@@ -9641,20 +9640,25 @@ async function startGeleKaartPoll(client, doelwitId, aanklagerId, reden, channel
       console.warn(`⚠️ Reactie ${emoji} voorzetten mislukt:`, err.data?.error || err.message);
     }
   }
+  // De beschrijving belandt in het vrijdagse weekoverzicht, dat publiek wordt gepost — dus
+  // GEEN naam van de aanklager erin. `actorId` blijft wel staan: dat is een structureel veld dat
+  // nergens wordt weergegeven, en het maakt misbruik (iemand die blijft voordragen) naspeurbaar.
   logGebeurtenis('gelekaart', doelwitId,
-    `${aanklagerNaam} droeg ${lid.bijnaam} voor voor een gele kaart${reden ? `: ${reden}` : ''} — stemming ${GELEKAART_POLL_MINUTEN} min`, null, aanklagerId);
+    `${lid.bijnaam} werd anoniem voorgedragen voor een gele kaart${reden ? `: ${reden}` : ''} — stemming ${GELEKAART_POLL_MINUTEN} min`, null, aanklagerId);
   return { ok: true, tekst: `_Uw voordracht tegen ${lid.bijnaam} staat in het kanaal. De Raad stemt ${GELEKAART_POLL_MINUTEN} minuten._` };
 }
 
 function bouwGeleKaartPollBlocks(poll) {
   const members = loadMembers();
   const naam = members[poll.doelwitId]?.bijnaam || 'onbekend';
-  const aanklager = members[poll.aanklagerId]?.bijnaam || 'een volgeling';
+  // ANONIEM: wie de voordracht deed staat hier bewust NIET. De aanklacht moet op eigen benen
+  // staan; zichtbaar maken wie hem indiende maakt de gele kaart een instrument om iemand
+  // publiekelijk aan te wijzen. Zelfde keuze als bij de Vloek der Slappe Korst.
   const blocks = [
     { type: 'header', text: { type: 'plain_text', text: '🟨 Voordracht: gele kaart', emoji: true } },
     { type: 'section', text: { type: 'mrkdwn', text:
       `*Voorgedragen:* ${naam}\n` +
-      `*Door:* ${aanklager}\n` +
+      `*Door:* _een anonieme volgeling_\n` +
       (poll.reden ? `*Reden:* _"${poll.reden}"_\n` : '') +
       (poll.hadAlKaart
         ? `\n⚠️ *${naam} heeft deze week al een gele kaart.* Wordt deze voordracht toegekend, dan volgt een *verbanning*.`
@@ -9678,7 +9682,8 @@ function bouwGeleKaartPollBlocks(poll) {
       `> De Kroket God stemde *${u.god || '?'}* (dubbel geteld).` } });
   }
   blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text:
-    `Alleen leden stemmen mee; ${naam} mag zelf ook stemmen. Bij gelijkspel volgt geen kaart — bij twijfel geen straf.` }] });
+    `De voordracht is anoniem — de aanklacht moet op eigen benen staan. Alleen leden stemmen mee; ${naam} mag zelf ook stemmen. ` +
+    `Bij gelijkspel volgt geen kaart — bij twijfel geen straf. Let op: uw emoji-stem is voor iedereen zichtbaar.` }] });
   return blocks;
 }
 
@@ -9772,7 +9777,8 @@ async function sluitGeleKaartPoll(client) {
     const redenTekst = poll.reden || 'herhaalde overtreding na gele kaart';
     await postToChannel(client, poll.kanaal,
       `⛔ *DE RAAD HEEFT GESPROKEN* ⛔\n\n> De voordracht tegen *${naam}* is toegekend, en dit was de tweede kaart deze week.${stemBlok}`);
-    await legGeleKaartBanOp(client, poll.kanaal, poll.doelwitId, naam, redenTekst, redenTekst, null, poll.aanklagerId);
+    // Geen actorId: deze verbanning is een besluit van de Raad, niet van de anonieme aanklager.
+    await legGeleKaartBanOp(client, poll.kanaal, poll.doelwitId, naam, redenTekst, redenTekst, null, null);
     return poll;
   }
 
