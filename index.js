@@ -9586,7 +9586,10 @@ function bouwDossierBlok(userId) {
 const TRIBUNAAL_DREMPEL_DAGEN   = 7;   // volledige stilte waarna een tribunaal mag worden gestart
 const TRIBUNAAL_WOORD_DAGEN     = 21;  // wel spelen, maar zo lang geen woord gezegd
 const TRIBUNAAL_POR_DAGEN       = 5;   // vriendelijke por vooraf, alleen naar het lid zelf
-const TRIBUNAAL_WOORD_POR_DAGEN = 18;  // por richting de zwijg-drempel
+// Twee pormomenten op de zwijg-route: een vriendelijk seintje na een week, en een dringende
+// herinnering kort voor de drempel. Alleen dat laatste zou 14 dagen stilte laten vallen voordat
+// iemand iets hoort; alleen het eerste zou vlak voor de drempel geen waarschuwing meer geven.
+const TRIBUNAAL_WOORD_POR_DAGEN = [7, 18];
 const TRIBUNAAL_GENADE_UREN     = 24;  // tussen publieke waarschuwing en opening van de stemming
 const TRIBUNAAL_STEM_UREN       = 48;
 const TRIBUNAAL_QUORUM          = 0.60; // aandeel van de stemgerechtigden dat moet stemmen
@@ -10252,18 +10255,24 @@ async function verwerkTribunaalKlok(client) {
     const woord = dagenZonderWoord(id);
     // Exact op de pordag, dus precies één keer per grond.
     const porStilte = stil === TRIBUNAAL_POR_DAGEN;
-    const porZwijgen = woord === TRIBUNAAL_WOORD_POR_DAGEN;
+    const porZwijgen = TRIBUNAAL_WOORD_POR_DAGEN.includes(woord);
     if (!porStilte && !porZwijgen) continue;
+    // Vroege por = vriendelijk seintje; late por = het wordt menens.
+    const vroeg = porZwijgen && woord === Math.min(...TRIBUNAAL_WOORD_POR_DAGEN);
     try {
       const tekst = porStilte
         ? `👁️ _${lid.bijnaam}, de Kroket God mist u. U bent ${stil} dagen volledig stil._\n` +
           `_Over ${TRIBUNAAL_DREMPEL_DAGEN - stil} dag(en) kan de Raad een Tribunaal der Vergetelheid tegen u openen._\n` +
           `_Bent u simpelweg weg? Meld het met \`/kroketgod afwezig 14\` en er gebeurt niets. Eén bericht is trouwens al genoeg._`
-        : `👁️ _${lid.bijnaam}, u speelt wel mee maar heeft ${woord} dagen niets gezegd._\n` +
-          `_Over ${TRIBUNAAL_WOORD_DAGEN - woord} dag(en) kan de Raad daarover een Tribunaal der Vergetelheid openen — meespelen weegt daar niet tegen op._\n` +
-          `_Eén bericht in het kanaal is genoeg. Bent u weg? \`/kroketgod afwezig 14\`._`;
+        : vroeg
+          ? `👁️ _${lid.bijnaam}, u speelt wel mee, maar heeft een week lang niets gezegd._\n` +
+            `_Geen probleem en geen dreiging — de Kroket God merkt het alleen op. Pas vanaf ${TRIBUNAAL_WOORD_DAGEN} dagen zwijgen kan de Raad er een tribunaal over openen, dus u heeft nog ${TRIBUNAAL_WOORD_DAGEN - woord} dagen._\n` +
+            `_Eén bericht in het kanaal zet de teller terug. Bent u weg? \`/kroketgod afwezig 14\`._`
+          : `👁️ _${lid.bijnaam}, u speelt wel mee maar heeft ${woord} dagen niets gezegd._\n` +
+            `_Over ${TRIBUNAAL_WOORD_DAGEN - woord} dag(en) kan de Raad daarover een Tribunaal der Vergetelheid openen — meespelen weegt daar niet tegen op._\n` +
+            `_Eén bericht in het kanaal is genoeg. Bent u weg? \`/kroketgod afwezig 14\`._`;
       await postEphemeral(client, process.env.SLACK_CHANNEL_ID, id, tekst);
-      console.log(`👁️ Por gestuurd naar ${lid.bijnaam} (${porStilte ? `${stil} dagen stil` : `${woord} dagen zwijgen`}).`);
+      console.log(`👁️ Por gestuurd naar ${lid.bijnaam} (${porStilte ? `${stil} dagen stil` : `${woord} dagen zwijgen${vroeg ? ', vroeg seintje' : ''}`}).`);
     } catch (_) {}
   }
 }
@@ -10325,7 +10334,7 @@ registreerFeature({
       if (stil >= TRIBUNAAL_POR_DAGEN) {
         blocks.push({ type: 'section', text: { type: 'mrkdwn', text:
           `👁️ _U bent ${stil} dagen volledig stil. Vanaf ${TRIBUNAAL_DREMPEL_DAGEN} dagen kan er een tribunaal komen — één bericht of één daad is genoeg om dat te voorkomen._` } });
-      } else if (Number.isFinite(woord) && woord >= TRIBUNAAL_WOORD_POR_DAGEN) {
+      } else if (Number.isFinite(woord) && woord >= Math.min(...TRIBUNAAL_WOORD_POR_DAGEN)) {
         blocks.push({ type: 'section', text: { type: 'mrkdwn', text:
           `👁️ _U speelt wel mee, maar heeft ${woord} dagen niets gezegd. Vanaf ${TRIBUNAAL_WOORD_DAGEN} dagen kan de Raad daarover een tribunaal openen — alleen een bericht helpt daartegen._` } });
       }
