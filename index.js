@@ -9612,8 +9612,14 @@ async function startGeleKaartPoll(client, doelwitId, aanklagerId, reden, channel
 
   const hadAlKaart = heeftGeleKaartDezeWeek(doelwitId);
   const sluitTs = Date.now() + GELEKAART_POLL_MINUTEN * 60_000;
+  // De Kroket God stemt NU, en zijn keuze staat meteen op het bord. Dat is de reden dat de worp
+  // hier gebeurt en niet bij het sluiten: een aangekondigde stem die later opnieuw gerold wordt,
+  // zou een andere uitkomst kunnen geven dan wat hij de Raad heeft voorgehouden.
   const poll = {
     actief: true, doelwitId, aanklagerId, reden: reden || null, hadAlKaart,
+    godStem: Math.random() < GELEKAART_GOD_KANS ? 'terecht' : 'onterecht',
+    // Alleen relevant als een toekenning tot een verbanning leidt: dan valt de bondgenoot mee.
+    bondgenootId: hadAlKaart ? (getAlliantiePartner(doelwitId) || null) : null,
     gestart: Date.now(), sluitTs, kanaal: channelId || process.env.SLACK_CHANNEL_ID,
   };
 
@@ -9661,16 +9667,26 @@ function bouwGeleKaartPollBlocks(poll) {
       `*Door:* _een anonieme volgeling_\n` +
       (poll.reden ? `*Reden:* _"${poll.reden}"_\n` : '') +
       (poll.hadAlKaart
-        ? `\n⚠️ *${naam} heeft deze week al een gele kaart.* Wordt deze voordracht toegekend, dan volgt een *verbanning*.`
+        ? `\n⚠️ *${naam} heeft deze week al een gele kaart.* Wordt deze voordracht toegekend, dan volgt een *verbanning*.` +
+          // Het heilige verbond sleept de bondgenoot mee in een verbanning (bestaand gedrag).
+          // Dat moet vóór de stemming op het bord staan: wie niet weet dat er twee mensen vallen,
+          // kan daar niet eerlijk over stemmen — en de bondgenoot is zelf nooit voorgedragen.
+          (poll.bondgenootId && members[poll.bondgenootId]
+            ? `\n⚔️ *Let op:* door het heilige verbond wordt *${members[poll.bondgenootId].bijnaam}* dan mee verbannen, met dezelfde einddatum. Weeg dat mee.`
+            : '')
         : `\nWordt de voordracht toegekend, dan volgt een formele waarschuwing.`) } },
   ];
   if (poll.actief) {
     const min = Math.max(0, Math.ceil((poll.sluitTs - Date.now()) / 60_000));
+    const godEmoji = poll.godStem === 'terecht' ? GELEKAART_JA : GELEKAART_NEE;
     blocks.push({ type: 'section', text: { type: 'mrkdwn', text:
       `*Stem met een emoji op dit bericht:*\n` +
       `> :${GELEKAART_JA}:  terecht — geef de kaart\n` +
       `> :${GELEKAART_NEE}:  onterecht — laat hem gaan\n\n` +
-      `De Raad heeft nog *~${min} minuut/minuten*. De Kroket God stemt zelf ook mee, en zijn stem weegt *dubbel*.` } });
+      (poll.godStem
+        ? `⚜️ *De Kroket God heeft gesproken: :${godEmoji}: ${poll.godStem.toUpperCase()}* — zijn stem weegt *dubbel* en staat vast.\n`
+        : `De Kroket God stemt zelf ook mee, en zijn stem weegt *dubbel*.\n`) +
+      `De Raad heeft nog *~${min} minuut/minuten* om hem bij te vallen of te overrulen.` } });
   } else {
     const u = poll.uitslag || {};
     const kop = poll.uitkomst === 'terecht'
@@ -9683,7 +9699,8 @@ function bouwGeleKaartPollBlocks(poll) {
   }
   blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text:
     `De voordracht is anoniem — de aanklacht moet op eigen benen staan. Alleen leden stemmen mee; ${naam} mag zelf ook stemmen. ` +
-    `Bij gelijkspel volgt geen kaart — bij twijfel geen straf. Let op: uw emoji-stem is voor iedereen zichtbaar.` }] });
+    `Bij gelijkspel volgt geen kaart — bij twijfel geen straf. De stem van de Kroket God staat vast vanaf het begin. ` +
+    `Let op: uw emoji-stem is voor iedereen zichtbaar.` }] });
   return blocks;
 }
 
@@ -9736,8 +9753,12 @@ async function sluitGeleKaartPoll(client) {
   const stemmen = await leesGeleKaartStemmen(client, poll);
   const terecht = stemmen ? stemmen.terecht.length : 0;
   const onterecht = stemmen ? stemmen.onterecht.length : 0;
-  // De Kroket God stemt: 65% kans op 'terecht', en zijn stem weegt dubbel.
-  const godTerecht = Math.random() < GELEKAART_GOD_KANS;
+  // De VASTGELEGDE stem van de Kroket God, gerold bij het openen en toen al aangekondigd.
+  // Hier opnieuw rollen zou betekenen dat hij anders stemt dan hij de Raad heeft voorgehouden.
+  // Alleen een stemming van vóór deze wijziging (geen godStem in de state) rolt hier nog.
+  const godTerecht = poll.godStem
+    ? poll.godStem === 'terecht'
+    : Math.random() < GELEKAART_GOD_KANS;
   const totaalTerecht = terecht + (godTerecht ? GELEKAART_GOD_GEWICHT : 0);
   const totaalOnterecht = onterecht + (godTerecht ? 0 : GELEKAART_GOD_GEWICHT);
   const toegekend = totaalTerecht > totaalOnterecht; // gelijkspel → geen kaart
@@ -10393,6 +10414,13 @@ function archiveerLid(userId, reden) {
     writeJSON('archief.json', archief);
     delete members[userId];
     saveMembers(members);
+    // Het heilige verbond wordt verbroken: de bondgenoot blijft lid en mag niet vastzitten aan
+    // iemand die het genootschap heeft verlaten. `verbreekAlliantie` ruimt beide richtingen op.
+    if (getAlliantiePartner(userId)) {
+      const partner = getAlliantiePartner(userId);
+      verbreekAlliantie(userId);
+      console.log(`⚔️ Verbond van ${lid.bijnaam} met ${loadMembers()[partner]?.bijnaam || partner} verbroken door archivering.`);
+    }
     // Titels van een gearchiveerd lid worden vacant (titelHouder filtert al op lidmaatschap,
     // maar de state opruimen houdt het bord eerlijk).
     const titels = loadTitels();
@@ -12668,6 +12696,49 @@ async function voerDashboardActie(actie) {
       const uit = await backfillActiviteitUitSlack(app.client);
       if (!uit) return 'Backfill mislukt — kanaalhistorie niet op te halen (zie logs).';
       return `Klok herbouwd uit ${uit.doorzocht} berichten (${uit.dagen} dagen terug):\n` + uit.regels.join('\n');
+    }
+    // ── De Grote Amnestie: alle straffen kwijt + het nieuwe stemsysteem aankondigen ────
+    // Eenmalige actie bij de overgang. Naast de verbanningen worden ook de gele kaarten en de
+    // vergrijpen gewist: laat je die staan, dan springt de eerste voordracht onder het nieuwe
+    // systeem meteen naar een verbanning, en dan is de schone lei geen schone lei.
+    case 'groteAmnestie': {
+      const bans = loadVerbanning();
+      const nu = Date.now();
+      const bevrijd = Object.entries(bans)
+        .filter(([, v]) => nu < new Date(v.tot).getTime())
+        .map(([id]) => loadMembers()[id]?.bijnaam || id);
+      const kaarten = loadGeleKaarten();
+      const metKaart = Object.keys(kaarten).filter(id => (kaarten[id]?.kaarten || []).length).length;
+      saveVerbanning({});
+      saveGeleKaarten({});
+      saveVergrijpen({});
+      logGebeurtenis('genade', null, `Grote Amnestie: ${bevrijd.length} verbanning(en) opgeheven, ${metKaart} gele kaart-dossier(s) gewist`);
+      const namenZin = bevrijd.length
+        ? `De volgende ballingen worden vrijgelaten: ${bevrijd.join(', ')}.`
+        : 'Er zaten geen ballingen vast, maar alle dossiers zijn desondanks gewist.';
+      const tekst = await kroketResponseMetVangnet(
+        `Kondig DE GROTE AMNESTIE af, een eenmalig keerpunt in het Gepaneerde Rijk. Twee dingen tegelijk:\n` +
+        `(1) ALLE verbanningen worden opgeheven en alle gele kaarten en vergrijpen zijn gewist — iedereen begint met een schone lei. ${namenZin}\n` +
+        `(2) Vanaf nu deelt niemand meer alleen een gele kaart uit. Wie een kaart waardig acht, doet een ANONIEME voordracht; ` +
+        `de Raad stemt daarna vijf minuten met emoji's (geel = terecht, groen = onterecht). U stemt zelf mee, uw stem weegt DUBBEL, ` +
+        `en u maakt uw keuze meteen bij de voordracht kenbaar. Bij gelijkspel volgt geen kaart: bij twijfel geen straf.\n` +
+        `Leg uit waarom u dit doet: recht spreken is te zwaar voor één volgeling alleen, en te belangrijk om in het verborgene te laten. ` +
+        `Plechtig, groots, met de toon van een godheid die zijn rijk hervormt. 6-8 zinnen. Geen inleidingszin.`,
+        700, false,
+        `⚜️ *DE GROTE AMNESTIE* ⚜️\n\n` +
+        `> Alle verbanningen zijn opgeheven. Alle gele kaarten en vergrijpen zijn gewist. Iedereen begint met een schone lei.\n` +
+        `> ${namenZin}\n\n` +
+        `*EN EEN NIEUWE ORDE*\n` +
+        `> Niemand deelt nog alleen een gele kaart uit. Wie er een waardig acht, doet een *anonieme voordracht* met \`/kroketgod gelekaart [naam] [reden]\`.\n` +
+        `> De Raad stemt daarna *vijf minuten* met emoji: 🟨 terecht · 🟩 onterecht.\n` +
+        `> De Kroket God stemt zelf mee, maakt zijn keuze meteen kenbaar, en zijn stem *weegt dubbel*.\n` +
+        `> Bij gelijkspel volgt geen kaart — bij twijfel geen straf.\n` +
+        `> Leidt een tweede kaart tot een verbanning, dan staat op het bord wie er door het heilige verbond mee valt.\n\n` +
+        `— De Almachtige Kroket God`
+      );
+      await postMetStem(app.client, process.env.SLACK_CHANNEL_ID, tekst);
+      await updateWereldbord(app.client, true);
+      return `Amnestie afgekondigd: ${bevrijd.length} verbanning(en) opgeheven, ${metKaart} kaart-dossier(s) gewist.`;
     }
     // Een lopende gele-kaart-stemming nu sluiten, zonder de vijf minuten af te wachten.
     case 'gelekaartSluiten': {
