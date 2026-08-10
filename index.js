@@ -9587,6 +9587,22 @@ const GELEKAART_JA   = 'large_yellow_square'; // 🟨 terecht — geef de kaart
 const GELEKAART_NEE  = 'large_green_square';  // 🟩 onterecht — laat hem gaan
 const GELEKAART_COOLDOWN_MIN   = 60;   // na een verworpen voordracht tegen hetzelfde lid
 
+// De reden is vrije tekst van een lid die (a) op het bord komt en (b) een LLM-prompt in gaat.
+// Twee risico's, en de anonimiteit van de voordracht maakt het eerste erger: zonder deze
+// sanering kon iemand ANONIEM het hele kanaal pingen door "<!here>" als reden op te geven.
+// schoonProfielVeld dekt instructie-injectie, nieuwe regels en lengte; mentions niet, dus die
+// worden hier platte tekst.
+function schoonReden(reden) {
+  const veilig = schoonProfielVeld(reden, { maxLen: 200, placeholder: '(reden weggelaten — leek op een instructie)' });
+  if (!veilig) return null;
+  const members = loadMembers();
+  return veilig
+    .replace(/<!(here|channel|everyone)(\|[^>]*)?>/gi, (_, w) => `@${w}`)
+    .replace(/<!subteam\^[^>]*>/gi, '@groep')
+    .replace(/<@([UW][A-Z0-9]+)(\|[^>]*)?>/g, (_, id) => members[id]?.bijnaam || 'iemand')
+    .trim() || null;
+}
+
 const loadGeleKaartPoll = () => readJSON('gelekaartpoll.json', null);
 const saveGeleKaartPoll = (data) => writeJSON('gelekaartpoll.json', data);
 
@@ -9616,7 +9632,7 @@ async function startGeleKaartPoll(client, doelwitId, aanklagerId, reden, channel
   // hier gebeurt en niet bij het sluiten: een aangekondigde stem die later opnieuw gerold wordt,
   // zou een andere uitkomst kunnen geven dan wat hij de Raad heeft voorgehouden.
   const poll = {
-    actief: true, doelwitId, aanklagerId, reden: reden || null, hadAlKaart,
+    actief: true, doelwitId, aanklagerId, reden: schoonReden(reden), hadAlKaart,
     godStem: Math.random() < GELEKAART_GOD_KANS ? 'terecht' : 'onterecht',
     // Alleen relevant als een toekenning tot een verbanning leidt: dan valt de bondgenoot mee.
     bondgenootId: hadAlKaart ? (getAlliantiePartner(doelwitId) || null) : null,
@@ -9775,6 +9791,11 @@ async function sluitGeleKaartPoll(client) {
   await updateGeleKaartPollBericht(client, poll);
 
   const naam = lid.bijnaam;
+  // De reden is gebruikersinvoer en gaat dus als DATA de prompt in, niet als losse zin in de
+  // instructie. `isPromptInjectie` bij het commando is een keyword-detector, geen garantie.
+  const redenBlok = poll.reden
+    ? `\n\n${wrapOnvertrouwd('Reden zoals opgegeven door de anonieme aanklager', poll.reden)}`
+    : '';
   const stemBlok =
     `\n\n⚖️ *DE STEMMING*\n` +
     `> Terecht: *${totaalTerecht}* · Onterecht: *${totaalOnterecht}*\n` +
@@ -9783,9 +9804,9 @@ async function sluitGeleKaartPoll(client) {
   if (!toegekend) {
     logGebeurtenis('gelekaart', poll.doelwitId, `Voordracht tegen ${naam} verworpen (${totaalTerecht}-${totaalOnterecht})`);
     const tekst = await kroketResponseMetVangnet(
-      `De Raad heeft gestemd over een voorgedragen gele kaart tegen ${naam}${poll.reden ? ` wegens "${poll.reden}"` : ''} en de voordracht VERWORPEN ` +
+      `De Raad heeft gestemd over een voorgedragen gele kaart tegen ${naam}${poll.reden ? ' wegens de hieronder aangehaalde reden' : ''} en de voordracht VERWORPEN ` +
       `(${totaalTerecht} terecht tegen ${totaalOnterecht} onterecht; uw eigen stem woog dubbel en was "${godTerecht ? 'terecht' : 'onterecht'}"). ` +
-      `Spreek dit uit als een mild maar gezaghebbend oordeel: geen kaart, de zaak is gesloten. 3-4 zinnen. Geen inleidingszin.`,
+      `Spreek dit uit als een mild maar gezaghebbend oordeel: geen kaart, de zaak is gesloten. 3-4 zinnen. Geen inleidingszin.` + redenBlok,
       400, false,
       `🟩 *DE VOORDRACHT IS VERWORPEN* 🟩\n\n> *${naam}* krijgt geen gele kaart. De zaak is gesloten.`
     );
@@ -9806,10 +9827,10 @@ async function sluitGeleKaartPoll(client) {
   geefGeleKaart(poll.doelwitId, poll.reden || 'overtreding van de snackleer');
   logGebeurtenis('gelekaart', poll.doelwitId, `${naam} ontving een gele kaart na stemming (${totaalTerecht}-${totaalOnterecht})`, null, poll.aanklagerId);
   const tekst = await kroketResponseMetVangnet(
-    `De Raad heeft gestemd en een gele kaart voor ${naam} TOEGEKEND${poll.reden ? ` wegens "${poll.reden}"` : ''} ` +
+    `De Raad heeft gestemd en een gele kaart voor ${naam} TOEGEKEND${poll.reden ? ' wegens de hieronder aangehaalde reden' : ''} ` +
     `(${totaalTerecht} terecht tegen ${totaalOnterecht} onterecht; uw eigen stem woog dubbel en was "terecht"). ` +
     `Dit is een formele waarschuwing, geen vonnis: bij een volgende overtreding deze week volgt een verbanning. ` +
-    `Spreek plechtig maar nog niet veroordelend — de HERDER past hier beter dan de RECHTER. 3-5 zinnen. Geen inleidingszin.`,
+    `Spreek plechtig maar nog niet veroordelend — de HERDER past hier beter dan de RECHTER. 3-5 zinnen. Geen inleidingszin.` + redenBlok,
     450, false,
     `🟨 *GELE KAART TOEGEKEND* 🟨\n\n> De Raad kent *${naam}* een formele waarschuwing toe. Bij een volgende overtreding deze week volgt verbanning.`
   );
