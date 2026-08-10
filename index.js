@@ -5461,12 +5461,19 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
         }
         // Overzicht van wie er (nog) niet voor in aanmerking komt — feitelijk, zonder verwijt.
         const regels = Object.entries(members).map(([id, lid]) => {
+          const g = tribunaalGrond(id);
           const stil = dagenStil(id);
-          const vrij = isAfwezig(id) ? '🏖️ afwezig gemeld' : stil >= TRIBUNAAL_DREMPEL_DAGEN ? `⚠️ ${stil} dagen stil` : `✅ ${stil} dag(en)`;
-          return `> ${lid.bijnaam}${id === command.user_id ? ' _(u)_' : ''} — ${vrij}`;
+          const woord = dagenZonderWoord(id);
+          const staat = isAfwezig(id)
+            ? '🏖️ afwezig gemeld'
+            : g ? `⚠️ voordraagbaar — ${g.kort} (${g.dagen} dagen)`
+                : `✅ stil ${stil}/${TRIBUNAAL_DREMPEL_DAGEN} · zwijgen ${Number.isFinite(woord) ? woord : '?'}/${TRIBUNAAL_WOORD_DAGEN}`;
+          return `> ${lid.bijnaam}${id === command.user_id ? ' _(u)_' : ''} — ${staat}`;
         }).join('\n');
         await respond({ text:
-          `⚖️ *TRIBUNAAL DER VERGETELHEID*\n\n_Een lid dat ${TRIBUNAAL_DREMPEL_DAGEN} dagen volledig stil is (geen bericht, geen daad) en geen afwezigheid meldde, kan worden voorgedragen met \`tribunaal [naam]\`._\n\n${regels}\n\n` +
+          `⚖️ *TRIBUNAAL DER VERGETELHEID*\n\n_Twee gronden voor een voordracht (\`tribunaal [naam]\`), mits er geen afwezigheid is gemeld:_\n` +
+          `> *${TRIBUNAAL_DREMPEL_DAGEN} dagen volledige stilte* — geen bericht én geen daad.\n` +
+          `> *${TRIBUNAAL_WOORD_DAGEN} dagen geen woord* — wel meespelen, maar niets zeggen.\n\n${regels}\n\n` +
           `_Na voordracht volgt een publieke waarschuwing en ${TRIBUNAAL_GENADE_UREN} uur genade; daarna stemt de Raad ${TRIBUNAAL_STEM_UREN} uur, geheim. Er is quorum én tweederde nodig. Elk teken van leven van de beschuldigde blaast alles af._`,
           response_type: 'ephemeral' });
         return;
@@ -9571,8 +9578,15 @@ function bouwDossierBlok(userId) {
 // stemming, en niets wordt vernietigd — een verwijderd lid gaat naar het archief met roem,
 // relikwieën en titels intact, en kan terug.
 
-const TRIBUNAAL_DREMPEL_DAGEN   = 7;   // stilte waarna een tribunaal mag worden gestart
+// TWEE GRONDEN, want "afwezig" heeft twee betekenissen die niet samenvallen:
+//   stilte  — geen bericht EN geen daad: iemand is er helemaal niet meer.
+//   zwijgen — wel spelen maar nooit iets zeggen: aanwezig in de cijfers, afwezig in de groep.
+// De tweede drempel ligt veel hoger, want knoppen indrukken is óók meedoen; het duurt alleen
+// langer voordat het als verdwijnen telt.
+const TRIBUNAAL_DREMPEL_DAGEN   = 7;   // volledige stilte waarna een tribunaal mag worden gestart
+const TRIBUNAAL_WOORD_DAGEN     = 21;  // wel spelen, maar zo lang geen woord gezegd
 const TRIBUNAAL_POR_DAGEN       = 5;   // vriendelijke por vooraf, alleen naar het lid zelf
+const TRIBUNAAL_WOORD_POR_DAGEN = 18;  // por richting de zwijg-drempel
 const TRIBUNAAL_GENADE_UREN     = 24;  // tussen publieke waarschuwing en opening van de stemming
 const TRIBUNAAL_STEM_UREN       = 48;
 const TRIBUNAAL_QUORUM          = 0.60; // aandeel van de stemgerechtigden dat moet stemmen
@@ -9608,6 +9622,46 @@ function dagenStil(userId) {
   return Math.max(0, Math.floor((Date.now() - ts) / 86_400_000));
 }
 
+// Alleen BERICHTEN, voor de zwijg-grond. De vakantiestand telt hier ook mee: wie zijn
+// afwezigheid meldt, hoort ook niet op zwijgen te worden aangesproken.
+function dagenZonderWoord(userId) {
+  const a = loadActiviteit()[userId] || {};
+  const ts = Math.max(a.laatsteBericht || 0, a.afwezigTot || 0);
+  if (!ts) return Infinity;
+  return Math.max(0, Math.floor((Date.now() - ts) / 86_400_000));
+}
+
+// De grond onder een tribunaal, of null als er geen is. Dit is de ENIGE plek waar wordt bepaald
+// of iemand voordraagbaar is; de toets, de waarschuwing, het bord en de hertoetsing lezen hier
+// allemaal uit, zodat ze nooit uiteen kunnen lopen.
+function tribunaalGrond(userId) {
+  if (isAfwezig(userId)) return null;
+  const stil = dagenStil(userId);
+  if (stil >= TRIBUNAAL_DREMPEL_DAGEN) {
+    return { grond: 'stilte', dagen: stil,
+      aanklacht: `${stil} dagen zonder enig teken van leven — geen woord, geen daad`,
+      kort: 'volledige stilte' };
+  }
+  const woord = dagenZonderWoord(userId);
+  if (woord >= TRIBUNAAL_WOORD_DAGEN) {
+    return { grond: 'zwijgen', dagen: woord,
+      aanklacht: `${woord} dagen geen woord gezegd — wel meegespeeld, maar niets gezegd`,
+      kort: 'zwijgen' };
+  }
+  return null;
+}
+
+// Geldt de grond van een lopende zaak nog? Cruciaal onderscheid: bij een zwijg-zaak blaast een
+// DAAD de zaak niet af — de aanklacht gaat immers over niets zeggen, niet over niets doen.
+// Zonder dit onderscheid zou één druk op een duelknop de zwijg-drempel meteen zinloos maken.
+function tribunaalGrondGeldtNog(t) {
+  if (!t?.doelwitId) return false;
+  if (isAfwezig(t.doelwitId)) return false;
+  if (!loadMembers()[t.doelwitId]) return false;
+  if (t.grond === 'zwijgen') return dagenZonderWoord(t.doelwitId) >= TRIBUNAAL_WOORD_DAGEN;
+  return dagenStil(t.doelwitId) >= TRIBUNAAL_DREMPEL_DAGEN;
+}
+
 function isAfwezig(userId) {
   const tot = loadActiviteit()[userId]?.afwezigTot || 0;
   return Date.now() < tot;
@@ -9629,7 +9683,11 @@ function markeerActiviteit(userId, soort = 'bericht') {
       saveActiviteit(data);
     }
     const t = readJSON('tribunaal.json', null);
-    return !!(t && t.doelwitId === userId && (t.fase === 'waarschuwing' || t.fase === 'stemming'));
+    if (!t || t.doelwitId !== userId || (t.fase !== 'waarschuwing' && t.fase !== 'stemming')) return false;
+    // Een zwijg-zaak gaat over niets ZEGGEN. Een daad in de frituur blaast die dus niet af —
+    // anders zou één klik op een knop de 21-dagen-drempel per definitie onbereikbaar maken.
+    if (t.grond === 'zwijgen' && soort !== 'bericht') return false;
+    return true;
   } catch (_) {
     return false;
   }
@@ -9751,9 +9809,14 @@ function tribunaalToets(doelwitId, aanklagerId = null) {
     const tot = new Date(loadActiviteit()[doelwitId].afwezigTot);
     return { ok: false, reden: `_${lid.bijnaam} heeft de vakantiestand aanstaan tot ${tot.toLocaleDateString('nl-NL', { timeZone: 'Europe/Amsterdam', day: 'numeric', month: 'long' })}. Wie zijn afwezigheid meldt, wordt niet vervolgd._` };
   }
-  const stil = dagenStil(doelwitId);
-  if (stil < TRIBUNAAL_DREMPEL_DAGEN) {
-    return { ok: false, reden: `_${lid.bijnaam} is ${stil === 0 ? 'vandaag nog' : `${stil} dag${stil === 1 ? '' : 'en'} geleden`} gezien. Een tribunaal vereist ${TRIBUNAAL_DREMPEL_DAGEN} dagen volledige stilte. De Kroket God duldt geen aanklacht zonder grond._` };
+  const grond = tribunaalGrond(doelwitId);
+  if (!grond) {
+    const stil = dagenStil(doelwitId);
+    const woord = dagenZonderWoord(doelwitId);
+    return { ok: false, reden:
+      `_Tegen ${lid.bijnaam} bestaat geen grond. De Kroket God duldt geen aanklacht zonder feiten._\n` +
+      `> Volledige stilte: *${stil}* dag(en) — nodig is ${TRIBUNAAL_DREMPEL_DAGEN}.\n` +
+      `> Geen woord gezegd: *${Number.isFinite(woord) ? woord : '?'}* dag(en) — nodig is ${TRIBUNAAL_WOORD_DAGEN}.` };
   }
   const historie = readJSON('tribunaalhistorie.json', {});
   const laatsteVerworpen = (historie[doelwitId] || []).filter(h => h.uitkomst === 'verworpen').map(h => h.ts).sort((a, b) => b - a)[0];
@@ -9761,7 +9824,7 @@ function tribunaalToets(doelwitId, aanklagerId = null) {
     const vrij = new Date(laatsteVerworpen + TRIBUNAAL_COOLDOWN_WEKEN * 7 * 86_400_000);
     return { ok: false, reden: `_Een eerder tribunaal tegen ${lid.bijnaam} is verworpen. De Raad komt hier niet op terug vóór ${vrij.toLocaleDateString('nl-NL', { timeZone: 'Europe/Amsterdam', day: 'numeric', month: 'long' })}._` };
   }
-  return { ok: true, reden: null, dagenStil: stil };
+  return { ok: true, reden: null, grond };
 }
 
 // Wie mag meestemmen: alle leden behalve ballingen. De BESCHULDIGDE mag wél stemmen — hij is
@@ -9777,6 +9840,8 @@ function bouwTribunaalDossier(userId) {
   return {
     laatstGezien: laatstGezien(userId),
     dagenStil: dagenStil(userId),
+    dagenZonderWoord: Number.isFinite(dagenZonderWoord(userId)) ? dagenZonderWoord(userId) : null,
+    laatsteBericht: loadActiviteit()[userId]?.laatsteBericht || null,
     roem,
     rang: getRang(roem).kort,
     relikwieen: (loadAchievements()[userId] || []).length,
@@ -9794,10 +9859,12 @@ async function startTribunaal(client, doelwitId, aanklagerId = null) {
   const members = loadMembers();
   const naam = members[doelwitId].bijnaam;
   const nu = Date.now();
+  const g = toets.grond;
   const t = {
     fase: 'waarschuwing',
     doelwitId,
     aanklagerId,
+    grond: g.grond,
     gestart: nu,
     stemmingTs: nu + TRIBUNAAL_GENADE_UREN * 3_600_000,
     dossier: bouwTribunaalDossier(doelwitId),
@@ -9806,18 +9873,23 @@ async function startTribunaal(client, doelwitId, aanklagerId = null) {
   };
   writeJSON('tribunaal.json', t);
   logGebeurtenis('tribunaal', doelwitId,
-    `Tribunaal gestart tegen ${naam} (${toets.dagenStil} dagen stil)${aanklagerId ? ` op aandragen van ${members[aanklagerId]?.bijnaam}` : ' door de Hoge Frituurraad'}`);
+    `Tribunaal gestart tegen ${naam} (grond: ${g.kort}, ${g.dagen} dagen)${aanklagerId ? ` op aandragen van ${members[aanklagerId]?.bijnaam}` : ' door de Hoge Frituurraad'}`);
 
+  const uitwegZin = g.grond === 'zwijgen'
+    ? `Zeg heel duidelijk dat ${naam} dit met ÉÉN BERICHT in dit kanaal kan afwenden. Meespelen is hier niet genoeg: de aanklacht gaat erover dat ${naam} niets ZEGT, dus alleen woorden helpen.`
+    : `Zeg heel duidelijk dat ${naam} dit met ÉÉN enkel teken van leven kan afwenden — één bericht in dit kanaal, of één daad in de frituur, en het tribunaal wordt onmiddellijk afgeblazen.`;
   const tekst = await kroketResponseMetVangnet(
-    `Roep ${naam} plechtig ter verantwoording. ${naam} heeft ${toets.dagenStil} dagen lang geen enkel teken van leven gegeven in de frituur: geen woord, geen offer, geen duel. ` +
+    `Roep ${naam} plechtig ter verantwoording. De aanklacht luidt: ${g.aanklacht}. ` +
     `Dit is nog GEEN vonnis maar een laatste oproep: over ${TRIBUNAAL_GENADE_UREN} uur opent het Tribunaal der Vergetelheid en stemt de Raad over verwijdering uit het genootschap. ` +
-    `Zeg heel duidelijk dat ${naam} dit met ÉÉN enkel teken van leven kan afwenden — één bericht in dit kanaal, of één daad in de frituur, en het tribunaal wordt onmiddellijk afgeblazen. ` +
+    uitwegZin + ` ` +
     `Vermeld ook dat wie afwezig is dat kan melden met "/kroketgod afwezig 14". Plechtig en dreigend, maar niet wreed — dit is een uitgestoken hand, geen strafrede. 4-6 zinnen. Geen inleidingszin.`,
     550, false,
     `⚖️ *LAATSTE OPROEP AAN ${naam.toUpperCase()}* ⚖️\n\n` +
-    `> ${toets.dagenStil} dagen stilte. Geen woord, geen offer, geen duel.\n` +
+    `> ${g.aanklacht}.\n` +
     `> Over *${TRIBUNAAL_GENADE_UREN} uur* opent het Tribunaal der Vergetelheid.\n` +
-    `> *Eén teken van leven blaast dit af* — één bericht of één daad in de frituur is genoeg.\n` +
+    (g.grond === 'zwijgen'
+      ? `> *Eén bericht in dit kanaal blaast dit af.* Meespelen helpt hier niet — het gaat erom dat u niets zegt.\n`
+      : `> *Eén teken van leven blaast dit af* — één bericht of één daad in de frituur is genoeg.\n`) +
     `> Bent u simpelweg weg? Meld het met \`/kroketgod afwezig 14\`.\n\n— De Hoge Frituurraad`
   );
   await postToChannel(client, t.kanaal, `<@${doelwitId}>\n\n${tekst}`);
@@ -9868,8 +9940,11 @@ function bouwTribunaalBlocks(t) {
     { type: 'header', text: { type: 'plain_text', text: '⚖️ Tribunaal der Vergetelheid', emoji: true } },
     { type: 'section', text: { type: 'mrkdwn', text:
       `*Beschuldigde:* ${naam}\n` +
-      `*Aanklacht:* ${d.dagenStil ?? '?'} dagen zonder enig teken van leven, zonder gemelde afwezigheid.\n` +
-      `*Laatst gezien:* ${d.laatstGezien ? new Date(d.laatstGezien).toLocaleDateString('nl-NL', { timeZone: 'Europe/Amsterdam', day: 'numeric', month: 'long' }) : 'onbekend'}\n` +
+      `*Aanklacht:* ${t.grond === 'zwijgen'
+        ? `${d.dagenZonderWoord ?? '?'} dagen geen woord gezegd (wel meegespeeld), zonder gemelde afwezigheid.`
+        : `${d.dagenStil ?? '?'} dagen zonder enig teken van leven, zonder gemelde afwezigheid.`}\n` +
+      `*Laatste bericht:* ${d.laatsteBericht ? `${d.dagenZonderWoord} dagen terug (${new Date(d.laatsteBericht).toLocaleDateString('nl-NL', { timeZone: 'Europe/Amsterdam', day: 'numeric', month: 'long' })})` : 'niet gevonden'}\n` +
+      `*Laatste daad:* ${d.dagenStil === 0 ? 'vandaag' : `${d.dagenStil} dagen terug`}\n` +
       `*Verdiensten:* ${verdiensten}` } },
   ];
 
@@ -9898,7 +9973,9 @@ function bouwTribunaalBlocks(t) {
 
   blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text:
     `Uw stem is *geheim* en wijzigbaar tot sluiting — niemand ziet ooit wie wat stemde. · ` +
-    `*${naam} kan dit tribunaal op elk moment afblazen met één bericht in dit kanaal, ook nu nog.*` }] });
+    (t.grond === 'zwijgen'
+      ? `*${naam} kan dit tribunaal op elk moment afblazen met één bericht in dit kanaal, ook nu nog* — meespelen helpt hier niet, het gaat om woorden.`
+      : `*${naam} kan dit tribunaal op elk moment afblazen met één bericht of één daad, ook nu nog.*`) }] });
   return blocks;
 }
 
@@ -9922,8 +9999,8 @@ async function updateTribunaalBericht(client, t) {
 async function openTribunaalStemming(client) {
   const t = readJSON('tribunaal.json', null);
   if (!t || t.fase !== 'waarschuwing') return null;
-  if (dagenStil(t.doelwitId) < TRIBUNAAL_DREMPEL_DAGEN || isAfwezig(t.doelwitId)) {
-    return blaasTribunaalAf(client, 'de beschuldigde was weer actief');
+  if (!tribunaalGrondGeldtNog(t)) {
+    return blaasTribunaalAf(client, t.grond === 'zwijgen' ? 'de beschuldigde heeft zich uitgesproken' : 'de beschuldigde was weer actief');
   }
   t.fase = 'stemming';
   t.sluitTs = Date.now() + TRIBUNAAL_STEM_UREN * 3_600_000;
@@ -9972,8 +10049,8 @@ async function stemTribunaal(client, userId, keuze) {
 async function sluitTribunaal(client) {
   const t = readJSON('tribunaal.json', null);
   if (!t || t.fase !== 'stemming') return null;
-  // Laatste hertoetsing: activiteit tijdens de stemming laat de zaak vervallen.
-  if (dagenStil(t.doelwitId) < TRIBUNAAL_DREMPEL_DAGEN || isAfwezig(t.doelwitId)) {
+  // Laatste hertoetsing: valt de grond weg tijdens de stemming, dan vervalt de zaak.
+  if (!tribunaalGrondGeldtNog(t)) {
     return blaasTribunaalAf(client, 'de beschuldigde meldde zich tijdens de stemming');
   }
   const members = loadMembers();
@@ -10153,7 +10230,7 @@ async function verwerkTribunaalKlok(client) {
   // 1. Lopende zaak: is de grond weg, of is een fase verstreken?
   const t = readJSON('tribunaal.json', null);
   if (t && t.fase !== 'afgerond') {
-    if (dagenStil(t.doelwitId) < TRIBUNAAL_DREMPEL_DAGEN || isAfwezig(t.doelwitId) || !loadMembers()[t.doelwitId]) {
+    if (!tribunaalGrondGeldtNog(t)) {
       await blaasTribunaalAf(client, 'de grond onder de aanklacht is weggevallen');
     } else if (t.fase === 'waarschuwing' && Date.now() >= t.stemmingTs) {
       await openTribunaalStemming(client);
@@ -10172,13 +10249,21 @@ async function verwerkTribunaalKlok(client) {
   for (const [id, lid] of Object.entries(members)) {
     if (isAfwezig(id) || isVerbannen(id)) continue;
     const stil = dagenStil(id);
-    if (stil !== TRIBUNAAL_POR_DAGEN) continue; // exact op de pordag, dus één keer
+    const woord = dagenZonderWoord(id);
+    // Exact op de pordag, dus precies één keer per grond.
+    const porStilte = stil === TRIBUNAAL_POR_DAGEN;
+    const porZwijgen = woord === TRIBUNAAL_WOORD_POR_DAGEN;
+    if (!porStilte && !porZwijgen) continue;
     try {
-      await postEphemeral(client, process.env.SLACK_CHANNEL_ID, id,
-        `👁️ _${lid.bijnaam}, de Kroket God mist u. U bent ${stil} dagen stil._\n` +
-        `_Over ${TRIBUNAAL_DREMPEL_DAGEN - stil} dag(en) kan de Raad een Tribunaal der Vergetelheid tegen u openen._\n` +
-        `_Bent u simpelweg weg? Meld het met \`/kroketgod afwezig 14\` en er gebeurt niets. Eén bericht is trouwens al genoeg._`);
-      console.log(`👁️ Por gestuurd naar ${lid.bijnaam} (${stil} dagen stil).`);
+      const tekst = porStilte
+        ? `👁️ _${lid.bijnaam}, de Kroket God mist u. U bent ${stil} dagen volledig stil._\n` +
+          `_Over ${TRIBUNAAL_DREMPEL_DAGEN - stil} dag(en) kan de Raad een Tribunaal der Vergetelheid tegen u openen._\n` +
+          `_Bent u simpelweg weg? Meld het met \`/kroketgod afwezig 14\` en er gebeurt niets. Eén bericht is trouwens al genoeg._`
+        : `👁️ _${lid.bijnaam}, u speelt wel mee maar heeft ${woord} dagen niets gezegd._\n` +
+          `_Over ${TRIBUNAAL_WOORD_DAGEN - woord} dag(en) kan de Raad daarover een Tribunaal der Vergetelheid openen — meespelen weegt daar niet tegen op._\n` +
+          `_Eén bericht in het kanaal is genoeg. Bent u weg? \`/kroketgod afwezig 14\`._`;
+      await postEphemeral(client, process.env.SLACK_CHANNEL_ID, id, tekst);
+      console.log(`👁️ Por gestuurd naar ${lid.bijnaam} (${porStilte ? `${stil} dagen stil` : `${woord} dagen zwijgen`}).`);
     } catch (_) {}
   }
 }
@@ -10223,7 +10308,7 @@ registreerFeature({
   naam: 'tribunaal',
   state: ['activiteit.json', 'tribunaal.json', 'tribunaalhistorie.json', 'archief.json'],
   help: [
-    { gebruik: '/kroketgod tribunaal [naam]', verwacht: `draag een lid voor dat ${TRIBUNAAL_DREMPEL_DAGEN}+ dagen volledig stil is; de Raad stemt daarna geheim` },
+    { gebruik: '/kroketgod tribunaal [naam]', verwacht: `draag een lid voor dat ${TRIBUNAAL_DREMPEL_DAGEN}+ dagen volledig stil is, óf ${TRIBUNAAL_WOORD_DAGEN}+ dagen geen woord zei; de Raad stemt daarna geheim` },
     { gebruik: '/kroketgod afwezig [dagen]', verwacht: 'meld dat u weg bent — dan kan er geen tribunaal tegen u komen (`afwezig 0` of `aanwezig` zet het uit)' },
   ],
   homeOrde: 30,
@@ -10236,9 +10321,13 @@ registreerFeature({
         `🏖️ _U staat als afwezig gemeld tot ${new Date(act.afwezigTot).toLocaleDateString('nl-NL', { timeZone: 'Europe/Amsterdam', day: 'numeric', month: 'long' })}. Er kan geen tribunaal tegen u komen._` } });
     } else {
       const stil = dagenStil(userId);
+      const woord = dagenZonderWoord(userId);
       if (stil >= TRIBUNAAL_POR_DAGEN) {
         blocks.push({ type: 'section', text: { type: 'mrkdwn', text:
-          `👁️ _U bent ${stil} dagen stil. Vanaf ${TRIBUNAAL_DREMPEL_DAGEN} dagen kan er een tribunaal komen — één bericht is genoeg om dat te voorkomen._` } });
+          `👁️ _U bent ${stil} dagen volledig stil. Vanaf ${TRIBUNAAL_DREMPEL_DAGEN} dagen kan er een tribunaal komen — één bericht of één daad is genoeg om dat te voorkomen._` } });
+      } else if (Number.isFinite(woord) && woord >= TRIBUNAAL_WOORD_POR_DAGEN) {
+        blocks.push({ type: 'section', text: { type: 'mrkdwn', text:
+          `👁️ _U speelt wel mee, maar heeft ${woord} dagen niets gezegd. Vanaf ${TRIBUNAAL_WOORD_DAGEN} dagen kan de Raad daarover een tribunaal openen — alleen een bericht helpt daartegen._` } });
       }
     }
     if (t && t.fase !== 'afgerond') {
