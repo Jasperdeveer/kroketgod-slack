@@ -9603,7 +9603,9 @@ function laatstGezien(userId) {
 function dagenStil(userId) {
   const ts = laatstGezien(userId);
   if (!ts) return Infinity; // geen record: alleen mogelijk vóór de seeding hieronder
-  return Math.floor((Date.now() - ts) / 86_400_000);
+  // Clampen op 0: een daad-signaal uit een dagsleutel wordt op einde-van-de-dag gezet en ligt
+  // voor vandaag dus in de toekomst. Zonder clamp zou dat "-1 dagen stil" opleveren.
+  return Math.max(0, Math.floor((Date.now() - ts) / 86_400_000));
 }
 
 function isAfwezig(userId) {
@@ -9656,6 +9658,77 @@ function zorgVoorActiviteitBasis() {
   }
 }
 
+
+// Vervangt de geseede placeholder-klok door de ECHTE laatste activiteit, gereconstrueerd uit
+// twee bronnen die wél tijdstempels hebben:
+//   1. Slack zelf (conversations.history, gepagineerd) → het laatste bericht per lid.
+//   2. De opdrachtenbak (`dag.datum`) → een daad in de frituur op die dag.
+// De seeding zette iedereen op "nu" omdat er geen historie was; dat is een aanname, geen feit.
+// Dit maakt er een feit van. CONSERVATIEF: de meest RECENTE aanwijzing wint, zodat niemand
+// benadeeld wordt door een onvolledige reconstructie. Alleen records met `geseed` worden
+// overschreven — echte, live geregistreerde activiteit blijft altijd staan.
+async function backfillActiviteitUitSlack(client, { rondes = 14 } = {}) {
+  const members = loadMembers();
+  const kanaal = process.env.SLACK_CHANNEL_ID;
+  const laatsteBericht = {};
+  let cursor = null;
+  let doorzocht = 0;
+  let oudsteTs = Date.now();
+  try {
+    for (let i = 0; i < rondes; i++) {
+      const res = await slackLimiter.schedule(() => client.conversations.history({
+        channel: kanaal, limit: 200, ...(cursor ? { cursor } : {}),
+      }));
+      for (const m of res.messages || []) {
+        const ts = Math.round(parseFloat(m.ts) * 1000);
+        doorzocht++;
+        oudsteTs = Math.min(oudsteTs, ts);
+        if (m.user && members[m.user]) laatsteBericht[m.user] = Math.max(laatsteBericht[m.user] || 0, ts);
+      }
+      cursor = res.response_metadata?.next_cursor;
+      if (!cursor) break;
+    }
+  } catch (err) {
+    console.warn('⚠️ Activiteit-backfill: kanaalhistorie ophalen mislukt:', err.data?.error || err.message);
+    return null;
+  }
+
+  // Daad-signaal uit de opdrachtenbak: `dag.datum` is een dagsleutel (YYYY-MM-DD), geen exacte
+  // tijd. Het einde van die dag is de meest gunstige lezing voor het lid.
+  const opdrachten = loadOpdrachten();
+  const laatsteDaad = {};
+  for (const [id, bak] of Object.entries(opdrachten)) {
+    const datum = bak?.dag?.datum;
+    if (!members[id] || !datum) continue;
+    // Einde van die dag is de gunstigste lezing voor het lid, maar nooit in de toekomst.
+    const ts = Math.min(Date.parse(`${datum}T23:59:59+02:00`), Date.now());
+    const gedaan = Object.keys(bak.dag.voortgang || {}).length || (bak.dag.beloond || []).length;
+    if (Number.isFinite(ts) && gedaan) laatsteDaad[id] = ts;
+  }
+
+  const data = loadActiviteit();
+  const regels = [];
+  for (const [id, lid] of Object.entries(members)) {
+    const eigen = data[id] || {};
+    const bericht = laatsteBericht[id] || 0;
+    const daad = laatsteDaad[id] || 0;
+    if (!bericht && !daad) { regels.push(`${lid.bijnaam}: geen spoor gevonden — klok blijft staan`); continue; }
+    const nieuw = { ...eigen };
+    // Geseede placeholder → vervangen door het echte feit. Anders: alleen naar voren bijstellen.
+    nieuw.laatsteBericht = eigen.geseed ? (bericht || undefined) : Math.max(eigen.laatsteBericht || 0, bericht) || undefined;
+    nieuw.laatsteDaad = eigen.geseed ? (daad || undefined) : Math.max(eigen.laatsteDaad || 0, daad) || undefined;
+    delete nieuw.geseed;
+    nieuw.backfill = Date.now();
+    for (const k of ['laatsteBericht', 'laatsteDaad']) if (nieuw[k] === undefined) delete nieuw[k];
+    data[id] = nieuw;
+    const stil = Math.max(0, Math.floor((Date.now() - Math.max(nieuw.laatsteBericht || 0, nieuw.laatsteDaad || 0, nieuw.afwezigTot || 0)) / 86_400_000));
+    regels.push(`${lid.bijnaam}: ${stil} dagen stil (bericht ${bericht ? `${Math.floor((Date.now() - bericht) / 86_400_000)}d` : '—'}, daad ${daad ? `${Math.floor((Date.now() - daad) / 86_400_000)}d` : '—'})`);
+  }
+  saveActiviteit(data);
+  console.log(`👁️ Activiteit-backfill uit ${doorzocht} berichten (${Math.floor((Date.now() - oudsteTs) / 86_400_000)} dagen terug):`);
+  for (const r of regels) console.log(`   ${r}`);
+  return { doorzocht, dagen: Math.floor((Date.now() - oudsteTs) / 86_400_000), regels };
+}
 
 // ── Toetsing: mag er een tribunaal tegen dit lid? ──────────────────────────────
 // Dit is de poort waar élke aanklacht langs moet, of die van de bot of van een lid komt.
@@ -12227,6 +12300,13 @@ async function voerDashboardActie(actie) {
     }
     // Tribunaal: de dagelijkse klok nu laten lopen (por versturen, fase laten verstrijken,
     // een zaak zonder grond afblazen). Doet niets als er niets te doen is.
+    // Activiteitsklok opnieuw reconstrueren uit Slack-historie. Handig als je wilt zien wie er
+    // echt stil is i.p.v. wat de klok denkt, en als vangnet als de eenmalige backfill faalde.
+    case 'activiteitBackfill': {
+      const uit = await backfillActiviteitUitSlack(app.client);
+      if (!uit) return 'Backfill mislukt — kanaalhistorie niet op te halen (zie logs).';
+      return `Klok herbouwd uit ${uit.doorzocht} berichten (${uit.dagen} dagen terug):\n` + uit.regels.join('\n');
+    }
     case 'tribunaalKlok': {
       await verwerkTribunaalKlok(app.client);
       const t = readJSON('tribunaal.json', null);
@@ -12391,6 +12471,11 @@ process.on('SIGINT',  () => gracefulShutdown('SIGINT'));
   // dat is tevens de inhaalslag voor een gemiste dagelijkse cron.
   try {
     zorgVoorActiviteitBasis();
+    // Zolang er nog geseede placeholder-klokken staan: die vervangen door de echte laatste
+    // activiteit uit Slack. Eenmalig — na de backfill is `geseed` weg en gebeurt dit niet meer.
+    if (Object.values(loadActiviteit()).some(a => a?.geseed)) {
+      await backfillActiviteitUitSlack(app.client);
+    }
     await verwerkTribunaalKlok(app.client);
   } catch (err) {
     console.error('Fout bij tribunaal-inhaalslag:', err);
