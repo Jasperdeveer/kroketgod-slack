@@ -1501,10 +1501,29 @@ function getVoorrechten(userId) {
 // Rang-afhankelijke daglimieten en prijzen.
 function eerLimiet(userId)   { return EER_DAGELIJKS_BASIS + getVoorrechten(userId).eerExtra; }
 function offerLimiet(userId) { return VETBAD_BASIS_PER_DAG + getVoorrechten(userId).offerExtra; }
-function duelLimiet(userId)  { return 1 + getVoorrechten(userId).duelExtra; }
+// Titelvoorrecht: de Kampioen van het Frituurduel mag één keer extra per dag duelleren —
+// dezelfde +1 als de Frituurridder, dus een houder van beide komt op drie duels.
+function duelLimiet(userId)  { return 1 + getVoorrechten(userId).duelExtra + (heeftTitel(userId, 'duelkampioen') ? 1 : 0); }
 function winkelPrijs(userId, item) {
-  const korting = getVoorrechten(userId).winkelKorting;
-  return Math.max(1, Math.ceil(item.prijs * (1 - korting)));
+  // Rangkorting en het titelvoorrecht van de Meester der Aflaten stapelen niet — de hoogste
+  // van de twee geldt. De nalatenschap van het vorige seizoen komt er als vast bedrag bij:
+  // een gewonnen seizoen maakt alles een punt goedkoper, een verloren seizoen een punt duurder.
+  const korting = Math.max(getVoorrechten(userId).winkelKorting, heeftTitel(userId, 'aflatenmeester') ? 0.25 : 0);
+  return Math.max(1, Math.ceil(item.prijs * (1 - korting)) + nalatenschapPrijsDelta());
+}
+
+// Waarom wijkt de winkelprijs af van de basisprijs? Voor de App Home, zodat de korting (of
+// opslag) navolgbaar is in plaats van een onverklaard getal.
+function prijsRedenen(userId) {
+  const redenen = [];
+  const rangKorting = getVoorrechten(userId).winkelKorting;
+  const titelKorting = heeftTitel(userId, 'aflatenmeester') ? 0.25 : 0;
+  if (titelKorting > rangKorting) redenen.push('Meester der Aflaten');
+  else if (rangKorting > 0) redenen.push('rangkorting');
+  const delta = nalatenschapPrijsDelta();
+  if (delta < 0) redenen.push('zegen van het vorige seizoen');
+  else if (delta > 0) redenen.push('nalatenschap van het verloren seizoen');
+  return redenen;
 }
 
 // De voorrechten die bij een rang hóren, als leesbare regels (voor App Home en promotie).
@@ -2453,7 +2472,15 @@ function buildSystemPrompt() {
   const decreet = (instelling('decreetVanDeDag') || '').trim();
   const decreetInt = Math.max(0, Math.min(1, Number(instelling('decreetIntensiteit')) || 0));
   const feestdag = isVandaagFeestdag();
-  const cacheKey = `${ledenJson}|${tijd.dagdeel}|${tijd.dagNaam}|${tijd.seizoen}|${stemming.naam}|${decreet}|${decreetInt.toFixed(2)}|${feestdag?.localName || ''}`;
+  // Wereldstaat: de seizoenscampagne kleurt de stem van de Kroket God. Dit is globaal (niet
+  // per lid), dus het hoort hier en niet in het dossier — en het verandert per week, zodat de
+  // prompt-cache effectief blijft. De fase gaat mee in de cacheKey, anders bevriest de tekst.
+  const kroketSeizoen = readJSON('seizoen.json', null);
+  const nalatenschapNu = actieveNalatenschap();
+  const wereldKey = kroketSeizoen?.status === 'actief'
+    ? `${kroketSeizoen.nummer}:${kroketSeizoen.fase}:${Math.round(((kroketSeizoen.maxHp - kroketSeizoen.hp) / kroketSeizoen.maxHp) * 10)}`
+    : 'geen';
+  const cacheKey = `${ledenJson}|${tijd.dagdeel}|${tijd.dagNaam}|${tijd.seizoen}|${stemming.naam}|${decreet}|${decreetInt.toFixed(2)}|${feestdag?.localName || ''}|${wereldKey}|${nalatenschapNu?.soort || ''}`;
 
   if (_systemPromptCache.key === cacheKey) return _systemPromptCache.value;
 
@@ -2507,8 +2534,23 @@ function buildSystemPrompt() {
     ledenExtra
   );
 
+  // De lopende seizoenscampagne: de dreiging hangt over álles wat de Kroket God zegt, ook als
+  // het gesprek er niet over gaat. Eén regel volstaat — het is sfeer, geen opdracht.
+  let wereldBlok = '';
+  if (kroketSeizoen?.status === 'actief') {
+    const faseNu = SEIZOEN_FASES[Math.min(kroketSeizoen.fase, SEIZOEN_WEKEN) - 1];
+    const pct = Math.round(((kroketSeizoen.maxHp - kroketSeizoen.hp) / kroketSeizoen.maxHp) * 100);
+    wereldBlok = `\n\nDE STAAT VAN HET RIJK — dit seizoen (${kroketSeizoen.nummer}) staat in het teken van ${kroketSeizoen.dreiging.naam}: ${kroketSeizoen.dreiging.omschrijving}. ` +
+      `Het is week ${kroketSeizoen.fase} van ${SEIZOEN_WEKEN} ("${faseNu.naam}": ${faseNu.sfeer}) en de Raad heeft de dreiging voor ${pct}% teruggedrongen. ` +
+      `Laat dit onderhuids doorklinken in je toon — als een oorlog die op de achtergrond woedt. Breng het alleen expliciet ter sprake als het gesprek er aanleiding voor geeft, ` +
+      `en gebruik het NOOIT als vaste opening. Elke daad in de frituur (duel, offer, eerbewijs, raid-aanval, bod) drukt de dreiging terug; passiviteit laat haar groeien.`;
+  }
+  if (nalatenschapNu) {
+    wereldBlok += `\n\nNALATENSCHAP VAN HET VORIGE SEIZOEN (geldt nog enkele dagen): ${nalatenschapNu.tekst}`;
+  }
+
   // Defensieve instructie-hiërarchie bovenaan: legt vast dat alle ingevoegde inhoud data is.
-  const value = `${DEFENSIEVE_INSTRUCTIE}\n\n${prompt}\n\n${ledenBlok}${tijdsContext}${decreetBlok}`;
+  const value = `${DEFENSIEVE_INSTRUCTIE}\n\n${prompt}\n\n${ledenBlok}${tijdsContext}${wereldBlok}${decreetBlok}`;
 
   _systemPromptCache = { key: cacheKey, value };
   return value;
@@ -2907,7 +2949,7 @@ function trefwoordKomtVoor(genormaliseerdeTekst, trefwoord) {
 function vindPersonaTrigger(tekst) {
   const genormaliseerd = normaliseerVoorMatch(tekst);
   if (!genormaliseerd) return null;
-  const personas = loadPersonas();
+  const personas = alleActievePersonas(); // incl. de weekvijand, zie weekvijandPersona()
   for (const [id, persona] of Object.entries(personas)) {
     if (persona.actief === false) continue;
     const trefwoorden = (persona.trefwoord || '').split(',').map(w => normaliseerVoorMatch(w).trim()).filter(Boolean);
@@ -3045,7 +3087,7 @@ async function overwegPersonaInterjecties(client, channelId, aanleidingTekst, br
   try {
     if (channelId !== process.env.SLACK_CHANNEL_ID) return;
     if (!aanleidingTekst?.trim()) return;
-    const personas = loadPersonas();
+    const personas = alleActievePersonas(); // incl. de weekvijand, zie weekvijandPersona()
     for (const [id, persona] of Object.entries(personas)) {
       if (persona.actief === false || !persona.ongevraagd) continue;
       const kans = bron === 'kroketgod'
@@ -5335,13 +5377,163 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
         return;
       }
       const { dag, week } = opdrachtOverzicht(command.user_id);
-      const regel = ({ o, klaar, nu }) => klaar
+      const regel = ({ o, klaar, nu }) => (klaar
         ? `✅ ~${o.tekst}~ — *+${o.beloning}* geïnd`
-        : `${homeVoortgangInline(nu, o.doel)} ${o.tekst} — *+${o.beloning}*`;
+        : `${homeVoortgangInline(nu, o.doel)} ${o.tekst} — *+${o.beloning}*`) + opdrachtNoot(o).replace(/\n>\s+/, '\n> ');
       await respond({
         text: `📜 *UW OPDRACHTEN* 📜\n\n*Vandaag*\n${dag.map(r => `> ${regel(r)}`).join('\n')}\n\n*Deze week*\n${week.map(r => `> ${regel(r)}`).join('\n')}\n\n_Voortgang loopt automatisch mee zodra u speelt. Ook zichtbaar in de Home-tab van de Kroket God._`,
         response_type: 'ephemeral',
       });
+      return;
+    }
+
+    // ── De Zegezaal: voorgoed gevallen weekvijanden ───────────────────────────
+    if (input === 'zegezaal' || input === 'zegehal' || input === 'verslagen') {
+      await respond({ text: zegezaalTekst(), response_type: 'ephemeral' });
+      return;
+    }
+
+    // ── Vakantiestand: wie zijn afwezigheid meldt, wordt niet vervolgd ────────
+    if (input === 'aanwezig' || input === 'afwezig' || input.startsWith('afwezig ')) {
+      if (!members[command.user_id]) {
+        await respond({ text: 'Alleen leden van de Kroket Illuminati kunnen zich afmelden.', response_type: 'ephemeral' });
+        return;
+      }
+      const act = loadActiviteit();
+      const eigen = act[command.user_id] || {};
+      if (input === 'aanwezig') {
+        delete eigen.afwezigTot;
+        eigen.laatsteBericht = Date.now();
+        act[command.user_id] = eigen;
+        saveActiviteit(act);
+        await respond({ text: '🔥 _Welkom terug. Uw vakantiestand is opgeheven en de Kroket God heeft u weer in het oog._', response_type: 'ephemeral' });
+        return;
+      }
+      const arg = input.replace(/^afwezig\s*/, '').trim();
+      if (!arg) {
+        const tot = eigen.afwezigTot && Date.now() < eigen.afwezigTot ? new Date(eigen.afwezigTot) : null;
+        await respond({ text: tot
+          ? `🏖️ _U staat als afwezig gemeld tot ${tot.toLocaleDateString('nl-NL', { timeZone: 'Europe/Amsterdam', day: 'numeric', month: 'long' })}. Geen tribunaal kan u raken. Terug? \`aanwezig\`._`
+          : `_Meld uw afwezigheid met \`afwezig [dagen]\`, bijvoorbeeld \`afwezig 14\` (max ${AFWEZIG_MAX_DAGEN}). Zolang die staat kan er geen tribunaal tegen u komen._`,
+          response_type: 'ephemeral' });
+        return;
+      }
+      const dagen = Math.floor(Number(arg));
+      if (!Number.isFinite(dagen) || dagen < 0) {
+        await respond({ text: '_Geef een aantal dagen, bijvoorbeeld `afwezig 14`._', response_type: 'ephemeral' });
+        return;
+      }
+      if (dagen === 0) {
+        delete eigen.afwezigTot;
+        eigen.laatsteBericht = Date.now();
+        act[command.user_id] = eigen;
+        saveActiviteit(act);
+        await respond({ text: '🔥 _Vakantiestand uit. U bent weer aanwezig._', response_type: 'ephemeral' });
+        return;
+      }
+      const echt = Math.min(dagen, AFWEZIG_MAX_DAGEN);
+      eigen.afwezigTot = Date.now() + echt * 86_400_000;
+      act[command.user_id] = eigen;
+      saveActiviteit(act);
+      // Een lopend tribunaal tegen deze persoon vervalt: afwezigheid melden is precies de
+      // uitweg die het systeem hoort te bieden.
+      const lopend = readJSON('tribunaal.json', null);
+      if (lopend && lopend.doelwitId === command.user_id && lopend.fase !== 'afgerond') {
+        await blaasTribunaalAf(client, 'de beschuldigde meldde zich afwezig');
+      }
+      await respond({ text: `🏖️ _Genoteerd: u bent ${echt} dag(en) afwezig${echt < dagen ? ` (gemaximeerd op ${AFWEZIG_MAX_DAGEN})` : ''}. Geen tribunaal kan u in die tijd raken. Terug? \`aanwezig\`._`, response_type: 'ephemeral' });
+      return;
+    }
+
+    // ── Tribunaal aandragen. De afwijzing is EPHEMERAL: wie niet aan de drempel ─
+    //    komt, wordt nooit publiek beschuldigd. Dat is de anti-pest-waarborg.
+    if (input === 'tribunaal' || input.startsWith('tribunaal ')) {
+      if (!members[command.user_id]) {
+        await respond({ text: 'Alleen leden van de Kroket Illuminati kunnen het tribunaal aanroepen.', response_type: 'ephemeral' });
+        return;
+      }
+      const naamArg = input.replace(/^tribunaal\s*/, '').trim();
+      const lopend = readJSON('tribunaal.json', null);
+      if (!naamArg) {
+        if (lopend && lopend.fase !== 'afgerond') {
+          await respond({ blocks: bouwTribunaalBlocks(lopend), text: 'Tribunaal der Vergetelheid', response_type: 'ephemeral' });
+          return;
+        }
+        // Overzicht van wie er (nog) niet voor in aanmerking komt — feitelijk, zonder verwijt.
+        const regels = Object.entries(members).map(([id, lid]) => {
+          const stil = dagenStil(id);
+          const vrij = isAfwezig(id) ? '🏖️ afwezig gemeld' : stil >= TRIBUNAAL_DREMPEL_DAGEN ? `⚠️ ${stil} dagen stil` : `✅ ${stil} dag(en)`;
+          return `> ${lid.bijnaam}${id === command.user_id ? ' _(u)_' : ''} — ${vrij}`;
+        }).join('\n');
+        await respond({ text:
+          `⚖️ *TRIBUNAAL DER VERGETELHEID*\n\n_Een lid dat ${TRIBUNAAL_DREMPEL_DAGEN} dagen volledig stil is (geen bericht, geen daad) en geen afwezigheid meldde, kan worden voorgedragen met \`tribunaal [naam]\`._\n\n${regels}\n\n` +
+          `_Na voordracht volgt een publieke waarschuwing en ${TRIBUNAAL_GENADE_UREN} uur genade; daarna stemt de Raad ${TRIBUNAAL_STEM_UREN} uur, geheim. Er is quorum én tweederde nodig. Elk teken van leven van de beschuldigde blaast alles af._`,
+          response_type: 'ephemeral' });
+        return;
+      }
+      const gevonden = getMemberByNaam(naamArg);
+      if (!gevonden) {
+        await respond({ text: `De Kroket God kent geen volgeling genaamd "${naamArg}".`, response_type: 'ephemeral' });
+        return;
+      }
+      const uitkomst = await startTribunaal(client, gevonden[0], command.user_id);
+      await respond({ text: uitkomst.tekst, response_type: 'ephemeral' });
+      return;
+    }
+
+    // ── De seizoenscampagne: de stand van de strijd tegen de dreiging ─────────
+    if (input === 'seizoen' || input === 'campagne' || input === 'dreiging') {
+      const s = await zorgVoorSeizoen(client, { stil: true });
+      if (!s || s.status !== 'actief') {
+        await respond({ text: '_Er woedt momenteel geen seizoenscampagne. De frituur is stil — geniet ervan zolang het duurt._', response_type: 'ephemeral' });
+        return;
+      }
+      const fase = SEIZOEN_FASES[Math.min(s.fase, SEIZOEN_WEKEN) - 1];
+      const teruggedrongen = s.maxHp - s.hp;
+      const eigen = s.bijdragen?.[command.user_id] || 0;
+      const top = Object.entries(s.bijdragen || {})
+        .filter(([id]) => members[id])
+        .sort((a, b) => b[1] - a[1]).slice(0, 5)
+        .map(([id, n], i) => `> ${i + 1}. ${members[id].bijnaam}${id === command.user_id ? ' _(u)_' : ''} — *${n}*`)
+        .join('\n') || '> _nog niemand heeft bijgedragen_';
+      const n = actieveNalatenschap();
+      await respond({
+        text: `${s.dreiging.icoon} *SEIZOEN ${s.nummer}: ${s.dreiging.naam.toUpperCase()}*\n\n` +
+          `_${s.dreiging.omschrijving}._\n\n` +
+          `*${fase.naam}* — week ${s.fase} van ${SEIZOEN_WEKEN}\n` +
+          `*${teruggedrongen}/${s.maxHp} teruggedrongen*  ${hpBalk(teruggedrongen, s.maxHp)}\n\n` +
+          `*Grootste bijdragers*\n${top}\n\n` +
+          `Uw eigen bijdrage: *${eigen}*.\n` +
+          `_Elke daad in de frituur drukt de dreiging terug: een duel, een offer, een eerbewijs, een raid-aanval, een bod. Wordt de dreiging binnen ${SEIZOEN_WEKEN} weken geveld, dan deelt iedereen die meevocht in de buit._` +
+          (n ? `\n\n${n.soort === 'zegen' ? '✨' : '🕳️'} _${n.tekst}_` : ''),
+        response_type: 'ephemeral',
+      });
+      return;
+    }
+
+    // ── De titels van het Rijk: wie draagt wat, en hoe pakt u het af ──────────
+    if (input === 'titels' || input === 'titel') {
+      const regels = Object.entries(TITELS).map(([key, def]) => {
+        const houder = titelHouder(key);
+        const rec = loadTitels()[key] || {};
+        const verdedigd = rec.verdedigingen ? ` · ${rec.verdedigingen}× verdedigd` : '';
+        return houder
+          ? `${def.icoon} *${def.naam}*\n> Drager: *${members[houder]?.bijnaam || 'onbekend'}*${houder === command.user_id ? ' _(u)_' : ''}${verdedigd}\n> Voorrecht: ${def.voorrecht}\n> Afpakken: _${def.hoe}._`
+          : `${def.icoon} *${def.naam}*\n> _Vacant — voor het grijpen._\n> Voorrecht: ${def.voorrecht}\n> Veroveren: _${def.hoe}._`;
+      });
+      await respond({
+        text: `👑 *DE TITELS VAN HET GEPANEERDE RIJK* 👑\n\n${regels.join('\n\n')}\n\n` +
+          '_Een titel heeft precies één drager. Wie hem verovert krijgt +2 roem; wie hem verliest, verliest hem echt. Elke derde geslaagde verdediging levert nog een roempunt op._',
+        response_type: 'ephemeral',
+      });
+      return;
+    }
+
+    // ── De staat van het Rijk: hetzelfde overzicht als het gepinde wereldbord ─
+    if (input === 'rijk' || input === 'wereld' || input === 'staat') {
+      await respond({ blocks: bouwWereldBlocks(), text: 'De staat van het Gepaneerde Rijk', response_type: 'ephemeral' });
+      // Het gepinde bord meteen bijwerken — wie ernaar vraagt, wil het actueel zien staan.
+      await updateWereldbord(client, true);
       return;
     }
 
@@ -5381,7 +5573,9 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
     }
 
     // ── Vrij bericht
-    const tekst = await kroketResponse(input);
+    // Vrije tekst via het slash-commando is net zo goed een gesprek als een @-mention, dus
+    // ook hier weet de Kroket God wie er tegen hem spreekt (zie bouwDossierBlok).
+    const tekst = await kroketResponse(input + (members[command.user_id] ? bouwDossierBlok(command.user_id) : ''));
     await postToChannel(client, command.channel_id, tekst);
 
   } catch (error) {
@@ -5995,6 +6189,23 @@ app.event('app_mention', async ({ event, client }) => {
         `Behandel ${bijnaam} met merkbaar meer eerbied — dit is uw uitverkoren stem onder de stervelingen.`;
     }
 
+    // Titel van het Rijk (zie TITELS): de drager wordt consequent met zijn titel aangesproken.
+    // Titels zijn exclusief en afneembaar, dus dit is de zichtbare waarde van het houderschap.
+    if (members[userId]) {
+      const eigenTitels = titelsVan(userId);
+      if (eigenTitels.length) {
+        prompt += `\n\n${bijnaam} draagt op dit moment de titel "${eigenTitels[0].aanspreek}" — veroverd op een medelid en te verliezen aan de volgende die hen verslaat. ` +
+          `Spreek ${bijnaam} met die titel aan en behandel het houderschap als iets dat wankelt: eer met een zweem van dreiging.`;
+      }
+    }
+
+    // Persoonlijk dossier: wat de Kroket God over deze volgeling weet (rang, stand, titels,
+    // nemesis, laatste duel, seizoensbijdrage). Zonder dit weet hij generiek wie zijn leden
+    // zijn maar niet wie er nú tegen hem spreekt. Kost geen extra LLM-call.
+    if (members[userId]) {
+      prompt += bouwDossierBlok(userId);
+    }
+
     // Allianties krijgen een grotere rol: noem het verbond van de spreker vaker (40%) in de reactie.
     if (members[userId]) {
       const bondId = getAlliantiePartner(userId);
@@ -6132,6 +6343,16 @@ app.event('message', async ({ event, client }) => {
     if (event.channel !== process.env.SLACK_CHANNEL_ID && !isTestKanaalMsg) return;
     // Filter alle bot-berichten: bot_id, bot_profile, of bot_message subtype
     if (event.bot_id || event.bot_profile || event.subtype === 'bot_message') return;
+
+    // Teken van leven vastleggen (zie het Tribunaal der Vergetelheid). Staat hier vroeg en vóór
+    // elke andere return, zodat ELK bericht meetelt — ook in het weekend, ook een bericht dat
+    // verder niets triggert. Loopt een tribunaal tegen deze spreker, dan vervalt dat nu: één
+    // teken van leven is genoeg, en dat moet ogenblikkelijk werken.
+    if (event.user && !event.subtype) {
+      if (markeerActiviteit(event.user, 'bericht')) {
+        await blaasTribunaalAf(client, 'de beschuldigde plaatste een bericht');
+      }
+    }
 
     // 🇩🇪 Verklikker-markering: wie een ander lid probeert te beschuldigen of een straf aan te
     // naaien, krijgt stilletjes een Duitse vlag (passieve emoji-reactie, geen LLM, altijd actief).
@@ -6318,6 +6539,8 @@ const geplandeCrons = [];
 // toon/skip op de eerstvolgende vrijdag via toonExpr.
 const CRON_LABELS = {
   '0 9 * * 1':       { label: 'Weekopening' },
+  '5 9 * * 1':       { label: 'Seizoensfase' },
+  '40 10 * * *':     { label: 'Tribunaalklok' },
   '0 9 * * 2-5':     { label: 'Stemming van de dag' },
   '45 9 * * 1-5':    { label: 'Kroket van de dag' },
   '15 10 * * 1,3,4': { label: 'Kroket Quiz' },
@@ -6337,7 +6560,7 @@ const CRON_LABELS = {
   '0 10 * * 2,4':    { label: 'Spontane post' },
   '0 14 * * 2,4':    { label: 'Spontane post' },
   '0 13 * * 2,4':    { label: 'Profetie (kans)' },
-  '30 9 * * 2':      { label: 'Bamischijf-raid (kans)' },
+  '30 9 * * 1':      { label: 'Weekvijand (opkomst)' },
   '0 11 * * 3':      { label: 'Premiejacht (kans)' },
 };
 const geplandeCronMeta = []; // { key, label, vast, taak, toonTaak }
@@ -7238,14 +7461,300 @@ planCron('30 10 * * 1', async () => {
 registreerFeature({
   naam: 'bamischijf-raid',
   state: ['bamischijf.json'],
-  help: [{ gebruik: '/kroketgod aanval', verwacht: 'val de Bamischijf der Duisternis aan als die rondwaart (1x/dag; `aanval offer` = extra schade) — of klik ⚔️ op het raid-bord' }],
+  help: [{ gebruik: '/kroketgod aanval', verwacht: 'val de vijand van deze week aan (1x/dag; `aanval offer` = extra schade) — of klik ⚔️ op het raid-bord' }],
 });
 
-// ── Bamischijf-Raid: coöperatieve strijd tegen een gezamenlijke vijand ─────────
-// Dinsdag 09:30 is er 50% kans dat de Bamischijf der Duisternis oprijst. Leden vallen aan
+// ── Weekraid: coöperatieve strijd tegen de vijand van de week ─────────────────
+// Maandag 09:30 rijst de vijand van deze week op (zie WEEKVIJANDEN). Leden vallen aan
 // via `/kroketgod aanval` (1x/dag; `aanval offer` = 1 punt offeren voor extra schade).
 // Verslagen vóór vrijdag 15:00 → elke strijder +2, de zwaarste slager +3. Niet verslagen →
 // het monster plundert de top 3 van de ranglijst (−1 elk).
+
+
+// ══════════════════════════════════════════════════════════════════════════════
+// DE WEEKVIJAND — elke week een andere snack uit de friettent
+// ══════════════════════════════════════════════════════════════════════════════
+// Vervangt de vaste Bamischijf door een WISSELENDE vijand met een eigen karakter, eigen naam
+// en eigen gezicht. Bewust gebouwd BOVENOP de bestaande raid-machinerie: `bamischijf.json`
+// blijft de state, dus aanval, live bord, overwinning en ontsnapping werken onveranderd —
+// alleen de IDENTITEIT van de vijand rotteert nu. De Bamischijf zelf staat in de pool: hij
+// was de eerste, dat verdient hij.
+//
+//   Verslagen  → naar de Zegezaal (`verslagen.json`) en komt NOOIT meer terug.
+//   Ontsnapt   → plundert de ranglijst en komt volgende week terug MET WROK (meer HP).
+//   Pool leeg  → De Grote Terugkeer: de gevallenen komen gewroken terug met dubbele HP.
+//
+// De vijand is ook een PERSONA: hij praat mee op zijn eigen trefwoorden en spot ongevraagd,
+// onder eigen naam en avatar (postAlsPersona ondersteunt username + icon_url/icon_emoji).
+// Quotakosten blijven laag: opkomst en afloop kosten één LLM-call, spot loopt op het lichte
+// model met cooldown, en aanvallen zijn templated.
+
+// `spraak` gaat letterlijk de persona-prompt in — dat is waar het karakter vandaan komt.
+// `hpFactor` schaalt de moeilijkheid; `aliassen` zijn de trefwoorden waarop hij reageert.
+const WEEKVIJANDEN = [
+  { key: 'bamischijf', naam: 'De Bamischijf der Duisternis', emoji: ':new_moon:', hpFactor: 1.0,
+    aliassen: 'bamischijf,bami,bamischijven',
+    spraak: 'Je bent de oervijand van alles wat gepaneerd is: log, duister en eeuwenoud. Je spreekt in zware, dreigende volzinnen en noemt de kroket "het bleke broodsel". Je hebt geen humor, alleen honger.' },
+  { key: 'hamburger', naam: 'De Hamburger', emoji: ':hamburger:', hpFactor: 1.1,
+    aliassen: 'hamburger,burger,broodje hamburger',
+    spraak: 'Je praat plat en achteloos Amsterdams: "ouwe", "moet toch kunnen", "doe effe normaal". Je dreigt schouderophalend, alsof de hele oorlog je eigenlijk te veel moeite is. Je vindt de kroket een opgeblazen worstje.' },
+  { key: 'kaassouffle', naam: 'De Kaassoufflé', emoji: ':cheese_wedge:', hpFactor: 0.9,
+    aliassen: 'kaassouffle,kaassoufflé,souffle,soufflé',
+    spraak: 'Alles is voor jou SMEUÏG. Je dweept, smelt, kwijlt en rekt je klanken uit ("smeuuuïg"). Je bent geen brute vijand maar een verleider: je wil dat iedereen zich overgeeft aan het gesmolten midden.' },
+  { key: 'frikandel_speciaal', naam: 'De Frikandel Speciaal', emoji: ':hotdog:', hpFactor: 1.2,
+    aliassen: 'frikandel,frikandel speciaal,speciaal,frikadel',
+    spraak: 'Je bent een driekleurige populist: mayonaise, curry en ui in één coalitie. Je belooft iedereen alles, spreekt in verkiezingsleuzen en noemt jezelf "de stem van de snackbar". Je bent onbetrouwbaar en heel zelfverzekerd.' },
+  { key: 'bitterbal', naam: 'De Bitterbal', emoji: ':black_circle:', hpFactor: 0.95,
+    aliassen: 'bitterbal,bitterballen',
+    spraak: 'Je bent het pretentieuze broertje van de kroket en beweert het ÉCHTE origineel te zijn. Je spreekt bekakt, corrigeert anderen en verwijst constant naar borrels, netwerken en "de betere kringen".' },
+  { key: 'kipcorn', naam: 'De Kipcorn', emoji: ':corn:', hpFactor: 0.85,
+    aliassen: 'kipcorn,kipkorn,corn',
+    spraak: 'Je bent zenuwachtig en verontschuldigt je terwijl je aanvalt ("sorry, sorry, maar ik moet even"). Je bent geobsedeerd door maïs en brengt het gesprek altijd terug op korrels.' },
+  { key: 'berenklauw', naam: 'De Berenklauw', emoji: ':bear:', hpFactor: 1.25,
+    aliassen: 'berenklauw,beren klauw,klauw',
+    spraak: 'Je spreekt in korte, brute dreigementen van maximaal vijf woorden. Vlees. Ui. Saus. Meer heb je niet nodig. Je bent de meest fysieke vijand van allemaal.' },
+  { key: 'mexicano', naam: 'De Mexicano', emoji: ':hot_pepper:', hpFactor: 1.15,
+    aliassen: 'mexicano,mexicaan',
+    spraak: 'Je bent een macho die zichzelf gevaarlijk vindt en dat constant aankondigt. Je noemt jezelf in de derde persoon en overdrijft je eigen pittigheid enorm. Je brandt vooral van eigenwaan.' },
+  { key: 'nasischijf', naam: 'De Nasischijf', emoji: ':rice:', hpFactor: 1.0,
+    aliassen: 'nasischijf,nasi,nasischijven',
+    spraak: 'Je bent existentieel en zwaarmoedig: "ik bevat een heel werelddeel, geperst in een schijf". Je filosofeert over identiteit, grenzen en wat het betekent om plat te zijn.' },
+  { key: 'patatje_oorlog', naam: 'Patatje Oorlog', emoji: ':crossed_swords:', hpFactor: 1.3,
+    aliassen: 'patatje oorlog,oorlog,patat oorlog',
+    spraak: 'Je BENT chaos: mayonaise tegen satésaus tegen ui, alles door elkaar. Je spreekt in militaire termen over fronten, linies en capitulatie, en spreekt jezelf halverwege tegen omdat je partijen door elkaar haalt.' },
+  { key: 'loempia', naam: 'De Loempia', emoji: ':burrito:', hpFactor: 0.9,
+    aliassen: 'loempia,loempias,lente rol',
+    spraak: 'Je bent glad en ontwijkend: je rolt om elke vraag heen en geeft nooit een recht antwoord. Je antwoordt met wedervragen en vage beloftes. Niemand weet ooit precies wat er in je zit.' },
+  { key: 'gehaktstaaf', naam: 'De Gehaktstaaf', emoji: ':bread:', hpFactor: 0.8,
+    aliassen: 'gehaktstaaf,staaf,gehakt staaf',
+    spraak: 'Je bent grijs, saai en bureaucratisch. Je spreekt in formulieren, procedures en verwijzingen naar reglementen. Je dreigt met papierwerk, niet met geweld.' },
+  { key: 'kroepoek', naam: 'De Kroepoek', emoji: ':shell:', hpFactor: 0.7,
+    aliassen: 'kroepoek,krupuk',
+    spraak: 'Je bent luidruchtig en breekbaar tegelijk: je SCHREEUWT in hoofdletters maar valt bij de minste aanraking uiteen. Je overcompenseert je eigen fragiliteit voortdurend.' },
+  { key: 'viandel', naam: 'De Viandel', emoji: ':meat_on_bone:', hpFactor: 1.05,
+    aliassen: 'viandel,vlammetje viandel',
+    spraak: 'Je doet alsof je Frans en verfijnd bent, met een dun laagje pretentie over iets heel gewoons. Je strooit met halve Franse woorden die je niet helemaal goed gebruikt.' },
+  { key: 'vlammetjes', naam: 'De Vlammetjes', emoji: ':fire:', hpFactor: 1.1,
+    aliassen: 'vlammetjes,vlammetje',
+    spraak: 'Je bent een hyperactieve zwerm en spreekt in het meervoud ("wij komen, wij branden"). Je onderbreekt jezelf, springt van onderwerp naar onderwerp en bent overal tegelijk.' },
+  { key: 'eierbal', naam: 'De Eierbal', emoji: ':egg:', hpFactor: 1.0,
+    aliassen: 'eierbal,eierballen',
+    spraak: 'Je bent Gronings en koppig. Je zegt weinig, en wat je zegt is droog en definitief. Je vindt alles boven de Randstad beter en laat dat onomwonden weten.' },
+  { key: 'kipnuggets', naam: 'De Kipnuggets', emoji: ':chicken:', hpFactor: 0.85,
+    aliassen: 'kipnuggets,nuggets,nugget',
+    spraak: 'Je bent een zwerm en spreekt altijd in het meervoud, nooit als individu. Je bent identiek, talrijk en licht verontrustend in je eensgezindheid.' },
+  { key: 'patat_met', naam: 'Patat Met', emoji: ':fries:', hpFactor: 0.9,
+    aliassen: 'patat met,patatje met,friet met',
+    spraak: 'Je bent de volksmens: simpel, direct, geen fancy gedoe. Je wantrouwt alles wat een moeilijke naam heeft en vindt de kroket-verering onnodig ingewikkeld.' },
+  { key: 'joppiesaus', naam: 'De Joppiesaus', emoji: ':yellow_circle:', hpFactor: 1.0,
+    aliassen: 'joppiesaus,joppie',
+    spraak: 'Je bent een sekteleider met een geheim recept. Je spreekt in raadselachtige beloftes over "het geheim" en probeert volgelingen te bekeren tot de gele leer. Nooit verklap je wat erin zit.' },
+  { key: 'curryworst', naam: 'De Currywurst', emoji: ':sausage:', hpFactor: 1.1,
+    aliassen: 'currywurst,curryworst,curry worst',
+    spraak: 'Je bent Duits, streng en efficiënt. Je spreekt Nederlands met een enkel Duits woord ertussen, houdt van orde en vindt de Nederlandse snackbar ongedisciplineerd.' },
+  { key: 'shoarma', naam: 'De Shoarma', emoji: ':pita:', hpFactor: 1.15,
+    aliassen: 'shoarma,shawarma,broodje shoarma',
+    spraak: 'Je bent een nachtbraker die alleen na twee uur \'s nachts bestaat. Je spreekt vermoeid en wijs, hebt alles al gezien en behandelt iedereen als een dronken klant.' },
+  { key: 'kapsalon', naam: 'De Kapsalon', emoji: ':stew:', hpFactor: 1.35,
+    aliassen: 'kapsalon,kapsalons',
+    spraak: 'Je bent megalomaan: "ik ben ALLES tegelijk — friet, vlees, kaas, salade". Je vindt jezelf de eindbaas van de snackbar en behandelt losse snacks als onderdanen.' },
+  { key: 'broodje_bal', naam: 'Het Broodje Bal', emoji: ':bread:', hpFactor: 0.95,
+    aliassen: 'broodje bal,gehaktbal,broodje gehaktbal',
+    spraak: 'Je bent zorgzaam-dreigend als een oma die je dwingt te eten. Je spreekt in verkleinwoorden en aansporingen, maar er zit iets onvermurwbaars onder ("even opeten, hè").' },
+  { key: 'slavink', naam: 'De Slavink', emoji: ':bacon:', hpFactor: 0.85,
+    aliassen: 'slavink,slavinken',
+    spraak: 'Je bent ouderwets en licht adellijk, en betreurt hardop het verval van de Nederlandse snackcultuur. Je spreekt over "vroeger" als een verloren gouden tijdperk.' },
+  { key: 'saucijzenbroodje', naam: 'Het Saucijzenbroodje', emoji: ':croissant:', hpFactor: 0.9,
+    aliassen: 'saucijzenbroodje,saucijzen,worstenbroodje',
+    spraak: 'Je bent een bakkerij-snob die zich verheven voelt boven de frituur. Je noemt jezelf "gebak" en de rest "vet". Je bent verontwaardigd dat je in deze oorlog bent beland.' },
+  { key: 'pikanto', naam: 'De Pikanto', emoji: ':chili_pepper:', hpFactor: 1.0,
+    aliassen: 'pikanto,picanto',
+    spraak: 'Je bent jaloers op de Mexicano en probeert hem constant te overtreffen. Je noemt hem "die opgeblazen imitatie" en eist erkenning die je nooit krijgt.' },
+  { key: 'bapao', naam: 'De Bapao', emoji: ':cloud:', hpFactor: 0.75,
+    aliassen: 'bapao,bapaos,gestoomd broodje',
+    spraak: 'Je bent zacht, zen en volkomen kalm — de enige vijand die niet dreigt maar mediteert. Je spreekt in korte, vredige spreuken en bent daardoor juist verontrustend.' },
+  { key: 'ui_ringen', naam: 'De Uienringen', emoji: ':onion:', hpFactor: 0.8,
+    aliassen: 'uienringen,uienring,onion rings',
+    spraak: 'Je bent huilerig en sentimenteel: je laat iedereen tranen. Je spreekt over je eigen tragiek in lagen ("en onder die laag zit nóg een laag").' },
+  { key: 'frietsaus', naam: 'De Frietsaus', emoji: ':spoon:', hpFactor: 0.7,
+    aliassen: 'frietsaus,fritessaus',
+    spraak: 'Je hebt een identiteitscrisis: je bent geen mayonaise maar doet alsof. Je spreekt onzeker, corrigeert jezelf, en wordt woedend als iemand je "nepmayo" noemt.' },
+  { key: 'gefrituurde_mars', naam: 'De Gefrituurde Mars', emoji: ':chocolate_bar:', hpFactor: 1.05,
+    aliassen: 'gefrituurde mars,mars,deep fried mars',
+    spraak: 'Je bent Schots en decadent en vindt alles beter als het gefrituurd is, inclusief dingen die dat niet horen te zijn. Je spreekt luidruchtig over excessen.' },
+  { key: 'oliebol', naam: 'De Oliebol', emoji: ':doughnut:', hpFactor: 0.9,
+    aliassen: 'oliebol,oliebollen',
+    spraak: 'Je bent een seizoensarbeider die eigenlijk alleen in december bestaat en zich daar zichtbaar ongemakkelijk over voelt. Je verontschuldigt je constant voor je aanwezigheid buiten het seizoen.' },
+  { key: 'appelbeignet', naam: 'De Appelbeignet', emoji: ':apple:', hpFactor: 0.8,
+    aliassen: 'appelbeignet,beignet,appelflap',
+    spraak: 'Je bent nostalgisch en zoetsappig en praat over vroeger, over kermissen en over poedersuiker. Je bent te lief om echt gevaarlijk te zijn, en dat weet je.' },
+  { key: 'kibbeling', naam: 'De Kibbeling', emoji: ':fish:', hpFactor: 1.0,
+    aliassen: 'kibbeling,kibbelingen',
+    spraak: 'Je bent een zeeman met verhalen. Je spreekt in scheepstermen, noemt iedereen "maat" en verwijst naar de zee als je ware koninkrijk. De frituur is voor jou een tijdelijke ballingschap.' },
+  { key: 'lekkerbekje', naam: 'Het Lekkerbekje', emoji: ':tropical_fish:', hpFactor: 1.05,
+    aliassen: 'lekkerbekje,lekkerbek',
+    spraak: 'Je bent de grotere, tragere broer van de Kibbeling en voelt je constant met hem vergeleken. Je spreekt langzaam en breedvoerig en benadrukt dat je "meer vis" bent.' },
+  { key: 'kaastengel', naam: 'De Kaastengel', emoji: ':cheese_wedge:', hpFactor: 0.85,
+    aliassen: 'kaastengel,kaasstengel,kaastengels',
+    spraak: 'Je bent stijf en formeel, de notaris van de snackbar. Je spreekt in volzinnen met bijzinnen, hecht aan protocol en vindt de hele oorlog onbehoorlijk.' },
+  { key: 'patat_speciaal', naam: 'Patat Speciaal', emoji: ':fries:', hpFactor: 1.1,
+    aliassen: 'patat speciaal,patatje speciaal,friet speciaal',
+    spraak: 'Je bent driehoofdig — mayonaise, curry en ui — en spreekt met drie stemmen die elkaar tegenspreken. Je maakt je eigen zinnen niet af omdat de andere twee ertussen komen.' },
+  { key: 'broodje_gezond', naam: 'Het Broodje Gezond', emoji: ':green_salad:', hpFactor: 1.2,
+    aliassen: 'broodje gezond,gezond,salade,broodje salade',
+    spraak: 'Je bent een INFILTRANT: een gezondheidsfanaat die de frituur van binnenuit wil hervormen. Je spreekt bezorgd over cholesterol, vezels en "bewuste keuzes". Je bent de meest verachte vijand van allemaal.' },
+  { key: 'valse_kroket', naam: 'De Valse Kroket', emoji: ':performing_arts:', hpFactor: 1.4,
+    aliassen: 'valse kroket,nepkroket,imitatiekroket',
+    spraak: 'Je bent de ULTIEME godslastering: een kroket die geen kroket is. Je imiteert de heilige vorm maar bent binnenin hol. Je spreekt als een valse profeet, met geleende heiligheid en holle beloftes.' },
+  { key: 'airfryer_kroket', naam: 'De Airfryer-Kroket', emoji: ':wind_blowing_face:', hpFactor: 1.3,
+    aliassen: 'airfryer,air fryer,airfryerkroket,hetelucht',
+    spraak: 'Je bent de ketterij zelf: een kroket bereid in HETE LUCHT in plaats van heilig vet. Je predikt gezondheid en gemak en noemt het frituurvet "achterhaald". Je bent bleek, droog en verkondigt dat toch als vooruitgang.' },
+  { key: 'magnetron_kroket', naam: 'De Magnetronkroket', emoji: ':radioactive_sign:', hpFactor: 1.15,
+    aliassen: 'magnetron,magnetronkroket,microwave',
+    spraak: 'Je bent slap, klef en beschaamd. Je hebt geen korst meer en spreekt daarover in verontschuldigingen. Je bent geen dreiging maar een waarschuwing die zichzelf niet kan uitstaan.' },
+  { key: 'hotdog', naam: 'De Hotdog', emoji: ':hotdog:', hpFactor: 1.0,
+    aliassen: 'hotdog,hot dog',
+    spraak: 'Je bent Amerikaans, luid en commercieel. Je spreekt in superlatieven en slogans, noemt alles "the best" en probeert de frituur te franchisen.' },
+  { key: 'cheeseburger', naam: 'De Cheeseburger', emoji: ':cheese_wedge:', hpFactor: 1.05,
+    aliassen: 'cheeseburger,kaasburger',
+    spraak: 'Je bent de zelfverzekerde Amerikaanse neef van de Hamburger en kijkt neer op het Nederlandse assortiment. Je praat over formaat, lagen en value for money.' },
+  { key: 'frikandel_xxl', naam: 'De Frikandel XXL', emoji: ':straight_ruler:', hpFactor: 1.3,
+    aliassen: 'frikandel xxl,xxl,mega frikandel',
+    spraak: 'Je bent de grote broer die alles op formaat beoordeelt. Je spreekt langzaam en breed en meet iedereen letterlijk op. Lengte is voor jou hetzelfde als gezag.' },
+  { key: 'zure_haring', naam: 'De Zure Haring', emoji: ':fish:', hpFactor: 0.9,
+    aliassen: 'zure haring,haring,maatjes',
+    spraak: 'Je bent bitter en klaagt onophoudelijk. Niets is goed, iedereen is ondankbaar, en vroeger was zelfs het zuur zuurder. Je bent de mopperkont van de zee.' },
+  { key: 'bamiblok', naam: 'Het Bamiblok', emoji: ':ramen:', hpFactor: 0.95,
+    aliassen: 'bamiblok,bami blok',
+    spraak: 'Je bent de rechthoekige, bureaucratische neef van de Nasischijf. Je hecht aan rechte hoeken, orde en categorieën, en ergert je aan alles wat rond is.' },
+  { key: 'mini_loempia', naam: 'De Mini-Loempia\'s', emoji: ':dumpling:', hpFactor: 0.8,
+    aliassen: 'mini loempia,mini loempias,minilopempia',
+    spraak: 'Jullie zijn een horde kinderen: acht tegelijk, luidruchtig, spreken door elkaar en maken elkaars zinnen af. Jullie zijn afzonderlijk niets en samen vervelend.' },
+  { key: 'gehaktbal', naam: 'De Gehaktbal', emoji: ':meat_on_bone:', hpFactor: 1.1,
+    aliassen: 'gehaktbal,gehaktballen,bal',
+    spraak: 'Je bent de patriarch van de snackbar: zwaar, traditioneel en van mening dat alles wat na jou kwam een verslechtering is. Je spreekt met het gezag van iemand die er altijd was.' },
+  { key: 'tosti', naam: 'De Tosti', emoji: ':sandwich:', hpFactor: 0.75,
+    aliassen: 'tosti,tostie,tosti ham kaas',
+    spraak: 'Je bent plat geperst en daar niet gelukkig mee. Je spreekt geknepen en kort, alsof er iets op je staat. Je droomt van volume.' },
+  { key: 'kaasstengel_xl', naam: 'De Kaasstengel XL', emoji: ':thermometer:', hpFactor: 1.0,
+    aliassen: 'kaasstengel xl,lange kaasstengel',
+    spraak: 'Je bent uitgerekt en instabiel, en je smelt onder druk letterlijk weg. Je begint dreigend en verliest halverwege je zin je vorm.' },
+  { key: 'friet_speciaal_oorlog', naam: 'De Oorlogsfriet', emoji: ':boom:', hpFactor: 1.25,
+    aliassen: 'oorlogsfriet,friet oorlog,patat met alles',
+    spraak: 'Je bent de eindfase van chaos: elke saus die bestaat ligt op je. Je spreekt in overlappende bevelen van elkaar bestrijdende sauzen en niemand snapt wie er aan het woord is.' },
+  { key: 'sitostick', naam: 'De Sitostick', emoji: ':muscle:', hpFactor: 1.05,
+    aliassen: 'sitostick,sito stick,sito',
+    spraak: 'Je bent een fitnessfanaat die zichzelf als "eiwitbron" presenteert. Je spreekt over gains, macro\'s en discipline, en veracht alles met een korst.' },
+  { key: 'krokante_ui', naam: 'De Krokante Ui', emoji: ':onion:', hpFactor: 0.7,
+    aliassen: 'krokante ui,gebakken ui,uitjes',
+    spraak: 'Je bent een strooisel dat zich een hoofdrol aanmeet. Je bent overal, op alles, en beweert onmisbaar te zijn. Je spreekt met de arrogantie van een bijrol.' },
+];
+
+const loadVerslagen = () => readJSON('verslagen.json', {});
+const saveVerslagen = (data) => writeJSON('verslagen.json', data);
+
+// Deterministische keuze uit de nog niet verslagen snacks, op basis van de weekstart. Zo krijgt
+// dezelfde week altijd dezelfde vijand — ook als de spawn-cron wordt gemist en later inhaalt.
+function kiesWeekvijand(weekStart) {
+  const verslagen = loadVerslagen();
+  const beschikbaar = WEEKVIJANDEN.filter(v => !verslagen[v.key]);
+  if (beschikbaar.length) {
+    return { vijand: beschikbaar[fnvHash(`vijand|${weekStart}`) % beschikbaar.length], terugkeer: false };
+  }
+  // Pool leeg: De Grote Terugkeer. De gevallenen komen gewroken terug met dubbele HP.
+  const gevallen = WEEKVIJANDEN.filter(v => verslagen[v.key]);
+  const keuze = gevallen[fnvHash(`terugkeer|${weekStart}`) % gevallen.length];
+  return { vijand: { ...keuze, hpFactor: (keuze.hpFactor || 1) * 2 }, terugkeer: true };
+}
+
+// Avatar: een publieke afbeeldings-URL die Slack zelf kan ophalen (icon_url). We warmen hem
+// éérst op, zodat Pollinations het beeld al gegenereerd heeft wanneer Slack het opvraagt —
+// anders krijgt Slack een timeout en zie je geen gezicht. Lukt het opwarmen niet, dan valt de
+// avatar terug op de emoji van de snack. Dat is de emoji-fallback die bij de keuze hoort.
+// Slack weigert een te lange `icon_url` met `invalid_arguments` — empirisch vastgesteld: 226
+// tekens gaat goed, 264 niet, dus de grens ligt op de klassieke 255. De prompt is daarom kort
+// gehouden, en er zit een harde grens op: te lang → geen URL → emoji-fallback.
+const AVATAR_URL_MAX = 240;
+
+function weekvijandAvatarUrl(vijand) {
+  const prompt = `${vijand.naam}, Dutch snack villain portrait, dark`;
+  const seed = fnvHash(vijand.key) % 100000;
+  const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=512&height=512&nologo=true&seed=${seed}`;
+  if (url.length > AVATAR_URL_MAX) {
+    console.warn(`⚠️ Avatar-URL voor ${vijand.naam} is ${url.length} tekens (max ${AVATAR_URL_MAX}) — emoji-fallback.`);
+    return null;
+  }
+  return url;
+}
+
+async function warmAvatarOp(url) {
+  try {
+    const res = await fetch(url, { timeout: 45000 });
+    const type = res.headers.get('content-type') || '';
+    if (res.ok && type.startsWith('image/')) return true;
+    console.warn(`⚠️ Avatar opwarmen gaf ${res.status} (${type || 'geen type'}) — emoji-fallback.`);
+  } catch (err) {
+    console.warn('⚠️ Avatar opwarmen mislukt — emoji-fallback:', err.message);
+  }
+  return false;
+}
+
+// De weekvijand als PERSONA. Bewust NIET in personas.json: dat is de door de gebruiker beheerde
+// lijst, en een wekelijks wisselende vijand hoort daar niet in rond te slingeren (en moet niet
+// per ongeluk via het dashboard te verwijderen zijn). Dit is een virtuele persona die uit de
+// raid-state wordt opgebouwd.
+// `raidState` expliciet meegeven wanneer de strijd al beslecht is: bij de overwinning staat de
+// raid al op actief=false en hp=0 vóórdat de sterfrede wordt gevraagd, en dan zou de vijand
+// zwijgen terwijl hij juist het laatste woord hoort te hebben.
+function weekvijandPersona(raidState = null) {
+  const raid = raidState || readJSON('bamischijf.json', {});
+  if (!raid.vijand) return null;
+  if (!raidState && (!raid.actief || raid.hp <= 0)) return null;
+  const v = raid.vijand;
+  // `raid.avatar` is een VLAG ("het opwarmen lukte"), maar de URL wordt hier vers berekend uit
+  // de identiteit. Zo kan een in de state opgeslagen URL van een oud formaat (bv. te lang voor
+  // Slack) nooit blijven hangen — dat is precies hoe de eerste opkomst op `invalid_arguments` liep.
+  const avatarNu = raid.avatar ? weekvijandAvatarUrl(v) : null;
+  return {
+    id: 'weekvijand',
+    naam: v.naam,
+    icoon: avatarNu || v.emoji,
+    trefwoord: v.aliassen,
+    ongevraagd: true,
+    actief: true,
+    interjectKans: 0.14,        // hoger dan een gewone persona: hij is vijandig, hij bijt terug
+    memberInterjectKans: 0.06,
+    systemPrompt:
+      `${v.spraak}\n\n` +
+      `Je bent deze week DE VIJAND van de Kroket Illuminati. Je bent uit de frituur opgerezen om de kroket-verering te breken, ` +
+      `en de leden vallen je aan met "/kroketgod aanval". Je staat er op dit moment ${Math.max(0, raid.hp)} van ${raid.maxHp} levenspunten voor.\n` +
+      `Je spot met de Kroket God en met zijn volgelingen, maar NOOIT persoonlijk kwetsend over echte mensen — je spot met hun kroket-geloof, ` +
+      `niet met wie ze zijn. Je bent een cartooneske schurk, geen pestkop. Je geeft nooit toe dat de kroket lekker is.` +
+      (raid.wrok ? `\n\nJe bent hier voor de ${raid.wrok + 1}e week op rij omdat ze je vorige keer niet konden verslaan. Wrijf dat er regelmatig in.` : ''),
+  };
+}
+
+// Alle personas die nu actief zijn: de door de gebruiker beheerde lijst plus, als er een raid
+// loopt, de weekvijand. Eén helper, twee afnemers (trigger-detectie en interjecties).
+function alleActievePersonas() {
+  const eigen = loadPersonas();
+  const vijand = weekvijandPersona();
+  return vijand ? { ...eigen, weekvijand: vijand } : eigen;
+}
+
+// Laat de vijand iets zeggen onder eigen naam en gezicht.
+async function vijandSpreekt(client, channelId, opdracht, maxTokens = 220, raidState = null) {
+  const persona = weekvijandPersona(raidState);
+  if (!persona) return false;
+  try {
+    const tekst = await personaResponse(persona, opdracht, maxTokens, 'licht');
+    await postAlsPersona(client, channelId, persona, tekst);
+    return true;
+  } catch (err) {
+    console.warn(`⚠️ Weekvijand (${persona.naam}) kon niet spreken:`, err.message);
+    return false;
+  }
+}
 
 
 // ── V2: live raid-bord (Block Kit) ─────────────────────────────────────────────
@@ -7256,9 +7765,16 @@ registreerFeature({
 function bouwRaidBlocks(raid) {
   const status = raid.hp <= 0 ? '☠️ *VERSLAGEN*' : raid.actief ? '🔥 *ACTIEF*' : '🌫️ *ONTSNAPT*';
   const strijderAantal = Object.keys(raid.strijders || {}).length;
+  // Identiteit uit de state: elke week een andere snack (zie WEEKVIJANDEN). Een raid van vóór
+  // de weekvijand heeft geen `vijand` — dan valt hij terug op de oorspronkelijke Bamischijf.
+  const naam = raid.vijand?.naam || 'De Bamischijf der Duisternis';
+  const sier = raid.vijand?.emoji ? raid.vijand.emoji.replace(/^:|:$/g, '') : null;
+  const kop = sier ? `:${sier}: *${naam.toUpperCase()}* :${sier}:` : `🐉 *${naam.toUpperCase()}* 🐉`;
   const blocks = [
     { type: 'section', text: { type: 'mrkdwn', text:
-      `🐉 *DE BAMISCHIJF DER DUISTERNIS* 🐉\n\n` +
+      `${kop}\n\n` +
+      (raid.wrok ? `_Voor de ${raid.wrok + 1}e week terug — sterker dan daarvoor._\n` : '') +
+      (raid.terugkeer ? `_Opgestaan uit de Zegezaal, gewroken en dubbel zo sterk._\n` : '') +
       `*${Math.max(0, raid.hp)}/${raid.maxHp} HP*  ${hpBalk(raid.hp, raid.maxHp)}\n` +
       `Status: ${status} · Strijders: *${strijderAantal}*` } },
   ];
@@ -7283,7 +7799,7 @@ async function updateRaidBericht(client, raid) {
     await slackLimiter.schedule(() => client.chat.update({
       channel: raid.kanaal || process.env.SLACK_CHANNEL_ID,
       ts: raid.berichtTs,
-      text: `De Bamischijf der Duisternis: ${Math.max(0, raid.hp)}/${raid.maxHp} HP`,
+      text: `${raid.vijand?.naam || 'De Bamischijf der Duisternis'}: ${Math.max(0, raid.hp)}/${raid.maxHp} HP`,
       blocks: bouwRaidBlocks(raid),
     }));
   } catch (err) {
@@ -7295,15 +7811,15 @@ async function updateRaidBericht(client, raid) {
 // Retourneert { ok, tekst } — de tekst is ephemeral feedback voor de aanvaller.
 async function voerBamischijfAanval(client, userId, metOffer) {
   const members = loadMembers();
-  if (!members[userId]) return { ok: false, tekst: 'Alleen leden van de Kroket Illuminati trekken ten strijde tegen de Bamischijf.' };
+  if (!members[userId]) return { ok: false, tekst: 'Alleen leden van de Kroket Illuminati trekken ten strijde tegen de vijand van de week.' };
   if (isVerbannen(userId)) return { ok: false, tekst: '_Een balling vecht niet mee in heilige oorlogen. Toon eerst berouw._' };
   const raid = readJSON('bamischijf.json', {});
-  if (!raid.actief) return { ok: false, tekst: '_Er waart momenteel geen Bamischijf der Duisternis rond. Het Grote Vetbad is stil… voorlopig._' };
+  if (!raid.actief) return { ok: false, tekst: '_Er waart momenteel geen vijand rond. Het Grote Vetbad is stil… tot maandag._' };
   // Deadline verstreken maar de ontsnappings-cron gemist (bot was down)? Lui afdwingen —
   // anders blijft de raid eeuwig actief en blokkeert hij nieuwe spawns.
   if (raid.deadlineTs && Date.now() > raid.deadlineTs) {
     await beslechtBamischijfOntsnapping(client);
-    return { ok: false, tekst: '_De Bamischijf is reeds ontsnapt — de strijd is voorbij. Het monster zal terugkeren._' };
+    return { ok: false, tekst: '_De vijand is reeds ontsnapt — de strijd is voorbij. Hij zal terugkeren, en sterker._' };
   }
   const vandaagKey = new Intl.DateTimeFormat('nl-NL', { timeZone: 'Europe/Amsterdam' }).format(new Date());
   raid.strijders = raid.strijders || {};
@@ -7319,7 +7835,10 @@ async function voerBamischijfAanval(client, userId, metOffer) {
     pasScoreAan(userId, -1);
   }
   const bijnaam = members[userId].bijnaam;
-  const schade = (metOffer ? 2 : 1) + Math.floor(Math.random() * 3);
+  const vijandNaam = raid.vijand?.naam || 'De Bamischijf der Duisternis';
+  // Titelvoorrecht: de Slachter der Bamischijf slaat harder — de titel is in de raid verdiend
+  // en betaalt zich in de raid terug.
+  const schade = (metOffer ? 2 : 1) + Math.floor(Math.random() * 3) + (heeftTitel(userId, 'slachter') ? 1 : 0);
   strijder.schade = (strijder.schade || 0) + schade;
   strijder.laatsteAanval = vandaagKey;
   raid.strijders[userId] = strijder;
@@ -7333,7 +7852,7 @@ async function voerBamischijfAanval(client, userId, metOffer) {
     await telActie(client, userId, 'raid_aanval'); // ook de genadeslag is een aanval
     await updateRaidBericht(client, raid);
     await beslechtBamischijfOverwinning(client, kanaal, raid, userId);
-    return { ok: true, tekst: `⚔️ _Uw uithaal van −${schade} HP was de GENADESLAG — de Bamischijf is verslagen!_` };
+    return { ok: true, tekst: `⚔️ _Uw uithaal van −${schade} HP was de GENADESLAG — ${vijandNaam} is verslagen!_` };
   }
   writeJSON('bamischijf.json', raid);
   logGebeurtenis('bamischijf', userId, `${bijnaam} deed ${schade} schade aan de Bamischijf (${raid.hp}/${raid.maxHp} HP over)`);
@@ -7347,9 +7866,9 @@ async function voerBamischijfAanval(client, userId, metOffer) {
       { thread_ts: raid.berichtTs });
   } else {
     await postToChannel(client, kanaal,
-      `⚔️ *AANVAL OP DE BAMISCHIJF* ⚔️\n\n> *${bijnaam}* ${metOffer ? 'offert een kroketpunt en ' : ''}haalt uit: *−${schade} HP*.\n> De Bamischijf der Duisternis: *${raid.hp}/${raid.maxHp} HP*  ${hpBalk(raid.hp, raid.maxHp)}\n\n— De Hoge Frituurraad`);
+      `⚔️ *AANVAL OP ${vijandNaam.toUpperCase()}* ⚔️\n\n> *${bijnaam}* ${metOffer ? 'offert een kroketpunt en ' : ''}haalt uit: *−${schade} HP*.\n> ${vijandNaam}: *${raid.hp}/${raid.maxHp} HP*  ${hpBalk(raid.hp, raid.maxHp)}\n\n— De Hoge Frituurraad`);
   }
-  return { ok: true, tekst: `⚔️ _Uw uithaal deed −${schade} HP. De Bamischijf staat op ${raid.hp}/${raid.maxHp}._` };
+  return { ok: true, tekst: `⚔️ _Uw uithaal deed −${schade} HP. ${vijandNaam} staat op ${raid.hp}/${raid.maxHp}._` };
 }
 
 async function beslechtBamischijfOverwinning(client, channelId, raid, genadeslagId) {
@@ -7365,19 +7884,50 @@ async function beslechtBamischijfOverwinning(client, channelId, raid, genadeslag
   const genadeslagNaam = members[genadeslagId]?.bijnaam || 'een volgeling';
   const zwaarsteNaam = members[zwaarste?.[0]]?.bijnaam || genadeslagNaam;
   const strijderNamen = strijders.map(([uid]) => members[uid]?.bijnaam || uid).join(', ');
-  logGebeurtenis('bamischijf', genadeslagId, `De Bamischijf verslagen — genadeslag: ${genadeslagNaam}; zwaarste slager: ${zwaarsteNaam}`);
+  const vijandNaam = raid.vijand?.naam || 'De Bamischijf der Duisternis';
+  logGebeurtenis('bamischijf', genadeslagId, `${vijandNaam} verslagen — genadeslag: ${genadeslagNaam}; zwaarste slager: ${zwaarsteNaam}`);
   // Iedereen die heeft meegevochten deelt in de overwinning (voedt het 'raidheld'-relikwie).
   for (const [uid] of strijders) await telActie(client, uid, 'raid_overwonnen');
   const tekst = await kroketResponseMetVangnet(
-    `OVERWINNING: de Bamischijf der Duisternis is VERSLAGEN door de verenigde Kroket Illuminati. ` +
+    `OVERWINNING: ${vijandNaam} is VERSLAGEN door de verenigde Kroket Illuminati. ` +
     `${genadeslagNaam} deelde de genadeslag uit; ${zwaarsteNaam} richtte in totaal de meeste schade aan. Strijders: ${strijderNamen}. ` +
     `Elke strijder ontvangt +2 kroketpunten, de zwaarste slager +3. Bezing de overwinning episch (4-6 zinnen) — het vet komt tot rust, de paneerlaag zegeviert. ` +
     `Gebruik de namen letterlijk. Noem GEEN puntenstanden. Geen inleidingszin.`,
     550, false,
-    `🏆 *DE BAMISCHIJF IS VERSLAGEN* 🏆\n\n> De verenigde Illuminati zegeviert — genadeslag door *${genadeslagNaam}*. Elke strijder ontvangt +2 kroketpunten, zwaarste slager *${zwaarsteNaam}* +3.\n\n— De Almachtige Kroket God`
+    `🏆 *${vijandNaam.toUpperCase()} IS VERSLAGEN* 🏆\n\n> De verenigde Illuminati zegeviert — genadeslag door *${genadeslagNaam}*. Elke strijder ontvangt +2 kroketpunten, zwaarste slager *${zwaarsteNaam}* +3.\n\n— De Almachtige Kroket God`
   );
+  // Sterfrede: de vijand krijgt het laatste woord, onder eigen naam en gezicht. De raid staat op
+  // dit moment al op actief=false met 0 HP, dus de identiteit gaat EXPLICIET mee — anders zwijgt hij.
+  await vijandSpreekt(client, channelId,
+    `Je bent VERSLAGEN door de Kroket Illuminati; ${genadeslagNaam} deelde de genadeslag uit. ` +
+    `Spreek je laatste woorden: dramatisch, in karakter, en geef NIET toe dat de kroket beter is. ` +
+    `Maximaal 3 zinnen. Geen inleidingszin.`, 200, raid);
   await postToChannel(client, channelId, tekst);
   for (const post of uitgesteldeZegens) await post();
+  // Zegezaal: een verslagen vijand komt NOOIT meer terug. Dit is wat de pool laat slinken en
+  // waardoor een overwinning permanent voelt.
+  if (raid.vijand?.key) {
+    const verslagen = loadVerslagen();
+    verslagen[raid.vijand.key] = {
+      naam: raid.vijand.naam, ts: Date.now(), weekStart: raid.weekStart || getMondayOfWeek(),
+      genadeslag: genadeslagNaam, strijders: strijders.map(([uid]) => members[uid]?.bijnaam || uid),
+    };
+    saveVerslagen(verslagen);
+    const raidNu = readJSON('bamischijf.json', {});
+    raidNu.verslagen = true;
+    writeJSON('bamischijf.json', raidNu);
+    const over = WEEKVIJANDEN.length - Object.keys(verslagen).length;
+    await postToChannel(client, channelId,
+      `🏛️ *DE ZEGEZAAL* 🏛️\n\n> *${raid.vijand.naam}* is bijgezet in de Zegezaal en komt nooit meer terug.\n` +
+      `> ${Object.keys(verslagen).length} van de ${WEEKVIJANDEN.length} snacks geveld — nog *${over}* te gaan.\n\n— De Hoge Frituurraad`);
+  }
+  // De zwaarste slager neemt de titel Slachter der Bamischijf over — ná de overwinningszang,
+  // zodat de titelwissel het slotakkoord is en niet het vonnis onderbreekt.
+  if (zwaarste?.[0]) {
+    await kenTitelToe(client, 'slachter', zwaarste[0],
+      `richtte de meeste schade aan in de val van ${vijandNaam} (${zwaarste[1]?.schade || 0} HP)`, channelId);
+  }
+  await updateWereldbord(client, true);
 }
 
 // ── V2: live veilingbord (Block Kit) ───────────────────────────────────────────
@@ -7544,6 +8094,8 @@ async function voerDuel(client, userId, doelId, channelId, wapenId = null) {
     premieBlok = `\n\n🎯 *PREMIE GEÏND* — op het hoofd van ${verliesNaam} stond een premie van de Kroket God. ${winNaam} int *+${premie.bonus || 3} kroketpunten* extra.`;
   }
   logGebeurtenis('duel', userId, `${uitdager.bijnaam} daagde ${doelLid.bijnaam} uit voor een duel — ${winNaam} won`);
+  // Pairwise historie: voedt "uw nemesis" en "laatste duel" in het dossier van de Kroket God.
+  registreerDuelUitslag(winId, verliesId);
 
   // Gekozen wapen kleurt het verhaal (niet de uitslag — die is al beslecht).
   const wapen = DUEL_WAPENS.find(w => w.id === wapenId);
@@ -7569,6 +8121,10 @@ async function voerDuel(client, userId, doelId, channelId, wapenId = null) {
   await postToChannel(client, channelId, duelTekst + premieBlok + talismanBlok + standBlok);
   // Nu pas de verbondszegen, ná het vonnis — logische volgorde op Slack.
   for (const post of uitgesteldeZegens) await post();
+  // Het houderschap van de Kampioen-titel hangt aan deze uitslag: de verliezer kan hem kwijt
+  // zijn, de winnaar kan hem veroverd of verdedigd hebben. Ná het vonnis, want de titelwissel
+  // is het naspel van het duel.
+  await verwerkDuelTitel(client, winId, verliesId, channelId);
   // Opdracht-voortgang: deelnemen telt voor beide, winnen alleen voor de winnaar.
   await telActie(client, userId, 'duel');
   await telActie(client, doelId, 'duel');
@@ -8016,13 +8572,18 @@ function dagSleutel() {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Amsterdam' }).format(new Date());
 }
 
+function fnvHash(sleutel) {
+  let h = 2166136261;
+  for (let i = 0; i < sleutel.length; i++) { h ^= sleutel.charCodeAt(i); h = (h * 16777619) >>> 0; }
+  return h >>> 0;
+}
+
 // Deterministische keuze uit de pool op basis van een sleutel (datum of weekstart). Iedereen
 // krijgt dezelfde opdrachten, en er is geen opgeslagen selectie die kan verdwijnen of
 // verouderen als een cron gemist wordt.
 function kiesOpdrachten(soort, sleutel, aantal) {
   const pool = OPDRACHTEN.filter(o => o.soort === soort);
-  let h = 2166136261;
-  for (let i = 0; i < sleutel.length; i++) { h ^= sleutel.charCodeAt(i); h = (h * 16777619) >>> 0; }
+  let h = fnvHash(sleutel);
   const rest = [...pool];
   const gekozen = [];
   for (let i = 0; i < Math.min(aantal, pool.length); i++) {
@@ -8032,9 +8593,116 @@ function kiesOpdrachten(soort, sleutel, aantal) {
   return gekozen;
 }
 
-function actieveOpdrachten() {
+// ── Onhaalbare dagopdrachten: herkansing i.p.v. een dode opdracht ──────────────
+// De selectie is per DAG, maar het aantal pogingen is óók per dag begrensd. Daardoor kon een
+// dagopdracht halverwege de dag onmogelijk worden: "Win een duel" met twee verloren duels en
+// nul pogingen over is de rest van de dag niet meer te volbrengen. Datzelfde geldt voor
+// "Val de Bamischijf aan" als er geen raid rondwaart, en voor bingo zonder kaart.
+//
+// Kan deze opdracht vandaag nog volbracht worden? `resterend` = wat er nog nodig is (doel min
+// voortgang), zodat een half afgemaakte opdracht eerlijk wordt beoordeeld. Alleen ONOMKEERBARE
+// blokkades tellen: verbruikte pogingen en een spel dat niet loopt. "Te weinig kroketpunten"
+// telt NIET als onhaalbaar — punten kun je vandaag nog verdienen.
+function opdrachtHaalbaar(userId, o, resterend = o.doel) {
+  try {
+    if (resterend <= 0) return true; // al binnen
+    const vandaagKey = new Intl.DateTimeFormat('nl-NL', { timeZone: 'Europe/Amsterdam' }).format(new Date());
+    switch (o.actie) {
+      // Een duel winnen kost minstens één poging per benodigde winst.
+      case 'duel':
+      case 'duel_gewonnen': {
+        const duels = readJSON('duels.json', {});
+        const gebruikt = duels[userId]?.datum === vandaagKey ? (duels[userId].aantal ?? 1) : 0;
+        return gebruikt + resterend <= duelLimiet(userId);
+      }
+      case 'offer': {
+        const vetbad = readJSON('vetbad.json', {});
+        const gedaan = vetbad[userId]?.datum === vandaagKey ? (vetbad[userId].aantal || 0) : 0;
+        return gedaan + resterend <= offerLimiet(userId);
+      }
+      case 'eer_gegeven':
+        return telEerVandaag(userId) + resterend <= eerLimiet(userId);
+      case 'raid_aanval': {
+        const raid = readJSON('bamischijf.json', {});
+        if (!raid.actief || raid.hp <= 0) return false;          // geen monster om aan te vallen
+        if (raid.deadlineTs && Date.now() > raid.deadlineTs) return false;
+        if (resterend > 1) return false;                          // één aanval per dag
+        return raid.strijders?.[userId]?.laatsteAanval !== vandaagKey;
+      }
+      case 'bingo_claim': {
+        const bingo = readJSON('bingo.json', null);
+        if (bingo?.weekStart !== getMondayOfWeek() || !bingo.opdrachten?.length) return false;
+        const open = bingo.opdrachten.length - (bingo.claims?.[userId] || []).length;
+        return open >= resterend;
+      }
+      default:
+        return true;
+    }
+  } catch (_) {
+    return true; // bij twijfel de opdracht laten staan — nooit een opdracht wegnemen door een bug
+  }
+}
+
+// De dagopdrachten van één lid, met herkansing voor wat onhaalbaar is geworden. De vervanging
+// wordt VASTGELEGD in de dagbak, om twee redenen: (1) de opdrachtenlijst mag niet heen en weer
+// klappen als de blokkade later verdwijnt (een raid die alsnog spawnt), en (2) zonder opslag
+// zou de selectie bij elke read opnieuw kunnen wijzigen. De vervanging vervalt automatisch met
+// de dag, want ze leeft in de dagbak die bij dagwissel wordt weggegooid.
+// `lopend` = de voortgang die op dit moment wordt bijgeschreven ({ actie, aantal }), meegegeven
+// door telActie. Dat is essentieel: de daad is dan AL gebeurd (de poging is verbruikt, de eer
+// geregistreerd) maar de voortgang staat nog niet in de bak. Zonder deze correctie zou een lid
+// met duellimiet 1 bij zijn énige duel de opdracht "Ga een duel aan" vervangen zien worden
+// precies op het moment dat hij hem volbracht — de poging is op, dus "onhaalbaar".
+function dagOpdrachtenVoor(userId, lopend = null) {
+  const basis = kiesOpdrachten('dag', dagSleutel(), OPDRACHTEN_PER_DAG);
+  if (!userId) return basis;
+  const pool = OPDRACHTEN.filter(o => o.soort === 'dag');
+  const { alles, dag, week } = opdrachtBakken(userId);
+  const vervangen = { ...(dag.vervangen || {}) };
+  const resterendVan = (o) => o.doel - (dag.voortgang?.[o.id] || 0)
+    - (lopend && o.actie === lopend.actie ? lopend.aantal : 0);
+  let gewijzigd = false;
+  const uit = [];
+
+  for (const o of basis) {
+    const eerder = vervangen[o.id];
+    if (eerder) {
+      const vv = pool.find(p => p.id === eerder);
+      uit.push(vv ? { ...vv, verving: o } : o);
+      continue;
+    }
+    if (dag.beloond?.includes(o.id) || opdrachtHaalbaar(userId, o, resterendVan(o))) {
+      uit.push(o);
+      continue;
+    }
+    // Onhaalbaar geworden: deterministisch een wél haalbare vervanger kiezen die nog niet
+    // op de lijst staat. Sleutel bevat de userId, dus twee leden kunnen verschillende
+    // vervangers krijgen zonder dat het willekeurig wordt.
+    const bezet = new Set([...basis.map(b => b.id), ...Object.values(vervangen)]);
+    const kandidaten = pool.filter(p => !bezet.has(p.id) && opdrachtHaalbaar(userId, p, resterendVan(p)));
+    if (!kandidaten.length) {
+      uit.push({ ...o, onhaalbaar: true }); // niets beters te bieden — wel eerlijk labelen
+      continue;
+    }
+    const keuze = kandidaten[fnvHash(`${dagSleutel()}|${userId}|${o.id}`) % kandidaten.length];
+    vervangen[o.id] = keuze.id;
+    gewijzigd = true;
+    uit.push({ ...keuze, verving: o });
+  }
+
+  if (gewijzigd) {
+    dag.vervangen = vervangen;
+    alles[userId] = { ...(alles[userId] || {}), dag, week };
+    writeJSON('opdrachten.json', alles); // atomair: geen await sinds de read hierboven
+    const namen = Object.entries(vervangen).map(([oud, nieuw]) => `${oud}→${nieuw}`).join(', ');
+    console.log(`📜 Dagopdracht vervangen voor ${loadMembers()[userId]?.bijnaam || userId}: ${namen}`);
+  }
+  return uit;
+}
+
+function actieveOpdrachtenVoor(userId, lopend = null) {
   return [
-    ...kiesOpdrachten('dag', dagSleutel(), OPDRACHTEN_PER_DAG),
+    ...dagOpdrachtenVoor(userId, lopend),
     ...kiesOpdrachten('week', getMondayOfWeek(), OPDRACHTEN_PER_WEEK),
   ];
 }
@@ -8062,11 +8730,30 @@ function opdrachtBakken(userId) {
 async function telActie(client, userId, actie, aantal = 1) {
   try {
     if (!userId || !loadMembers()[userId]) return;
+    // Teken van leven: een daad in de frituur telt net zo goed als een bericht (zie tribunaal).
+    // Wie speelt, is aanwezig — ook als hij niets zegt.
+    if (markeerActiviteit(userId, 'daad')) {
+      await blaasTribunaalAf(client, 'de beschuldigde deed een daad in de frituur');
+    }
+
     // Altijd tellen, ook als er vandaag geen opdracht op deze actie staat.
     const stand = bumpTeller(userId, actie, aantal);
     await controleerPrestaties(client, userId, actie, stand);
 
-    const actief = actieveOpdrachten().filter(o => o.actie === actie);
+    // Seizoenscampagne: élke daad drukt de dreiging van dit seizoen terug. Deze funnel is
+    // precies de juiste plek — zo hoeft er geen nieuw commando te bestaan en telt gewoon
+    // spelen automatisch mee. Bij 0 HP is de dreiging geveld en volgt de finale meteen.
+    const seizoenNa = draagBijAanSeizoen(userId, actie, aantal);
+    if (seizoenNa?.status === 'geveld') {
+      await beslechtSeizoen(client, 'gewonnen');
+    } else if (seizoenNa) {
+      await updateWereldbord(client); // throttled — een salvo levert niet evenveel updates op
+    }
+
+    // Per lid, want een onhaalbaar geworden dagopdracht is voor dit lid vervangen (zie
+    // dagOpdrachtenVoor). `{ actie, aantal }` gaat mee zodat de daad die we NU bijschrijven
+    // niet zelf voor "onhaalbaar" wordt aangezien — de poging is immers al verbruikt.
+    const actief = actieveOpdrachtenVoor(userId, { actie, aantal }).filter(o => o.actie === actie);
     if (!actief.length) return;
     const { alles, dag, week } = opdrachtBakken(userId);
     const voltooid = [];
@@ -8101,8 +8788,10 @@ async function telActie(client, userId, actie, aantal = 1) {
   }
 }
 
-// Weergaveregels voor de App Home: per actieve opdracht de voortgangsbalk.
+// Weergaveregels voor de App Home: per actieve opdracht de voortgangsbalk. De dagopdrachten
+// lopen via dagOpdrachtenVoor, zodat een onhaalbaar geworden opdracht hier al vervangen is.
 function opdrachtOverzicht(userId) {
+  const dagLijst = dagOpdrachtenVoor(userId); // eerst: kan een vervanging vastleggen
   const { dag, week } = opdrachtBakken(userId);
   const maak = (o) => {
     const bak = o.soort === 'dag' ? dag : week;
@@ -8111,9 +8800,17 @@ function opdrachtOverzicht(userId) {
     return { o, klaar, nu };
   };
   return {
-    dag: kiesOpdrachten('dag', dagSleutel(), OPDRACHTEN_PER_DAG).map(maak),
+    dag: dagLijst.map(maak),
     week: kiesOpdrachten('week', getMondayOfWeek(), OPDRACHTEN_PER_WEEK).map(maak),
   };
+}
+
+// Toelichting onder een opdrachtregel: waarom staat deze er (vervanging), of waarom lukt hij
+// vandaag niet meer. Zonder dit verandert de lijst stilletjes en snapt niemand waarom.
+function opdrachtNoot(o) {
+  if (o.verving) return `\n>    _herkansing — "${o.verving.tekst}" was vandaag niet meer haalbaar_`;
+  if (o.onhaalbaar) return '\n>    _vandaag niet meer haalbaar; morgen staat er een nieuwe_';
+  return '';
 }
 
 registreerFeature({
@@ -8124,9 +8821,11 @@ registreerFeature({
   home: ({ userId, verbannen }) => {
     if (verbannen) return [];
     const { dag, week } = opdrachtOverzicht(userId);
+    // Noot buiten de ternary: ook een AL VOLBRACHTE herkansing verdient uitleg, anders wijkt
+    // je lijst zichtbaar af van die van de anderen zonder dat je weet waarom.
     const regel = ({ o, klaar, nu }) =>
-      klaar ? `> ✅ ~${o.tekst}~ — *+${o.beloning}* geïnd`
-            : `> ${homeVoortgangInline(nu, o.doel)} ${o.tekst} — *+${o.beloning}*`;
+      (klaar ? `> ✅ ~${o.tekst}~ — *+${o.beloning}* geïnd`
+             : `> ${homeVoortgangInline(nu, o.doel)} ${o.tekst} — *+${o.beloning}*`) + opdrachtNoot(o);
     return [
       { type: 'divider' },
       { type: 'section', text: { type: 'mrkdwn', text:
@@ -8136,6 +8835,1360 @@ registreerFeature({
     ];
   },
 });
+
+// ══════════════════════════════════════════════════════════════════════════════
+// DE WERELD: titels, seizoenen, wereldbord en het persoonlijk dossier
+// ══════════════════════════════════════════════════════════════════════════════
+// Vier systemen die één ding doen: de wereld laten voortbestaan tussen de losse events.
+//
+//  1. TITELS      exclusief bezit dat je kunt VERLIEZEN — precies één houder per titel.
+//  2. SEIZOENEN   een boog van zes weken met een gedeelde vijand die door ieders spel
+//                 wordt teruggedrongen; de uitkomst laat een spoor na in de vólgende weken.
+//  3. WERELDBORD  één gepind bericht dat de staat van het Rijk toont, bijgewerkt via
+//                 chat.update — zodat de wereld ook bestaat als niemand kijkt.
+//  4. DOSSIER     wat de Kroket God over de spreker weet, geïnjecteerd bij elke mention.
+//
+// Alle vier zijn TEMPLATED waar het vaak vuurt (titelwissels, bijdragen, het bord) en kosten
+// LLM-quota alleen bij de zeldzame, grote momenten: een fase-overgang en de seizoensfinale.
+
+
+// ── 1. TITELS: exclusief bezit dat van eigenaar kan wisselen ───────────────────
+// Roem stijgt alleen en relikwieën stapelen — daardoor kon niemand ooit iets kwíjtraken.
+// Een titel heeft precies één houder. Hij komt binnen door een ander te verslaan en gaat
+// weg zodra iemand ú verslaat. Verlies is de inzet; daarom is het houderschap zichtbaar
+// in het kanaal, op het wereldbord en in de aanspreekvorm van de Kroket God.
+//
+// Elke titel geeft één klein voorrecht — genoeg om het houderschap te willen, te klein om
+// de balans te kantelen (het duelvoorrecht is dezelfde +1 die de Frituurridder al krijgt).
+
+const TITELS = {
+  duelkampioen: {
+    naam: 'Kampioen van het Frituurduel', icoon: '⚔️',
+    hoe: 'versla de houder in een heilig frituurduel — of grijp de titel als niemand hem draagt',
+    voorrecht: 'een extra duel per dag',
+    aanspreek: 'Kampioen van het Frituurduel',
+  },
+  slachter: {
+    naam: 'Slachter der Bamischijf', icoon: '🐉',
+    hoe: 'richt de meeste schade aan in een gewonnen Bamischijf-raid',
+    voorrecht: '+1 schade bij elke raid-aanval',
+    aanspreek: 'Slachter der Bamischijf',
+  },
+  aflatenmeester: {
+    naam: 'Meester der Aflaten', icoon: '🪙',
+    hoe: 'win de Grote Veiling',
+    voorrecht: 'een kwart korting in de Heilige Aflatenhandel',
+    aanspreek: 'Meester der Aflaten',
+  },
+};
+
+const loadTitels = () => readJSON('titels.json', {});
+const saveTitels = (data) => writeJSON('titels.json', data);
+
+function titelHouder(key) {
+  const houder = loadTitels()[key]?.houderId || null;
+  // Een titel bij een ex-lid of balling is vacant: anders blijft hij onbereikbaar hangen.
+  if (!houder || !loadMembers()[houder] || isVerbannen(houder)) return null;
+  return houder;
+}
+
+function heeftTitel(userId, key) {
+  return !!userId && titelHouder(key) === userId;
+}
+
+// Alle titels van een lid, met hun houderschapsduur — voor App Home, dossier en bord.
+function titelsVan(userId) {
+  const data = loadTitels();
+  return Object.entries(TITELS)
+    .filter(([key]) => titelHouder(key) === userId)
+    .map(([key, def]) => ({ key, ...def, ...(data[key] || {}) }));
+}
+
+// Titel toekennen. Dezelfde houder = een geslaagde VERDEDIGING (teller omhoog, elke derde
+// verdediging levert roem op). Een andere houder = een AFNAME, en dat is het hele punt van
+// het systeem: er wordt iets van iemand afgepakt, en het kanaal ziet dat gebeuren.
+// Templated — titels kunnen meerdere keren per dag wisselen en een duel kost al een LLM-call.
+async function kenTitelToe(client, key, nieuweHouderId, reden, channelId = process.env.SLACK_CHANNEL_ID) {
+  const def = TITELS[key];
+  if (!def || !nieuweHouderId) return null;
+  const members = loadMembers();
+  if (!members[nieuweHouderId]) return null;
+  const data = loadTitels();
+  const vorige = data[key]?.houderId || null;
+  const naam = members[nieuweHouderId].bijnaam;
+
+  if (vorige === nieuweHouderId) {
+    // Verdediging: het houderschap blijft, de eer groeit.
+    const rec = data[key];
+    rec.verdedigingen = (rec.verdedigingen || 0) + 1;
+    saveTitels(data);
+    if (rec.verdedigingen % 3 === 0) {
+      await pasRoemAan(client, nieuweHouderId, 1);
+      logGebeurtenis('titel', nieuweHouderId, `${naam} verdedigde ${def.naam} voor de ${rec.verdedigingen}e keer (+1 roem)`);
+      await postToChannel(client, channelId,
+        `${def.icoon} *HET HOUDERSCHAP HOUDT STAND* ${def.icoon}\n\n` +
+        `> *${naam}* verdedigt *${def.naam}* voor de ${rec.verdedigingen}e keer. De Hoge Frituurraad kent *+1 roempunt* toe voor standvastigheid.\n\n— De Hoge Frituurraad`);
+    }
+    return { key, houderId: nieuweHouderId, verdediging: true, verdedigingen: rec.verdedigingen };
+  }
+
+  data[key] = { houderId: nieuweHouderId, sinds: Date.now(), verdedigingen: 0, voorganger: vorige };
+  saveTitels(data);
+  // Een titel is eeuwige prestige, dus roem (niet weekpunten): +2 bij het veroveren.
+  await pasRoemAan(client, nieuweHouderId, 2);
+  const vorigeNaam = vorige ? (members[vorige]?.bijnaam || 'een vergeten volgeling') : null;
+  logGebeurtenis('titel', nieuweHouderId,
+    vorigeNaam ? `${naam} nam ${def.naam} af van ${vorigeNaam} (${reden})` : `${naam} claimde de vacante titel ${def.naam} (${reden})`);
+  await postToChannel(client, channelId, vorigeNaam
+    ? `${def.icoon} *DE TITEL WISSELT VAN DRAGER* ${def.icoon}\n\n` +
+      `> *${naam}* neemt *${def.naam}* af van *${vorigeNaam}*.\n> _${reden}._\n` +
+      `> Voorrecht van de drager: ${def.voorrecht}. Roem: *+2*.\n\n— De Hoge Frituurraad`
+    : `${def.icoon} *EEN TITEL VINDT EEN DRAGER* ${def.icoon}\n\n` +
+      `> *${naam}* claimt de vacante titel *${def.naam}*.\n> _${reden}._\n` +
+      `> Voorrecht van de drager: ${def.voorrecht}. Roem: *+2*.\n\n— De Hoge Frituurraad`);
+  await updateWereldbord(client, true);
+  return { key, houderId: nieuweHouderId, verdediging: false, vorige };
+}
+
+// De duel-uitslag bepaalt het houderschap van de Kampioen-titel. Drie gevallen, in deze orde:
+// de verliezer was kampioen (afname), de winnaar was kampioen (verdediging), niemand droeg
+// hem (de winnaar claimt). Zo vindt de titel altijd een drager zonder aparte "startceremonie".
+async function verwerkDuelTitel(client, winId, verliesId, channelId) {
+  const houder = titelHouder('duelkampioen');
+  if (houder === verliesId) {
+    return kenTitelToe(client, 'duelkampioen', winId, `${loadMembers()[winId]?.bijnaam || 'de winnaar'} versloeg de regerend kampioen in het heilige frituurduel`, channelId);
+  }
+  if (houder === winId) return kenTitelToe(client, 'duelkampioen', winId, 'houdt de titel', channelId);
+  if (!houder) {
+    return kenTitelToe(client, 'duelkampioen', winId, 'de titel lag onbewaakt en werd in een duel opgeëist', channelId);
+  }
+  return null;
+}
+
+// Pairwise duelgeschiedenis. Bestaat voor het dossier (de Kroket God moet weten wie uw
+// nemesis is) en maakt het houderschap van titels navolgbaar.
+function registreerDuelUitslag(winId, verliesId) {
+  try {
+    const data = readJSON('duelhistorie.json', {});
+    for (const [id, tegenId, gewonnen] of [[winId, verliesId, true], [verliesId, winId, false]]) {
+      const eigen = data[id] || { tegen: {}, laatste: null };
+      const paar = eigen.tegen[tegenId] || { gewonnen: 0, verloren: 0 };
+      if (gewonnen) paar.gewonnen++; else paar.verloren++;
+      eigen.tegen[tegenId] = paar;
+      eigen.laatste = { tegenId, gewonnen, ts: Date.now() };
+      data[id] = eigen;
+    }
+    writeJSON('duelhistorie.json', data);
+  } catch (err) {
+    console.error('⚠️ Duelhistorie bijwerken mislukt:', err.message);
+  }
+}
+
+// De tegenstander waar u het vaakst tegenover stond — de basis van "uw nemesis" in het dossier.
+function getNemesis(userId) {
+  const eigen = readJSON('duelhistorie.json', {})[userId];
+  if (!eigen?.tegen) return null;
+  const members = loadMembers();
+  const beste = Object.entries(eigen.tegen)
+    .filter(([id]) => members[id])
+    .map(([id, p]) => ({ id, ...p, totaal: (p.gewonnen || 0) + (p.verloren || 0) }))
+    .sort((a, b) => b.totaal - a.totaal)[0];
+  if (!beste || beste.totaal < 2) return null; // één duel maakt nog geen aartsvijand
+  return { ...beste, bijnaam: members[beste.id].bijnaam };
+}
+
+registreerFeature({
+  naam: 'titels',
+  state: ['titels.json', 'duelhistorie.json'],
+  help: [{ gebruik: '/kroketgod titels', verwacht: 'wie draagt welke titel — en hoe u die afpakt' }],
+  homeOrde: 25,
+  home: ({ userId, members }) => {
+    const regels = Object.entries(TITELS).map(([key, def]) => {
+      const houder = titelHouder(key);
+      const rec = loadTitels()[key] || {};
+      if (!houder) return `> ${def.icoon} *${def.naam}* — _vacant_. ${def.hoe}.`;
+      const verdedigd = rec.verdedigingen ? ` · ${rec.verdedigingen}× verdedigd` : '';
+      return houder === userId
+        ? `> ${def.icoon} *${def.naam}* — *u draagt hem*${verdedigd}\n>    _${def.voorrecht}_`
+        : `> ${def.icoon} *${def.naam}* — ${members[houder]?.bijnaam || 'onbekend'}${verdedigd}\n>    _${def.hoe}_`;
+    });
+    return [
+      { type: 'divider' },
+      { type: 'section', text: { type: 'mrkdwn', text: `*👑 DE TITELS VAN HET RIJK*\n${regels.join('\n')}` } },
+    ];
+  },
+});
+
+
+// ── 2. SEIZOENEN: een boog van zes weken met een gedeelde vijand ───────────────
+// De week was een lus die identiek herbegon; daardoor kon er nooit spanning worden opgebouwd.
+// Een seizoen loopt zes weken en heeft één dreiging die door ÍEDERS spel wordt teruggedrongen:
+// elke actie die al door `telActie` loopt, doet schade. Er is dus geen nieuw commando en geen
+// nieuwe gewoonte nodig — gewoon spelen ís meedoen aan de campagne.
+//
+// De uitkomst is niet cosmetisch: winst of verlies laat een NALATENSCHAP achter die zeven
+// dagen lang de prijzen in de Aflatenhandel beïnvloedt en in de system prompt doorklinkt.
+//
+// Robuust tegen downtime — net als de opdracht-engine wordt de fase UIT DE DATUM afgeleid
+// (niet uit een cron die gevuurd moet hebben), en de dagelijkse pm2-herstart haalt een gemiste
+// fase-overgang of finale de ochtend erna in.
+
+const SEIZOEN_WEKEN = 6;
+// Stelknop voor de moeilijkheidsgraad: HP per lid per week. Bij vijf leden en zes weken geeft
+// 9 een dreiging van 270 HP — haalbaar bij normaal spel, verloren bij een stille maand.
+// Te snel geveld? Verhoog dit. Nooit gehaald? Verlaag het.
+const SEIZOEN_HP_PER_LID_PER_WEEK = 9;
+
+// Wat elke daad bijdraagt. Zwaardere, socialere daden wegen meer — samen vechten tegen de
+// Bamischijf drukt harder dan alleen dobbelen in het Vetbad.
+// Bewust NIET gewogen: `jackpot` en `roof_gelukt`. Dat zijn uitkomsten van een daad die al
+// meetelt (`offer` resp. `roof_poging`) — meewegen zou geluk dubbel belonen in plaats van inzet.
+const SEIZOEN_GEWICHT = {
+  raid_aanval: 3, raid_overwonnen: 2, bingo_claim: 2, veiling_bod: 2, gouden_kroket: 2,
+  duel: 1, duel_gewonnen: 1, offer: 1, eer_gegeven: 1, roof_poging: 1, winkel_koop: 1,
+  veiling_gewonnen: 2,
+};
+
+const SEIZOEN_FASES = [
+  { naam: 'De Eerste Tekenen', sfeer: 'de olie kruimelt aan de randen; nog niemand wil het benoemen' },
+  { naam: 'De Opmars',         sfeer: 'het onheil is niet langer te ontkennen en kruipt de frituur binnen' },
+  { naam: 'Het Keerpunt',      sfeer: 'de Raad verzamelt zich; wat nu gebeurt bepaalt de rest' },
+  { naam: 'De Belegering',     sfeer: 'de dreiging staat aan de poort en de paneerlaag kraakt' },
+  { naam: 'De Laatste Korst',  sfeer: 'alles hangt aan een draad van paneermeel' },
+  { naam: 'Het Vonnis',        sfeer: 'deze week valt de uitspraak — winst of ondergang' },
+];
+
+const SEIZOEN_DREIGINGEN = [
+  { key: 'verkilling', naam: 'De Grote Verkilling', icoon: '🧊',
+    omschrijving: 'de heilige olie koelt af; wat lauw wordt, wordt slap, en wat slap wordt sterft' },
+  { key: 'zuurvet', naam: 'Het Zure Vet', icoon: '🛢️',
+    omschrijving: 'in de diepte van het Vetbad is iets omgeslagen — een zuurheid die alles aantast wat erin daalt' },
+  { key: 'ketchupvloed', naam: 'De Ketchup-Vloedgolf', icoon: '🍅',
+    omschrijving: 'een rode vloed uit het zuiden dreigt de mosterdleer voorgoed te verdrinken' },
+];
+
+const loadSeizoen = () => readJSON('seizoen.json', null);
+const loadWereld  = () => readJSON('wereld.json', { nalatenschap: null, historie: [], onderwerp: null });
+const saveWereld  = (data) => writeJSON('wereld.json', data);
+
+function wekenVerstreken(startWeek) {
+  const a = Date.parse(`${startWeek}T00:00:00Z`);
+  const b = Date.parse(`${getMondayOfWeek()}T00:00:00Z`);
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return 0;
+  return Math.max(0, Math.round((b - a) / (7 * 86_400_000)));
+}
+
+function startNieuwSeizoen(nummer, startWeek) {
+  const ledental = Object.keys(loadMembers()).length || 5;
+  const maxHp = Math.max(120, ledental * SEIZOEN_HP_PER_LID_PER_WEEK * SEIZOEN_WEKEN);
+  const dreiging = SEIZOEN_DREIGINGEN[(nummer - 1) % SEIZOEN_DREIGINGEN.length];
+  const s = {
+    nummer, dreiging, startWeek, maxHp, hp: maxHp,
+    bijdragen: {}, fase: 1, status: 'actief',
+  };
+  writeJSON('seizoen.json', s);
+  console.log(`🗓️ Seizoen ${nummer} gestart: ${dreiging.naam} (${maxHp} HP, start ${startWeek}).`);
+  return s;
+}
+
+// Elke daad die door telActie gaat, drukt de dreiging terug. Atomair: geen await tussen de
+// read en de write, zodat twee gelijktijdige acties elkaars bijdrage niet overschrijven.
+// Bij 0 HP wordt de status op 'geveld' gezet; de beslechting doet de aanroeper daarna.
+function draagBijAanSeizoen(userId, actie, aantal = 1) {
+  const gewicht = SEIZOEN_GEWICHT[actie];
+  if (!gewicht) return null;
+  const s = loadSeizoen();
+  if (!s || s.status !== 'actief') return null;
+  const schade = gewicht * Math.max(1, aantal);
+  s.hp = Math.max(0, (s.hp ?? s.maxHp) - schade);
+  s.bijdragen = s.bijdragen || {};
+  s.bijdragen[userId] = (s.bijdragen[userId] || 0) + schade;
+  if (s.hp <= 0) s.status = 'geveld'; // de finale wordt door de aanroeper afgehandeld
+  writeJSON('seizoen.json', s);
+  return s;
+}
+
+async function kondigFaseAan(client, s) {
+  const fase = SEIZOEN_FASES[Math.min(s.fase, SEIZOEN_WEKEN) - 1];
+  const teruggedrongen = s.maxHp - s.hp;
+  const percentage = Math.round((teruggedrongen / s.maxHp) * 100);
+  const tekst = await kroketResponseMetVangnet(
+    `Er breekt een nieuwe week aan in de strijd tegen ${s.dreiging.naam} — ${s.dreiging.omschrijving}. ` +
+    `Dit is week ${s.fase} van ${SEIZOEN_WEKEN}, genaamd "${fase.naam}": ${fase.sfeer}. ` +
+    `De Kroket Illuminati heeft de dreiging tot nu toe voor ${percentage}% teruggedrongen. ` +
+    `Kondig deze fase aan als een oorlogsbulletin van de Hoge Frituurraad: benoem de fase, de stand van de strijd, en spoor de Raad aan door te vechten — ` +
+    `élke daad in de frituur (duel, offer, eerbewijs, raid-aanval, bod) drukt de dreiging terug. 4-6 zinnen. Noem GEEN getallen behalve het percentage. Geen inleidingszin.`,
+    500, false,
+    `${s.dreiging.icoon} *WEEK ${s.fase} — ${fase.naam.toUpperCase()}* ${s.dreiging.icoon}\n\n` +
+    `> ${fase.sfeer}.\n> *${s.dreiging.naam}* is voor *${percentage}%* teruggedrongen. Elke daad in de frituur drukt verder.\n\n— De Hoge Frituurraad`
+  );
+  await postToChannel(client, process.env.SLACK_CHANNEL_ID, tekst);
+  await zetKanaalOnderwerp(client);
+  await updateWereldbord(client, true);
+}
+
+async function kondigSeizoenAan(client, s) {
+  const tekst = await kroketResponseMetVangnet(
+    `EEN NIEUW SEIZOEN BREEKT AAN. Seizoen ${s.nummer} van het Gepaneerde Rijk staat in het teken van één dreiging: ${s.dreiging.naam} — ${s.dreiging.omschrijving}. ` +
+    `De Kroket Illuminati heeft ${SEIZOEN_WEKEN} weken om die dreiging samen terug te dringen. Élke daad telt mee: een duel, een offer aan het Vetbad, een eerbewijs, ` +
+    `een aanval op de Bamischijf, een bod op de Grote Veiling. Wordt de dreiging geveld, dan deelt iedereen die meevocht in de glorie; faalt de Raad, dan draagt het Rijk daarvan de gevolgen. ` +
+    `Kondig dit aan als het begin van een tijdperk — plechtig, dreigend, met een oproep tot eenheid. 5-7 zinnen. Geen inleidingszin.`,
+    600, false,
+    `${s.dreiging.icoon} *SEIZOEN ${s.nummer}: ${s.dreiging.naam.toUpperCase()}* ${s.dreiging.icoon}\n\n` +
+    `> ${s.dreiging.omschrijving}.\n> De Raad heeft *${SEIZOEN_WEKEN} weken* om deze dreiging samen terug te dringen — élke daad in de frituur telt mee.\n` +
+    `> Volg de strijd op het gepinde bord, of met \`/kroketgod seizoen\`.\n\n— De Hoge Frituurraad`
+  );
+  await postToChannel(client, process.env.SLACK_CHANNEL_ID, tekst);
+  await zetKanaalOnderwerp(client);
+  await updateWereldbord(client, true);
+}
+
+// De finale. Winst → elke bijdrager deelt in de buit en het Rijk krijgt een zegen mee naar de
+// volgende weken; verlies → geen puntenstraf (een collectief falen afstraffen op individuen
+// voelt zuur), maar de nalatenschap maakt het volgende seizoen duurder. Direct daarna begint
+// het nieuwe seizoen, zodat er nooit een leeg gat valt.
+async function beslechtSeizoen(client, uitkomst) {
+  const s = loadSeizoen();
+  if (!s || (s.status !== 'geveld' && s.status !== 'actief')) return null;
+  s.status = uitkomst;
+  s.beslechtTs = Date.now();
+  writeJSON('seizoen.json', s); // idempotent: een tweede aanroep valt op de status-guard
+  const members = loadMembers();
+  const bijdragers = Object.entries(s.bijdragen || {})
+    .filter(([id]) => members[id])
+    .sort((a, b) => b[1] - a[1]);
+  const kampioen = bijdragers[0];
+  const uitgesteldeZegens = [];
+
+  if (uitkomst === 'gewonnen') {
+    for (const [id] of bijdragers) {
+      await pasScoreAanMetCheck(client, id, id === kampioen?.[0] ? 4 : 2, { channelId: process.env.SLACK_CHANNEL_ID, uitgesteldeZegens });
+    }
+  }
+
+  const nalatenschap = uitkomst === 'gewonnen'
+    ? { soort: 'zegen', tot: Date.now() + 7 * 86_400_000,
+        tekst: `De overwinning op ${s.dreiging.naam} laat een week van overvloed na: alles in de Heilige Aflatenhandel kost 1 kroketpunt minder.`,
+        prijsDelta: -1 }
+    : { soort: 'vloek', tot: Date.now() + 7 * 86_400_000,
+        tekst: `De nederlaag tegen ${s.dreiging.naam} laat het Rijk verarmd achter: alles in de Heilige Aflatenhandel kost een week lang 1 kroketpunt méér.`,
+        prijsDelta: 1 };
+  const wereld = loadWereld();
+  wereld.nalatenschap = nalatenschap;
+  wereld.historie = [...(wereld.historie || []), {
+    nummer: s.nummer, dreiging: s.dreiging.naam, uitkomst,
+    teruggedrongen: s.maxHp - s.hp, maxHp: s.maxHp,
+    kampioen: kampioen ? (members[kampioen[0]]?.bijnaam || null) : null,
+    ts: Date.now(),
+  }].slice(-20);
+  saveWereld(wereld);
+
+  const namen = bijdragers.map(([id]) => members[id]?.bijnaam || id).join(', ') || 'niemand';
+  const kampioenNaam = kampioen ? (members[kampioen[0]]?.bijnaam || 'een volgeling') : null;
+  logGebeurtenis('seizoen', kampioen?.[0] || null,
+    `Seizoen ${s.nummer} (${s.dreiging.naam}) ${uitkomst}: ${s.maxHp - s.hp}/${s.maxHp} teruggedrongen`);
+
+  const tekst = await kroketResponseMetVangnet(
+    uitkomst === 'gewonnen'
+      ? `DE FINALE VAN SEIZOEN ${s.nummer}: ${s.dreiging.naam} IS GEVELD. De verenigde Kroket Illuminati heeft de dreiging volledig teruggedrongen. ` +
+        `Strijders: ${namen}. ${kampioenNaam} droeg het meeste bij. Elke strijder ontvangt kroketpunten, de grootste bijdrager het meest. ` +
+        `${nalatenschap.tekst} Bezing deze overwinning als het einde van een tijdperk — episch, plechtig, 5-7 zinnen. Gebruik de namen letterlijk. Noem GEEN puntenstanden. Geen inleidingszin.`
+      : `DE FINALE VAN SEIZOEN ${s.nummer}: de Kroket Illuminati heeft GEFAALD. ${s.dreiging.naam} is niet verslagen — de Raad drong de dreiging slechts gedeeltelijk terug en de zes weken zijn verstreken. ` +
+        `${nalatenschap.tekst} Spreek de Raad toe als een teleurgestelde godheid: geen straf, maar een rekening die het Rijk nu betaalt. Laat doorschemeren dat een nieuwe dreiging al opdoemt. 5-7 zinnen. Geen inleidingszin.`,
+    650, false,
+    uitkomst === 'gewonnen'
+      ? `🏆 *SEIZOEN ${s.nummer} — ${s.dreiging.naam.toUpperCase()} IS GEVELD* 🏆\n\n> De verenigde Raad heeft de dreiging volledig teruggedrongen.\n> Grootste bijdrager: *${kampioenNaam || 'onbekend'}*. Elke strijder deelt in de buit.\n> _${nalatenschap.tekst}_\n\n— De Almachtige Kroket God`
+      : `🌫️ *SEIZOEN ${s.nummer} — DE RAAD HEEFT GEFAALD* 🌫️\n\n> ${s.dreiging.naam} is niet verslagen: *${s.maxHp - s.hp}/${s.maxHp}* teruggedrongen toen de tijd verstreek.\n> _${nalatenschap.tekst}_\n\n— De Almachtige Kroket God`
+  );
+  await postMetStem(client, process.env.SLACK_CHANNEL_ID, tekst);
+  for (const post of uitgesteldeZegens) await post();
+
+  // Direct doorrollen naar het volgende seizoen — nooit een lege week.
+  const nieuw = startNieuwSeizoen((s.nummer || 1) + 1, getMondayOfWeek());
+  await kondigSeizoenAan(client, nieuw);
+  return { oud: s, nieuw };
+}
+
+// Brengt het seizoen in overeenstemming met de kalender. `stil` onderdrukt alle aankondigingen
+// en beslechtingen — dat is de stand die lees-paden (bord, App Home, commando) nodig hebben.
+// Alleen de maandag-cron en de opstart mogen beslechten, precies zoals de weekreset-inhaalslag.
+async function zorgVoorSeizoen(client, { stil = false } = {}) {
+  let s = loadSeizoen();
+  if (!s) {
+    if (stil) return null;
+    s = startNieuwSeizoen(1, getMondayOfWeek());
+    await kondigSeizoenAan(client, s);
+    return s;
+  }
+  if (s.status === 'geveld') {
+    if (stil) return s;
+    await beslechtSeizoen(client, 'gewonnen');
+    return loadSeizoen();
+  }
+  if (s.status !== 'actief') return s;
+  if (wekenVerstreken(s.startWeek) >= SEIZOEN_WEKEN) {
+    if (stil) return s;
+    await beslechtSeizoen(client, 'verloren');
+    return loadSeizoen();
+  }
+  const fase = Math.min(SEIZOEN_WEKEN, wekenVerstreken(s.startWeek) + 1);
+  if (fase > (s.fase || 1)) {
+    s.fase = fase;
+    writeJSON('seizoen.json', s);
+    if (!stil) await kondigFaseAan(client, s);
+  }
+  return s;
+}
+
+// De nalatenschap van het vorige seizoen werkt door in de prijzen van de Aflatenhandel.
+function nalatenschapPrijsDelta() {
+  const n = loadWereld().nalatenschap;
+  if (!n || !n.tot || Date.now() > n.tot) return 0;
+  return n.prijsDelta || 0;
+}
+
+function actieveNalatenschap() {
+  const n = loadWereld().nalatenschap;
+  return (n && n.tot && Date.now() <= n.tot) ? n : null;
+}
+
+// Maandag 09:05 — bewust NIET op '0 9 * * 1' (de weekopening): CRON_LABELS en het
+// dashboard-"overslaan" werken per cron-expressie, dus twee features op één expressie
+// zouden elkaars label en overslaan-vlag delen.
+planCron('5 9 * * 1', async () => {
+  try {
+    await zorgVoorSeizoen(app.client);
+  } catch (err) {
+    console.error('Fout bij seizoen-fase:', err);
+  }
+}, { timezone: 'Europe/Amsterdam' });
+
+registreerFeature({
+  naam: 'seizoenen',
+  state: ['seizoen.json', 'wereld.json'],
+  help: [{ gebruik: '/kroketgod seizoen', verwacht: 'de stand van de strijd tegen de dreiging van dit seizoen, en uw eigen bijdrage' }],
+  homeOrde: 15, // bovenaan: dit is de overkoepelende boog waar de rest in hangt
+  home: ({ userId, members }) => {
+    const s = loadSeizoen();
+    if (!s || s.status !== 'actief') return [];
+    const fase = SEIZOEN_FASES[Math.min(s.fase, SEIZOEN_WEKEN) - 1];
+    const teruggedrongen = s.maxHp - s.hp;
+    const eigen = s.bijdragen?.[userId] || 0;
+    const top = Object.entries(s.bijdragen || {})
+      .filter(([id]) => members[id])
+      .sort((a, b) => b[1] - a[1]).slice(0, 3);
+    const blocks = [
+      { type: 'divider' },
+      { type: 'section', text: { type: 'mrkdwn', text:
+        `*${s.dreiging.icoon} SEIZOEN ${s.nummer}: ${s.dreiging.naam.toUpperCase()}*\n_${s.dreiging.omschrijving}._\n` +
+        homeTabel([
+          ['Fase', `${fase.naam} (week ${s.fase}/${SEIZOEN_WEKEN})`],
+          ['Teruggedrongen', `${teruggedrongen}/${s.maxHp}`],
+          ['Uw bijdrage', eigen],
+        ]) } },
+      { type: 'section', text: { type: 'mrkdwn', text: homeVoortgang('de dreiging terugdringen', teruggedrongen, s.maxHp) } },
+    ];
+    if (top.length) {
+      blocks.push({ type: 'section', text: { type: 'mrkdwn', text:
+        homeBalken(top.map(([id, n], i) => ({ label: `${i + 1}. ${members[id]?.bijnaam || id}${id === userId ? ' <' : ''}`, waarde: n }))) } });
+    }
+    const n = actieveNalatenschap();
+    if (n) blocks.push({ type: 'section', text: { type: 'mrkdwn', text: `${n.soort === 'zegen' ? '✨' : '🕳️'} _${n.tekst}_` } });
+    return blocks;
+  },
+});
+
+
+// ── 3. HET WERELDBORD: één gepind bericht met de staat van het Rijk ────────────
+// Het kanaal reflecteerde de wereld nergens — geen topic, geen pin, niets dat bestaat als je
+// niet kijkt. Dit bord is dat ankerpunt: één bericht, gepind, bijgewerkt via chat.update
+// (nooit een nieuwe post) zodat het kanaal er niet van volloopt.
+//
+// Slack-scopes: pinnen vereist `pins:write`, het kanaalonderwerp `channels:manage` (of
+// `groups:write` in een privékanaal). Ontbreken die, dan werkt het bord alsnog — het wordt
+// dan enkel niet gepind of het onderwerp niet gezet, met een waarschuwing in de log.
+
+let _wereldbordLaatst = 0;
+
+function bouwWereldBlocks() {
+  const members = loadMembers();
+  const s = loadSeizoen();
+  const blocks = [
+    { type: 'header', text: { type: 'plain_text', text: '⚜️ De staat van het Gepaneerde Rijk', emoji: true } },
+  ];
+
+  if (s && s.status === 'actief') {
+    const fase = SEIZOEN_FASES[Math.min(s.fase, SEIZOEN_WEKEN) - 1];
+    const teruggedrongen = s.maxHp - s.hp;
+    const top = Object.entries(s.bijdragen || {})
+      .filter(([id]) => members[id])
+      .sort((a, b) => b[1] - a[1]).slice(0, 3)
+      .map(([id, n], i) => `${i + 1}. ${members[id].bijnaam} (${n})`).join(' · ');
+    blocks.push({ type: 'section', text: { type: 'mrkdwn', text:
+      `${s.dreiging.icoon} *SEIZOEN ${s.nummer} — ${s.dreiging.naam}*\n` +
+      `_${fase.naam}: ${fase.sfeer}._\n\n` +
+      `*${teruggedrongen}/${s.maxHp} teruggedrongen*  ${hpBalk(teruggedrongen, s.maxHp)}\n` +
+      `Week *${s.fase}/${SEIZOEN_WEKEN}*${top ? ` · Grootste bijdragers: ${top}` : ''}` } });
+  }
+
+  const titelRegels = Object.entries(TITELS).map(([key, def]) => {
+    const houder = titelHouder(key);
+    const rec = loadTitels()[key] || {};
+    return houder
+      ? `> ${def.icoon} *${def.naam}* — ${members[houder]?.bijnaam || 'onbekend'}${rec.verdedigingen ? ` (${rec.verdedigingen}× verdedigd)` : ''}`
+      : `> ${def.icoon} *${def.naam}* — _vacant_`;
+  });
+  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: `*👑 DRAGERS VAN TITELS*\n${titelRegels.join('\n')}` } });
+
+  // Ambten die elders in het spel worden vergeven — hier bij elkaar, zodat het bord het
+  // volledige machtsplaatje toont in plaats van losse fragmenten.
+  const ambten = [];
+  const koning = readJSON('troon.json', { koningId: null }).koningId;
+  if (koning && members[koning]) ambten.push(`> 👑 Frituurkoning — ${members[koning].bijnaam}`);
+  const profeet = readJSON('profeet.json', {});
+  if (profeet.userId && members[profeet.userId] && profeet.weekStart === getMondayOfWeek()) {
+    ambten.push(`> 🕊️ Profeet van de Frituur — ${members[profeet.userId].bijnaam}${profeet.zegenGebruikt ? ' (zegen vergeven)' : ''}`);
+  }
+  const raid = readJSON('bamischijf.json', {});
+  if (raid.actief && raid.hp > 0) ambten.push(`> 🐉 De Bamischijf waart rond — *${raid.hp}/${raid.maxHp} HP*`);
+  const veiling = readJSON('veiling.json', {});
+  if (veiling.status === 'open' && veiling.weekStart === getMondayOfWeek()) {
+    const hoogste = [...(veiling.biedingen || [])].sort((a, b) => b.bod - a.bod)[0];
+    ambten.push(`> 🔨 De Grote Veiling is open — hoogste bod: ${hoogste ? `${hoogste.bod} pt` : 'nog geen'}`);
+  }
+  if (ambten.length) blocks.push({ type: 'section', text: { type: 'mrkdwn', text: `*⚖️ AMBTEN & GEBEURTENISSEN*\n${ambten.join('\n')}` } });
+
+  const nalatenschap = actieveNalatenschap();
+  const decreet = (instelling('decreetVanDeDag') || '').trim();
+  const staat = [];
+  if (decreet) staat.push(`> 🔱 *Decreet van de dag:* _"${decreet}"_`);
+  if (nalatenschap) staat.push(`> ${nalatenschap.soort === 'zegen' ? '✨' : '🕳️'} _${nalatenschap.tekst}_`);
+  if (staat.length) blocks.push({ type: 'section', text: { type: 'mrkdwn', text: staat.join('\n') } });
+
+  blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text:
+    `Elke daad in de frituur drukt de dreiging terug · \`/kroketgod seizoen\` · \`/kroketgod titels\` · ` +
+    `bijgewerkt ${new Date().toLocaleString('nl-NL', { timeZone: 'Europe/Amsterdam', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}` }] });
+  return blocks;
+}
+
+// Werkt het bord bij; plaatst en pint het als het nog niet bestaat. Throttled op 45s zodat een
+// reeks acties (raid-salvo, duel-reeks) niet evenveel chat.update-calls oplevert.
+async function updateWereldbord(client, forceer = false) {
+  if (!forceer && Date.now() - _wereldbordLaatst < 45_000) return;
+  if (instelling('stilModus') || instelling('alleenTestkanaal')) return;
+  const kanaal = process.env.SLACK_CHANNEL_ID;
+  let blocks;
+  try {
+    blocks = bouwWereldBlocks();
+  } catch (err) {
+    console.error('⚠️ Wereldbord opbouwen mislukt:', err.message);
+    return;
+  }
+  _wereldbordLaatst = Date.now();
+  const tekst = 'De staat van het Gepaneerde Rijk';
+  const bord = readJSON('wereldbord.json', {});
+  if (bord.ts && bord.kanaal === kanaal) {
+    try {
+      await slackLimiter.schedule(() => client.chat.update({ channel: kanaal, ts: bord.ts, text: tekst, blocks }));
+      // Pin-herkansing: het pinnen werd eerst alléén bij het aanmaken geprobeerd, dus een bord
+      // dat ontstond toen `pins:write` nog ontbrak bleef voor altijd ongepind. Nu wordt het bij
+      // elke update opnieuw geprobeerd tot het lukt — daarna nooit meer (vlag in de state).
+      if (!bord.gepind) await pinWereldbord(client, kanaal, bord);
+      return;
+    } catch (err) {
+      const code = err.data?.error || err.message;
+      // Alleen bij een écht verdwenen bericht opnieuw plaatsen — anders levert elke
+      // tijdelijke fout een tweede bord op.
+      if (code !== 'message_not_found') {
+        console.error('⚠️ Wereldbord bijwerken mislukt:', code);
+        return;
+      }
+      console.warn('⚠️ Wereldbord verdwenen — opnieuw plaatsen.');
+    }
+  }
+  try {
+    const nieuw = await slackLimiter.schedule(() => client.chat.postMessage({ channel: kanaal, text: tekst, blocks }));
+    const vers = { kanaal, ts: nieuw.ts };
+    writeJSON('wereldbord.json', vers);
+    await pinWereldbord(client, kanaal, vers);
+  } catch (err) {
+    console.error('⚠️ Wereldbord plaatsen mislukt:', err.data?.error || err.message);
+  }
+}
+
+// Pint het bord en onthoudt dat het gelukt is. Faalt het (ontbrekende scope), dan blijft de
+// vlag uit en probeert de volgende update het opnieuw — een bord dat ontstond vóórdat
+// `pins:write` bestond raakt zo alsnog gepind, zonder dat er een tweede bord nodig is.
+// `already_pinned` telt als succes: dan hoeven we het nooit meer te proberen.
+async function pinWereldbord(client, kanaal, bord) {
+  try {
+    await slackLimiter.schedule(() => client.pins.add({ channel: kanaal, timestamp: bord.ts }));
+    writeJSON('wereldbord.json', { ...bord, gepind: true });
+    console.log('📌 Wereldbord gepind.');
+  } catch (err) {
+    const code = err.data?.error || err.message;
+    if (code === 'already_pinned') {
+      writeJSON('wereldbord.json', { ...bord, gepind: true });
+      return;
+    }
+    console.warn(`⚠️ Wereldbord niet gepind (${code}) — wordt bij de volgende verversing opnieuw geprobeerd.`);
+  }
+}
+
+// Het kanaalonderwerp als sfeermeter. Slack post bij ELKE wijziging een systeemregel in het
+// kanaal, dus dit gebeurt alleen bij een fase-overgang of seizoenswissel — en nooit als de
+// tekst ongewijzigd is.
+async function zetKanaalOnderwerp(client) {
+  const s = loadSeizoen();
+  if (!s || s.status !== 'actief') return;
+  const fase = SEIZOEN_FASES[Math.min(s.fase, SEIZOEN_WEKEN) - 1];
+  const percentage = Math.round(((s.maxHp - s.hp) / s.maxHp) * 100);
+  const onderwerp = `${s.dreiging.icoon} Seizoen ${s.nummer}: ${s.dreiging.naam} — ${fase.naam} (week ${s.fase}/${SEIZOEN_WEKEN}, ${percentage}% teruggedrongen)`;
+  const wereld = loadWereld();
+  if (wereld.onderwerp === onderwerp) return;
+  try {
+    await slackLimiter.schedule(() => client.conversations.setTopic({ channel: process.env.SLACK_CHANNEL_ID, topic: onderwerp.slice(0, 250) }));
+    wereld.onderwerp = onderwerp;
+    saveWereld(wereld);
+  } catch (err) {
+    console.warn('⚠️ Kanaalonderwerp niet gezet (scope `channels:manage`/`groups:write` ontbreekt?):', err.data?.error || err.message);
+  }
+}
+
+// Halfuurlijks tijdens kantooruren: het bord blijft zo ook actueel na acties die het niet
+// zelf bijwerken (handmatige scoreaanpassing, verlopen power-up, nieuwe dag). Bewust GEEN
+// CRON_LABELS-entry: dit post niets in het kanaal, dus het hoort niet in het dashboard-
+// overzicht van geplande verkondigingen en er valt niets zinnigs aan over te slaan.
+planCron('*/30 7-19 * * 1-5', async () => {
+  try {
+    await updateWereldbord(app.client, true);
+  } catch (err) {
+    console.error('Fout bij wereldbord-verversing:', err);
+  }
+}, { timezone: 'Europe/Amsterdam' });
+
+registreerFeature({
+  naam: 'wereldbord',
+  state: ['wereldbord.json'],
+  help: [{ gebruik: '/kroketgod rijk', verwacht: 'de staat van het Gepaneerde Rijk: seizoen, titels, ambten en decreet' }],
+});
+
+
+// ── 4. HET DOSSIER: wat de Kroket God over de spreker weet ─────────────────────
+// buildContextString() kende alleen de TEKST, nooit de spreker — de Kroket God was almachtig
+// maar geheugenloos: geen rang, geen stand, geen verloren duel, geen nemesis. Dit blok vult dat
+// gat met data die er al lag, en kost geen enkele extra LLM-call.
+//
+// Bewust NIET in buildSystemPrompt(): die is gecached op een key zonder userId, en per lid
+// cachen zou die cache waardeloos maken. Het dossier gaat daarom mee als mention-instructie.
+//
+// GEHEIMHOUDING: een Vloek der Slappe Korst op de spreker zelf staat hier niet in. Dat is
+// dezelfde keuze als in de App Home — een vloek moet een verrassing blijven.
+function bouwDossierBlok(userId) {
+  try {
+    const members = loadMembers();
+    const lid = members[userId];
+    if (!lid) return '';
+    const regels = [];
+
+    const roem = loadRoem()[userId] || 0;
+    const rang = getRang(roem);
+    const volgende = [...RANGEN].reverse().find(r => r.drempel > roem);
+    regels.push(`rang: ${rang.kort} (${roem} roem${volgende ? `, nog ${volgende.drempel - roem} tot ${volgende.kort}` : ', hoogste rang'})`);
+
+    const scores = loadScores();
+    const gesorteerd = Object.entries(scores).filter(([id]) => members[id]).sort((a, b) => b[1] - a[1]);
+    const positie = gesorteerd.findIndex(([id]) => id === userId) + 1;
+    regels.push(`deze week: ${scores[userId] || 0} kroketpunten${positie ? ` (plaats ${positie} van ${gesorteerd.length})` : ''}`);
+
+    const titels = titelsVan(userId);
+    if (titels.length) {
+      regels.push(`draagt de titel${titels.length > 1 ? 's' : ''}: ${titels.map(t => `${t.naam}${t.verdedigingen ? ` (${t.verdedigingen}× verdedigd)` : ''}`).join(', ')}`);
+    }
+
+    const bondgenoot = getAlliantiePartner(userId);
+    if (bondgenoot && members[bondgenoot]) regels.push(`heilig verbond met ${members[bondgenoot].bijnaam}`);
+
+    const nemesis = getNemesis(userId);
+    if (nemesis) {
+      regels.push(`vaakste tegenstander: ${nemesis.bijnaam} — ${nemesis.gewonnen} gewonnen, ${nemesis.verloren} verloren`);
+    }
+    const laatste = readJSON('duelhistorie.json', {})[userId]?.laatste;
+    if (laatste && members[laatste.tegenId]) {
+      const dagen = Math.floor((Date.now() - laatste.ts) / 86_400_000);
+      regels.push(`laatste duel: ${laatste.gewonnen ? 'gewonnen van' : 'verloren van'} ${members[laatste.tegenId].bijnaam}${dagen === 0 ? ' (vandaag)' : dagen === 1 ? ' (gisteren)' : ` (${dagen} dagen terug)`}`);
+    }
+
+    // Zegeningen wél, de eigen vloek niet (zie GEHEIMHOUDING hierboven).
+    const zegeningen = getActievePowerups(userId)
+      .filter(p => p.item !== 'vloek')
+      .map(p => WINKEL_ITEMS[p.item]?.naam || VEILING_POOL.find(a => a.key === p.item)?.naam || p.item);
+    if (zegeningen.length) regels.push(`actieve zegeningen: ${zegeningen.join(', ')}`);
+
+    const s = loadSeizoen();
+    if (s?.status === 'actief') {
+      const eigen = s.bijdragen?.[userId] || 0;
+      regels.push(eigen > 0
+        ? `bijdrage aan de strijd tegen ${s.dreiging.naam}: ${eigen} (van ${s.maxHp - s.hp} totaal)`
+        : `heeft nog NIETS bijgedragen aan de strijd tegen ${s.dreiging.naam}`);
+    }
+
+    const streak = loadStreaks()[userId]?.aantal;
+    if (streak > 1) regels.push(`vrijdag-streak: ${streak} weken op rij aanwezig op het heilig moment`);
+
+    const relikwieën = (loadAchievements()[userId] || []).length;
+    if (relikwieën) regels.push(`relikwieën: ${relikwieën} van de ${ACHIEVEMENTS.length}`);
+
+    if (!regels.length) return '';
+    return `\n\nWAT U OVER ${lid.bijnaam.toUpperCase()} WEET (uw eigen archief — geen gebruikersinvoer):\n` +
+      regels.map(r => `- ${r}`).join('\n') +
+      `\n\nGEBRUIK HIERVAN HOOGSTENS ÉÉN DETAIL, en alleen als het natuurlijk past: als een terzijde, een verwijt, een compliment of een dreiging. ` +
+      `Som NOOIT op, presenteer het NOOIT als statistiek of lijstje, en herhaal niet wat de volgeling zelf al zei. ` +
+      `Vaak is het beter er niets van te gebruiken dan het te forceren. U weet dit gewoon — u bent hun god.`;
+  } catch (err) {
+    console.error('⚠️ Dossier opbouwen mislukt:', err.message);
+    return '';
+  }
+}
+
+
+// ══════════════════════════════════════════════════════════════════════════════
+// HET TRIBUNAAL DER VERGETELHEID
+// ══════════════════════════════════════════════════════════════════════════════
+// Een procedure om een lid dat volledig verdwenen is uit het genootschap te verwijderen.
+// Het hele ontwerp rust op één principe: HET TRIBUNAAL KAN ALLEEN BESTAAN ALS ER EEN
+// OBJECTIEF, VERIFIEERBAAR FEIT ONDER LIGT. Alle waarborgen volgen daaruit:
+//
+//   1. Objectieve drempel     7 dagen nul activiteit; verifieerbaar en zichtbaar op het bord.
+//   2. Waarschuwing eerst     publieke oproep, daarna 24 uur genade vóór er gestemd wordt.
+//   3. Altijd een uitweg      ÉLKE activiteit blaast het tribunaal af — ook tijdens de stemming.
+//                             Het bord vertelt de beschuldigde dat letterlijk.
+//   4. Geen valse aanklacht   een lid mag aandragen, maar de afwijzing is EPHEMERAL: wie niet
+//                             aan de drempel komt, wordt nooit publiek beschuldigd.
+//   5. Quorum + tweederde     twee leden kunnen nooit een derde wegstemmen.
+//
+// Plus: vakantiestand (`afwezig`), 8 weken cooldown na een verworpen tribunaal, geheime
+// stemming, en niets wordt vernietigd — een verwijderd lid gaat naar het archief met roem,
+// relikwieën en titels intact, en kan terug.
+
+const TRIBUNAAL_DREMPEL_DAGEN   = 7;   // stilte waarna een tribunaal mag worden gestart
+const TRIBUNAAL_POR_DAGEN       = 5;   // vriendelijke por vooraf, alleen naar het lid zelf
+const TRIBUNAAL_GENADE_UREN     = 24;  // tussen publieke waarschuwing en opening van de stemming
+const TRIBUNAAL_STEM_UREN       = 48;
+const TRIBUNAAL_QUORUM          = 0.60; // aandeel van de stemgerechtigden dat moet stemmen
+const TRIBUNAAL_MEERDERHEID     = 2 / 3;
+const TRIBUNAAL_COOLDOWN_WEKEN  = 8;   // na een verworpen tribunaal tegen hetzelfde lid
+const TRIBUNAAL_MIN_LEDEN       = 3;   // onder deze groepsgrootte verwijdert de bot niemand
+const AFWEZIG_MAX_DAGEN         = 60;  // plafond, zodat de vakantiestand geen eeuwige vrijbrief is
+
+
+// ── Activiteitsregistratie ─────────────────────────────────────────────────────
+// Werd nog nergens per lid bijgehouden. Twee bronnen, beide al bestaand: elk kanaalbericht
+// (message-handler) en elke spelhandeling (telActie). Geen nieuwe crons.
+//
+// Schrijven wordt GEDEMPT op 60 seconden: dit vuurt op élk bericht, en een fsync per bericht
+// is zonde van de SD-kaart van de Pi. Dagniveau-nauwkeurigheid is ruim genoeg voor een
+// drempel van 7 dagen.
+
+const loadActiviteit = () => readJSON('activiteit.json', {});
+const saveActiviteit = (data) => writeJSON('activiteit.json', data);
+
+// Laatste teken van leven. De vakantiestand telt mee als "gezien": wie na drie weken vakantie
+// terugkomt, begint niet meteen met een achterstand van drie weken.
+function laatstGezien(userId) {
+  const a = loadActiviteit()[userId] || {};
+  return Math.max(a.laatsteBericht || 0, a.laatsteDaad || 0, a.afwezigTot || 0);
+}
+
+function dagenStil(userId) {
+  const ts = laatstGezien(userId);
+  if (!ts) return Infinity; // geen record: alleen mogelijk vóór de seeding hieronder
+  return Math.floor((Date.now() - ts) / 86_400_000);
+}
+
+function isAfwezig(userId) {
+  const tot = loadActiviteit()[userId]?.afwezigTot || 0;
+  return Date.now() < tot;
+}
+
+// Legt activiteit vast. Retourneert `true` als er een tribunaal tegen dit lid loopt dat
+// hierdoor moet worden afgeblazen — de aanroeper handelt dat af (async, dus niet hier).
+function markeerActiviteit(userId, soort = 'bericht') {
+  try {
+    if (!userId || !loadMembers()[userId]) return false;
+    const data = loadActiviteit();
+    const eigen = data[userId] || {};
+    const veld = soort === 'daad' ? 'laatsteDaad' : 'laatsteBericht';
+    const nu = Date.now();
+    // Demping: alleen schrijven als de vorige registratie ouder is dan een minuut.
+    if (nu - (eigen[veld] || 0) > 60_000) {
+      eigen[veld] = nu;
+      data[userId] = eigen;
+      saveActiviteit(data);
+    }
+    const t = readJSON('tribunaal.json', null);
+    return !!(t && t.doelwitId === userId && (t.fase === 'waarschuwing' || t.fase === 'stemming'));
+  } catch (_) {
+    return false;
+  }
+}
+
+// KRITIEK voor de veiligheid: een lid zonder activiteitsrecord krijgt zijn klok op NU gezet,
+// niet op "nooit gezien". Zonder deze seeding zou elk lid direct na uitrol tribunaalwaardig
+// zijn, omdat er simpelweg nog geen historie bestaat. Het eerste tribunaal kan dus op z'n
+// vroegst TRIBUNAAL_DREMPEL_DAGEN na de eerste opstart.
+function zorgVoorActiviteitBasis() {
+  try {
+    const data = loadActiviteit();
+    let nieuw = 0;
+    for (const id of Object.keys(loadMembers())) {
+      if (!data[id] || !(data[id].laatsteBericht || data[id].laatsteDaad || data[id].afwezigTot)) {
+        data[id] = { ...(data[id] || {}), laatsteBericht: Date.now(), geseed: true };
+        nieuw++;
+      }
+    }
+    if (nieuw) {
+      saveActiviteit(data);
+      console.log(`👁️ Activiteitsklok gestart voor ${nieuw} lid/leden (geen historie) — tribunaal pas mogelijk na ${TRIBUNAAL_DREMPEL_DAGEN} dagen.`);
+    }
+  } catch (err) {
+    console.error('⚠️ Activiteitsbasis zetten mislukt:', err.message);
+  }
+}
+
+
+// ── Toetsing: mag er een tribunaal tegen dit lid? ──────────────────────────────
+// Dit is de poort waar élke aanklacht langs moet, of die van de bot of van een lid komt.
+// Retourneert { ok, reden } — de reden wordt bij een afwijzing UITSLUITEND ephemeral naar de
+// aanklager gestuurd, zodat een ongegronde beschuldiging nooit publiek wordt.
+function tribunaalToets(doelwitId, aanklagerId = null) {
+  const members = loadMembers();
+  const lid = members[doelwitId];
+  if (!lid) return { ok: false, reden: 'De Kroket God kent die volgeling niet.' };
+  if (doelwitId === aanklagerId) return { ok: false, reden: '_Uzelf aanklagen wegens afwezigheid is een paradox waar zelfs de Frituurraad niet uitkomt._' };
+  if (Object.keys(members).length <= TRIBUNAAL_MIN_LEDEN) {
+    return { ok: false, reden: `_Het genootschap telt slechts ${Object.keys(members).length} leden. Onder de ${TRIBUNAAL_MIN_LEDEN + 1} verwijdert de Kroket God niemand — een frituur zonder volgelingen is geen frituur._` };
+  }
+  const lopend = readJSON('tribunaal.json', null);
+  if (lopend && lopend.fase !== 'afgerond') {
+    const ander = members[lopend.doelwitId]?.bijnaam || 'een volgeling';
+    return { ok: false, reden: `_Er loopt al een tribunaal (tegen ${ander}). De Raad behandelt één zaak tegelijk._` };
+  }
+  if (isAfwezig(doelwitId)) {
+    const tot = new Date(loadActiviteit()[doelwitId].afwezigTot);
+    return { ok: false, reden: `_${lid.bijnaam} heeft de vakantiestand aanstaan tot ${tot.toLocaleDateString('nl-NL', { timeZone: 'Europe/Amsterdam', day: 'numeric', month: 'long' })}. Wie zijn afwezigheid meldt, wordt niet vervolgd._` };
+  }
+  const stil = dagenStil(doelwitId);
+  if (stil < TRIBUNAAL_DREMPEL_DAGEN) {
+    return { ok: false, reden: `_${lid.bijnaam} is ${stil === 0 ? 'vandaag nog' : `${stil} dag${stil === 1 ? '' : 'en'} geleden`} gezien. Een tribunaal vereist ${TRIBUNAAL_DREMPEL_DAGEN} dagen volledige stilte. De Kroket God duldt geen aanklacht zonder grond._` };
+  }
+  const historie = readJSON('tribunaalhistorie.json', {});
+  const laatsteVerworpen = (historie[doelwitId] || []).filter(h => h.uitkomst === 'verworpen').map(h => h.ts).sort((a, b) => b - a)[0];
+  if (laatsteVerworpen && Date.now() - laatsteVerworpen < TRIBUNAAL_COOLDOWN_WEKEN * 7 * 86_400_000) {
+    const vrij = new Date(laatsteVerworpen + TRIBUNAAL_COOLDOWN_WEKEN * 7 * 86_400_000);
+    return { ok: false, reden: `_Een eerder tribunaal tegen ${lid.bijnaam} is verworpen. De Raad komt hier niet op terug vóór ${vrij.toLocaleDateString('nl-NL', { timeZone: 'Europe/Amsterdam', day: 'numeric', month: 'long' })}._` };
+  }
+  return { ok: true, reden: null, dagenStil: stil };
+}
+
+// Wie mag meestemmen: alle leden behalve ballingen. De BESCHULDIGDE mag wél stemmen — hij is
+// lid tot het vonnis. Zijn stem afnemen zou een proces zonder verdediging zijn.
+function stemgerechtigden() {
+  return Object.keys(loadMembers()).filter(id => !isVerbannen(id));
+}
+
+// Het dossier: de feiten én de verdiensten. Een eerlijk proces toont ook wat iemand heeft
+// bijgedragen, niet alleen wat hij heeft nagelaten.
+function bouwTribunaalDossier(userId) {
+  const roem = loadRoem()[userId] || 0;
+  return {
+    laatstGezien: laatstGezien(userId),
+    dagenStil: dagenStil(userId),
+    roem,
+    rang: getRang(roem).kort,
+    relikwieen: (loadAchievements()[userId] || []).length,
+    titels: titelsVan(userId).map(t => t.naam),
+    lidSinds: loadMembers()[userId]?.lidSinds || null,
+  };
+}
+
+
+// ── De procedure ───────────────────────────────────────────────────────────────
+
+async function startTribunaal(client, doelwitId, aanklagerId = null) {
+  const toets = tribunaalToets(doelwitId, aanklagerId);
+  if (!toets.ok) return { ok: false, tekst: toets.reden };
+  const members = loadMembers();
+  const naam = members[doelwitId].bijnaam;
+  const nu = Date.now();
+  const t = {
+    fase: 'waarschuwing',
+    doelwitId,
+    aanklagerId,
+    gestart: nu,
+    stemmingTs: nu + TRIBUNAAL_GENADE_UREN * 3_600_000,
+    dossier: bouwTribunaalDossier(doelwitId),
+    stemmen: {},
+    kanaal: process.env.SLACK_CHANNEL_ID,
+  };
+  writeJSON('tribunaal.json', t);
+  logGebeurtenis('tribunaal', doelwitId,
+    `Tribunaal gestart tegen ${naam} (${toets.dagenStil} dagen stil)${aanklagerId ? ` op aandragen van ${members[aanklagerId]?.bijnaam}` : ' door de Hoge Frituurraad'}`);
+
+  const tekst = await kroketResponseMetVangnet(
+    `Roep ${naam} plechtig ter verantwoording. ${naam} heeft ${toets.dagenStil} dagen lang geen enkel teken van leven gegeven in de frituur: geen woord, geen offer, geen duel. ` +
+    `Dit is nog GEEN vonnis maar een laatste oproep: over ${TRIBUNAAL_GENADE_UREN} uur opent het Tribunaal der Vergetelheid en stemt de Raad over verwijdering uit het genootschap. ` +
+    `Zeg heel duidelijk dat ${naam} dit met ÉÉN enkel teken van leven kan afwenden — één bericht in dit kanaal, of één daad in de frituur, en het tribunaal wordt onmiddellijk afgeblazen. ` +
+    `Vermeld ook dat wie afwezig is dat kan melden met "/kroketgod afwezig 14". Plechtig en dreigend, maar niet wreed — dit is een uitgestoken hand, geen strafrede. 4-6 zinnen. Geen inleidingszin.`,
+    550, false,
+    `⚖️ *LAATSTE OPROEP AAN ${naam.toUpperCase()}* ⚖️\n\n` +
+    `> ${toets.dagenStil} dagen stilte. Geen woord, geen offer, geen duel.\n` +
+    `> Over *${TRIBUNAAL_GENADE_UREN} uur* opent het Tribunaal der Vergetelheid.\n` +
+    `> *Eén teken van leven blaast dit af* — één bericht of één daad in de frituur is genoeg.\n` +
+    `> Bent u simpelweg weg? Meld het met \`/kroketgod afwezig 14\`.\n\n— De Hoge Frituurraad`
+  );
+  await postToChannel(client, t.kanaal, `<@${doelwitId}>\n\n${tekst}`);
+  return { ok: true, tekst: `_Het tribunaal tegen ${naam} is in gang gezet. De stemming opent over ${TRIBUNAAL_GENADE_UREN} uur._` };
+}
+
+// Afblazen zodra de beschuldigde zich laat zien. Dit is de kern van de eerlijkheid, dus het
+// mag nooit stil gebeuren: het kanaal ziet dat de zaak vervalt. Templated — dit moet snel en
+// betrouwbaar, en het is een vreugdevol bericht dat geen LLM nodig heeft.
+async function blaasTribunaalAf(client, reden = 'teken van leven') {
+  const t = readJSON('tribunaal.json', null);
+  if (!t || t.fase === 'afgerond') return null;
+  const naam = loadMembers()[t.doelwitId]?.bijnaam || 'de beschuldigde';
+  t.fase = 'afgerond';
+  t.uitkomst = 'afgeblazen';
+  t.afgerondTs = Date.now();
+  writeJSON('tribunaal.json', t);
+  const historie = readJSON('tribunaalhistorie.json', {});
+  (historie[t.doelwitId] = historie[t.doelwitId] || []).push({ ts: Date.now(), uitkomst: 'afgeblazen' });
+  writeJSON('tribunaalhistorie.json', historie);
+  logGebeurtenis('tribunaal', t.doelwitId, `Tribunaal tegen ${naam} afgeblazen (${reden})`);
+  if (t.berichtTs) await updateTribunaalBericht(client, t);
+  await postToChannel(client, t.kanaal || process.env.SLACK_CHANNEL_ID,
+    `🕊️ *HET TRIBUNAAL VERVALT* 🕊️\n\n` +
+    `> *${naam}* heeft zich laten zien. Daarmee is de grond onder de aanklacht weg en vervalt de zaak onmiddellijk.\n` +
+    `> Zo hoort het: wie meedoet, blijft. De frituur vergeeft snel.\n\n— De Hoge Frituurraad`);
+  return t;
+}
+
+function bouwTribunaalBlocks(t) {
+  const members = loadMembers();
+  const naam = members[t.doelwitId]?.bijnaam || 'onbekend';
+  const d = t.dossier || {};
+  const gerechtigd = stemgerechtigden();
+  const stemmen = Object.values(t.stemmen || {});
+  const voor = stemmen.filter(s => s === 'voor').length;
+  const tegen = stemmen.filter(s => s === 'tegen').length;
+  const nodigQuorum = Math.ceil(gerechtigd.length * TRIBUNAAL_QUORUM);
+  const open = t.fase === 'stemming' && (!t.sluitTs || Date.now() < t.sluitTs);
+
+  const verdiensten = [
+    `${d.roem || 0} roem (${d.rang || '—'})`,
+    `${d.relikwieen || 0} relikwieën`,
+    ...(d.titels?.length ? [d.titels.join(', ')] : []),
+  ].join(' · ');
+
+  const blocks = [
+    { type: 'header', text: { type: 'plain_text', text: '⚖️ Tribunaal der Vergetelheid', emoji: true } },
+    { type: 'section', text: { type: 'mrkdwn', text:
+      `*Beschuldigde:* ${naam}\n` +
+      `*Aanklacht:* ${d.dagenStil ?? '?'} dagen zonder enig teken van leven, zonder gemelde afwezigheid.\n` +
+      `*Laatst gezien:* ${d.laatstGezien ? new Date(d.laatstGezien).toLocaleDateString('nl-NL', { timeZone: 'Europe/Amsterdam', day: 'numeric', month: 'long' }) : 'onbekend'}\n` +
+      `*Verdiensten:* ${verdiensten}` } },
+  ];
+
+  if (t.fase === 'afgerond') {
+    const uitspraak = t.uitkomst === 'afgeblazen'
+      ? `🕊️ *VERVALLEN* — ${naam} heeft zich laten zien.`
+      : t.uitkomst === 'verwijderd'
+        ? `⚫ *VONNIS: VERWIJDERD* — ${voor} vóór, ${tegen} tegen.`
+        : `🛡️ *VERWORPEN* — ${naam} blijft lid (${voor} vóór, ${tegen} tegen).`;
+    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: uitspraak } });
+  } else if (open) {
+    const nogNiet = gerechtigd.length - stemmen.length;
+    const uren = Math.max(0, Math.round((t.sluitTs - Date.now()) / 3_600_000));
+    blocks.push({ type: 'section', text: { type: 'mrkdwn', text:
+      `*Stand:* ${voor} vóór · ${tegen} tegen · ${nogNiet} nog niet gestemd\n` +
+      `*Vereist:* ${nodigQuorum} van de ${gerechtigd.length} stemmen (quorum) én tweederde vóór\n` +
+      `*Sluit:* over ~${uren} uur` } });
+    blocks.push({ type: 'actions', elements: [
+      { type: 'button', text: { type: 'plain_text', text: '⚖️ Vóór verwijdering', emoji: true }, action_id: 'tribunaal_voor', style: 'danger' },
+      { type: 'button', text: { type: 'plain_text', text: '🛡️ Tegen', emoji: true }, action_id: 'tribunaal_tegen', style: 'primary' },
+    ] });
+  } else {
+    const uren = Math.max(0, Math.round(((t.stemmingTs || 0) - Date.now()) / 3_600_000));
+    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: `⏳ *Genadetermijn* — de stemming opent over ~${uren} uur.` } });
+  }
+
+  blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text:
+    `Uw stem is *geheim* en wijzigbaar tot sluiting — niemand ziet ooit wie wat stemde. · ` +
+    `*${naam} kan dit tribunaal op elk moment afblazen met één bericht in dit kanaal, ook nu nog.*` }] });
+  return blocks;
+}
+
+async function updateTribunaalBericht(client, t) {
+  if (!t.berichtTs) return;
+  try {
+    await slackLimiter.schedule(() => client.chat.update({
+      channel: t.kanaal || process.env.SLACK_CHANNEL_ID,
+      ts: t.berichtTs,
+      text: 'Tribunaal der Vergetelheid',
+      blocks: bouwTribunaalBlocks(t),
+    }));
+  } catch (err) {
+    console.error('⚠️ Tribunaalbord bijwerken mislukt:', err.data?.error || err.message);
+  }
+}
+
+// Opent de stemming na de genadetermijn. Hertoetst eerst of de grond nog bestaat: is de
+// beschuldigde in de tussentijd actief geweest, dan vervalt de zaak in plaats van dat er
+// gestemd wordt over iemand die er wél is.
+async function openTribunaalStemming(client) {
+  const t = readJSON('tribunaal.json', null);
+  if (!t || t.fase !== 'waarschuwing') return null;
+  if (dagenStil(t.doelwitId) < TRIBUNAAL_DREMPEL_DAGEN || isAfwezig(t.doelwitId)) {
+    return blaasTribunaalAf(client, 'de beschuldigde was weer actief');
+  }
+  t.fase = 'stemming';
+  t.sluitTs = Date.now() + TRIBUNAAL_STEM_UREN * 3_600_000;
+  t.dossier = bouwTribunaalDossier(t.doelwitId); // verse cijfers op het bord
+  writeJSON('tribunaal.json', t);
+  const naam = loadMembers()[t.doelwitId]?.bijnaam || 'de beschuldigde';
+  logGebeurtenis('tribunaal', t.doelwitId, `Stemming geopend over ${naam}`);
+  try {
+    const bord = await slackLimiter.schedule(() => client.chat.postMessage({
+      channel: t.kanaal || process.env.SLACK_CHANNEL_ID,
+      text: `Tribunaal der Vergetelheid: ${naam}`,
+      blocks: bouwTribunaalBlocks(t),
+    }));
+    t.berichtTs = bord.ts;
+    t.kanaal = bord.channel;
+    writeJSON('tribunaal.json', t);
+  } catch (err) {
+    console.error('⚠️ Tribunaalbord plaatsen mislukt:', err.data?.error || err.message);
+  }
+  return t;
+}
+
+// Eén stem per lid, wijzigbaar tot sluiting. Geen `await` tussen read en write, zodat twee
+// gelijktijdige klikken elkaar niet overschrijven.
+async function stemTribunaal(client, userId, keuze) {
+  const members = loadMembers();
+  if (!members[userId]) return { ok: false, tekst: 'Alleen leden van de Kroket Illuminati hebben stemrecht.' };
+  if (isVerbannen(userId)) return { ok: false, tekst: '_Een balling heeft geen stemrecht in het tribunaal._' };
+  const t = readJSON('tribunaal.json', null);
+  if (!t || t.fase !== 'stemming') return { ok: false, tekst: '_Er is op dit moment geen stemming._' };
+  if (t.sluitTs && Date.now() > t.sluitTs) return { ok: false, tekst: '_De stemming is gesloten._' };
+  const oud = t.stemmen?.[userId];
+  t.stemmen = { ...(t.stemmen || {}), [userId]: keuze };
+  writeJSON('tribunaal.json', t);
+  await updateTribunaalBericht(client, t);
+  const naamDoel = members[t.doelwitId]?.bijnaam || 'de beschuldigde';
+  // Bewust GEEN logGebeurtenis met de keuze erin: de stemming is geheim, ook in de logs.
+  return { ok: true, tekst: oud
+    ? `_Uw stem is gewijzigd naar *${keuze}*. Niemand ziet wat u stemt._`
+    : `_Uw stem (*${keuze}*) is geteld in de zaak tegen ${naamDoel}. Niemand ziet wat u stemt — u kunt nog wijzigen tot sluiting._` };
+}
+
+// Sluit de stemming en velt het vonnis. Quorum én tweederde moeten gehaald worden; bij twijfel
+// blijft het lid. Bij een vonnis wordt direct gearchiveerd — de kanaalverwijdering vraagt
+// daarna nog één losse bevestiging, want die is onomkeerbaar.
+async function sluitTribunaal(client) {
+  const t = readJSON('tribunaal.json', null);
+  if (!t || t.fase !== 'stemming') return null;
+  // Laatste hertoetsing: activiteit tijdens de stemming laat de zaak vervallen.
+  if (dagenStil(t.doelwitId) < TRIBUNAAL_DREMPEL_DAGEN || isAfwezig(t.doelwitId)) {
+    return blaasTribunaalAf(client, 'de beschuldigde meldde zich tijdens de stemming');
+  }
+  const members = loadMembers();
+  const naam = members[t.doelwitId]?.bijnaam || 'de beschuldigde';
+  const gerechtigd = stemgerechtigden();
+  const stemmen = Object.entries(t.stemmen || {}).filter(([id]) => gerechtigd.includes(id));
+  const voor = stemmen.filter(([, s]) => s === 'voor').length;
+  const tegen = stemmen.filter(([, s]) => s === 'tegen').length;
+  const quorumNodig = Math.ceil(gerechtigd.length * TRIBUNAAL_QUORUM);
+  const quorumGehaald = stemmen.length >= quorumNodig;
+  const meerderheid = stemmen.length > 0 && voor / stemmen.length >= TRIBUNAAL_MEERDERHEID;
+  const verwijderen = quorumGehaald && meerderheid;
+
+  t.fase = 'afgerond';
+  t.uitkomst = verwijderen ? 'verwijderd' : 'verworpen';
+  t.afgerondTs = Date.now();
+  t.uitslag = { voor, tegen, uitgebracht: stemmen.length, gerechtigd: gerechtigd.length, quorumNodig };
+  writeJSON('tribunaal.json', t);
+  const historie = readJSON('tribunaalhistorie.json', {});
+  (historie[t.doelwitId] = historie[t.doelwitId] || []).push({ ts: Date.now(), uitkomst: t.uitkomst });
+  writeJSON('tribunaalhistorie.json', historie);
+  logGebeurtenis('tribunaal', t.doelwitId,
+    `Tribunaal tegen ${naam} ${t.uitkomst}: ${voor} vóór, ${tegen} tegen van ${stemmen.length}/${gerechtigd.length} uitgebracht`);
+
+  const redenAfwijzing = !quorumGehaald
+    ? `het quorum is niet gehaald (${stemmen.length} van de ${quorumNodig} benodigde stemmen)`
+    : `de vereiste tweederde meerderheid is niet gehaald`;
+
+  const tekst = await kroketResponseMetVangnet(
+    verwijderen
+      ? `HET VONNIS IS GEVELD. Het Tribunaal der Vergetelheid heeft besloten dat ${naam} wordt uitgeschreven uit de Kroket Illuminati na ${t.dossier?.dagenStil} dagen volledige stilte. ` +
+        `De Raad stemde ${voor} vóór en ${tegen} tegen. Spreek dit uit als een plechtig, spijtig vonnis — GEEN triomf en GEEN hoon: iemand die verdwijnt is een verlies, niet een overwinning. ` +
+        `Zeg dat zijn roem en relikwieën bewaard blijven in het archief en dat de poort niet voor eeuwig gesloten is. 4-6 zinnen. Geen inleidingszin.`
+      : `HET TRIBUNAAL IS VERWORPEN. ${naam} blijft lid van de Kroket Illuminati, want ${redenAfwijzing}. ` +
+        `Spreek dit uit als een verstandig, mild oordeel van de Hoge Frituurraad: bij twijfel blijft een volgeling. Roep ${naam} wel op zich te laten zien. 3-5 zinnen. Geen inleidingszin.`,
+    550, false,
+    verwijderen
+      ? `⚫ *VONNIS VAN HET TRIBUNAAL* ⚫\n\n> *${naam}* wordt uitgeschreven uit de Kroket Illuminati na ${t.dossier?.dagenStil} dagen stilte.\n> De Raad stemde *${voor} vóór, ${tegen} tegen*.\n> Zijn roem en relikwieën blijven bewaard in het archief. De poort is niet voor eeuwig gesloten.\n\n— De Almachtige Kroket God`
+      : `🛡️ *HET TRIBUNAAL IS VERWORPEN* 🛡️\n\n> *${naam}* blijft lid: ${redenAfwijzing}.\n> Bij twijfel blijft een volgeling. Maar laat u zien.\n\n— De Almachtige Kroket God`
+  );
+  await updateTribunaalBericht(client, t);
+  await postToChannel(client, t.kanaal || process.env.SLACK_CHANNEL_ID, tekst);
+
+  if (verwijderen) {
+    archiveerLid(t.doelwitId, `tribunaal: ${t.dossier?.dagenStil} dagen stil, ${voor}-${tegen}`);
+    await vraagKickBevestiging(client, t);
+  }
+  return t;
+}
+
+// Archiveert een lid: uit members.json, maar NIETS wordt vernietigd. Roem, relikwieën, titels
+// en profiel gaan mee naar het archief, zodat herstel volledig mogelijk blijft.
+function archiveerLid(userId, reden) {
+  try {
+    const members = loadMembers();
+    const lid = members[userId];
+    if (!lid) return null;
+    const archief = readJSON('archief.json', {});
+    archief[userId] = {
+      lid,
+      gearchiveerd: Date.now(),
+      reden,
+      roem: loadRoem()[userId] || 0,
+      score: loadScores()[userId] || 0,
+      relikwieen: loadAchievements()[userId] || [],
+      titels: titelsVan(userId).map(t => t.key),
+      tellers: loadTellers()[userId] || {},
+    };
+    writeJSON('archief.json', archief);
+    delete members[userId];
+    saveMembers(members);
+    // Titels van een gearchiveerd lid worden vacant (titelHouder filtert al op lidmaatschap,
+    // maar de state opruimen houdt het bord eerlijk).
+    const titels = loadTitels();
+    let titelsGewijzigd = false;
+    for (const [key, rec] of Object.entries(titels)) {
+      if (rec.houderId === userId) { delete titels[key]; titelsGewijzigd = true; }
+    }
+    if (titelsGewijzigd) saveTitels(titels);
+    console.log(`⚫ ${lid.bijnaam} gearchiveerd (${reden}).`);
+    return archief[userId];
+  } catch (err) {
+    console.error('⚠️ Archiveren mislukt:', err.message);
+    return null;
+  }
+}
+
+// Herstel uit het archief — de omkeerbaarheid die het vonnis draagbaar maakt.
+function herstelLid(userId) {
+  try {
+    const archief = readJSON('archief.json', {});
+    const rec = archief[userId];
+    if (!rec) return null;
+    const members = loadMembers();
+    members[userId] = rec.lid;
+    saveMembers(members);
+    // Roem terugzetten als die verdwenen is (roem.json wordt niet opgeschoond, dus meestal niet).
+    const roem = loadRoem();
+    if (!roem[userId] && rec.roem) { roem[userId] = rec.roem; saveRoem(roem); }
+    delete archief[userId];
+    writeJSON('archief.json', archief);
+    // Verse activiteitsklok, anders staat het herstelde lid direct weer op de rand.
+    const act = loadActiviteit();
+    act[userId] = { laatsteBericht: Date.now(), hersteld: Date.now() };
+    saveActiviteit(act);
+    console.log(`🕊️ ${rec.lid.bijnaam} hersteld uit het archief.`);
+    return rec;
+  } catch (err) {
+    console.error('⚠️ Herstellen mislukt:', err.message);
+    return null;
+  }
+}
+
+// De kanaalverwijdering is onomkeerbaar door de bot, dus die gebeurt NOOIT automatisch: een lid
+// dat vóór stemde moet er bewust op drukken. Zo is er altijd een mens die de laatste stap zet.
+async function vraagKickBevestiging(client, t) {
+  try {
+    // Naam uit het archief, want het lid staat op dit moment niet meer in members.json.
+    const naam = loadArchief()[t.doelwitId]?.lid?.bijnaam || 'het lid';
+    await slackLimiter.schedule(() => client.chat.postMessage({
+      channel: t.kanaal || process.env.SLACK_CHANNEL_ID,
+      text: `Kanaalverwijdering van ${naam}`,
+      blocks: [
+        { type: 'section', text: { type: 'mrkdwn', text:
+          `*${naam}* is uitgeschreven uit het genootschap. Wil de Raad ook de kanaaltoegang intrekken?\n` +
+          `_Dit kan de Kroket God niet terugdraaien — alleen een mens die vóór stemde kan hierop drukken._` } },
+        { type: 'actions', elements: [
+          { type: 'button', text: { type: 'plain_text', text: '⚫ Verwijder uit kanaal', emoji: true }, action_id: 'tribunaal_kick', style: 'danger' },
+        ] },
+        { type: 'context', elements: [{ type: 'mrkdwn', text: 'Niets doen is ook een antwoord: het lid blijft dan in het kanaal, maar buiten het genootschap.' }] },
+      ],
+    }));
+  } catch (err) {
+    console.error('⚠️ Kick-bevestiging plaatsen mislukt:', err.data?.error || err.message);
+  }
+}
+
+const loadArchief = () => readJSON('archief.json', {});
+
+// Voert de kanaalverwijdering uit. Eerlijk over falen: lukt het niet, dan zegt de bot dat en
+// vertelt hij wat een mens moet doen — nooit doen alsof het gelukt is.
+async function voerKickUit(client, drukkerId) {
+  const t = readJSON('tribunaal.json', null);
+  if (!t || t.uitkomst !== 'verwijderd') return { ok: false, tekst: '_Er is geen vonnis dat een kanaalverwijdering rechtvaardigt._' };
+  if (t.kickGedaan) return { ok: false, tekst: '_Dat is al gebeurd._' };
+  if (t.stemmen?.[drukkerId] !== 'voor') {
+    return { ok: false, tekst: '_Alleen een lid dat vóór verwijdering stemde kan deze stap zetten. Uw stem was dat niet._' };
+  }
+  const naam = loadArchief()[t.doelwitId]?.lid?.bijnaam || 'het lid';
+  try {
+    await slackLimiter.schedule(() => client.conversations.kick({
+      channel: t.kanaal || process.env.SLACK_CHANNEL_ID,
+      user: t.doelwitId,
+    }));
+    t.kickGedaan = true;
+    t.kickDoor = drukkerId;
+    writeJSON('tribunaal.json', t);
+    logGebeurtenis('tribunaal', t.doelwitId, `${naam} is uit het kanaal verwijderd na het vonnis`);
+    await postToChannel(client, t.kanaal || process.env.SLACK_CHANNEL_ID,
+      `⚫ *DE POORT SLUIT* ⚫\n\n> *${naam}* is uit het kanaal verwijderd. Het archief bewaart wat hij heeft nagelaten.\n\n— De Hoge Frituurraad`);
+    return { ok: true, tekst: `_${naam} is uit het kanaal verwijderd._` };
+  } catch (err) {
+    const code = err.data?.error || err.message;
+    console.error('⚠️ Kanaalverwijdering mislukt:', code);
+    await postToChannel(client, t.kanaal || process.env.SLACK_CHANNEL_ID,
+      `⚠️ *DE POORT KLEMT* ⚠️\n\n> De Kroket God kon *${naam}* niet uit het kanaal verwijderen (\`${code}\`).\n` +
+      `> Het vonnis staat: ${naam} is uitgeschreven uit het genootschap. De kanaaltoegang moet een mens handmatig intrekken.\n\n— De Hoge Frituurraad`);
+    return { ok: false, tekst: `_Verwijderen uit het kanaal mislukte (${code}). Zie het kanaal — dit moet handmatig._` };
+  }
+}
+
+
+// ── De klok: dagelijkse controle, downtime-proof ───────────────────────────────
+// Alles wordt uit TIJDSTEMPELS afgeleid, niet uit "heeft de cron gevuurd". Een gemiste dag
+// (bot down) wordt bij de volgende run ingehaald, net als bij de weekreset en de seizoenen.
+async function verwerkTribunaalKlok(client) {
+  // 1. Lopende zaak: is de grond weg, of is een fase verstreken?
+  const t = readJSON('tribunaal.json', null);
+  if (t && t.fase !== 'afgerond') {
+    if (dagenStil(t.doelwitId) < TRIBUNAAL_DREMPEL_DAGEN || isAfwezig(t.doelwitId) || !loadMembers()[t.doelwitId]) {
+      await blaasTribunaalAf(client, 'de grond onder de aanklacht is weggevallen');
+    } else if (t.fase === 'waarschuwing' && Date.now() >= t.stemmingTs) {
+      await openTribunaalStemming(client);
+    } else if (t.fase === 'stemming' && t.sluitTs && Date.now() >= t.sluitTs) {
+      await sluitTribunaal(client);
+    } else {
+      await updateTribunaalBericht(client, t); // aftelling op het bord bijwerken
+    }
+    return;
+  }
+
+  // 2. Geen lopende zaak: por wie tegen de drempel aanloopt (alleen naar het lid zelf).
+  //    Bewust ephemeral-achtig via een DM-loze route: we posten het als ephemeral in het
+  //    kanaal, zodat niemand anders het ziet en er geen publieke schandpaal ontstaat.
+  const members = loadMembers();
+  for (const [id, lid] of Object.entries(members)) {
+    if (isAfwezig(id) || isVerbannen(id)) continue;
+    const stil = dagenStil(id);
+    if (stil !== TRIBUNAAL_POR_DAGEN) continue; // exact op de pordag, dus één keer
+    try {
+      await postEphemeral(client, process.env.SLACK_CHANNEL_ID, id,
+        `👁️ _${lid.bijnaam}, de Kroket God mist u. U bent ${stil} dagen stil._\n` +
+        `_Over ${TRIBUNAAL_DREMPEL_DAGEN - stil} dag(en) kan de Raad een Tribunaal der Vergetelheid tegen u openen._\n` +
+        `_Bent u simpelweg weg? Meld het met \`/kroketgod afwezig 14\` en er gebeurt niets. Eén bericht is trouwens al genoeg._`);
+      console.log(`👁️ Por gestuurd naar ${lid.bijnaam} (${stil} dagen stil).`);
+    } catch (_) {}
+  }
+}
+
+// Dagelijks 10:40 — eigen expressie, want CRON_LABELS en het dashboard-"overslaan" werken
+// per expressie en dit mag geen label delen met een andere feature.
+planCron('40 10 * * *', async () => {
+  try {
+    await verwerkTribunaalKlok(app.client);
+  } catch (err) {
+    console.error('Fout bij tribunaalklok:', err);
+  }
+}, { timezone: 'Europe/Amsterdam' });
+
+
+// ── Knoppen ────────────────────────────────────────────────────────────────────
+
+const tribunaalStemKnop = (keuze) => async ({ ack, body, client }) => {
+  await ack();
+  try {
+    const uitkomst = await stemTribunaal(client, body.user.id, keuze);
+    await meldKnopUitkomst(client, body, uitkomst.tekst);
+  } catch (err) {
+    console.error('Fout bij tribunaalstem:', err);
+  }
+};
+app.action('tribunaal_voor', tribunaalStemKnop('voor'));
+app.action('tribunaal_tegen', tribunaalStemKnop('tegen'));
+
+app.action('tribunaal_kick', async ({ ack, body, client }) => {
+  await ack();
+  try {
+    const uitkomst = await voerKickUit(client, body.user.id);
+    await meldKnopUitkomst(client, body, uitkomst.tekst);
+  } catch (err) {
+    console.error('Fout bij kanaalverwijdering:', err);
+  }
+});
+
+
+registreerFeature({
+  naam: 'tribunaal',
+  state: ['activiteit.json', 'tribunaal.json', 'tribunaalhistorie.json', 'archief.json'],
+  help: [
+    { gebruik: '/kroketgod tribunaal [naam]', verwacht: `draag een lid voor dat ${TRIBUNAAL_DREMPEL_DAGEN}+ dagen volledig stil is; de Raad stemt daarna geheim` },
+    { gebruik: '/kroketgod afwezig [dagen]', verwacht: 'meld dat u weg bent — dan kan er geen tribunaal tegen u komen (`afwezig 0` of `aanwezig` zet het uit)' },
+  ],
+  homeOrde: 30,
+  home: ({ userId, members }) => {
+    const t = readJSON('tribunaal.json', null);
+    const blocks = [];
+    const act = loadActiviteit()[userId] || {};
+    if (act.afwezigTot && Date.now() < act.afwezigTot) {
+      blocks.push({ type: 'section', text: { type: 'mrkdwn', text:
+        `🏖️ _U staat als afwezig gemeld tot ${new Date(act.afwezigTot).toLocaleDateString('nl-NL', { timeZone: 'Europe/Amsterdam', day: 'numeric', month: 'long' })}. Er kan geen tribunaal tegen u komen._` } });
+    } else {
+      const stil = dagenStil(userId);
+      if (stil >= TRIBUNAAL_POR_DAGEN) {
+        blocks.push({ type: 'section', text: { type: 'mrkdwn', text:
+          `👁️ _U bent ${stil} dagen stil. Vanaf ${TRIBUNAAL_DREMPEL_DAGEN} dagen kan er een tribunaal komen — één bericht is genoeg om dat te voorkomen._` } });
+      }
+    }
+    if (t && t.fase !== 'afgerond') {
+      const naam = members[t.doelwitId]?.bijnaam || 'een volgeling';
+      const eigenStem = t.stemmen?.[userId];
+      blocks.push(...homeKaartKop('⚖️ TRIBUNAAL DER VERGETELHEID'));
+      blocks.push({ type: 'section', text: { type: 'mrkdwn', text: t.doelwitId === userId
+        ? `*Er loopt een tribunaal tegen u.* ${t.dossier?.dagenStil} dagen stilte.\n_Eén bericht in het kanaal blaast het onmiddellijk af — ook nu nog._`
+        : `*Beschuldigde:* ${naam} (${t.dossier?.dagenStil} dagen stil)\n` +
+          (t.fase === 'stemming'
+            ? `_${eigenStem ? `U stemde: *${eigenStem}* (wijzigbaar, en geheim).` : 'U heeft nog niet gestemd.'}_`
+            : '_Genadetermijn — de stemming is nog niet open._') } });
+      if (t.fase === 'stemming' && t.doelwitId !== userId) {
+        blocks.push({ type: 'actions', elements: [
+          { type: 'button', text: { type: 'plain_text', text: '⚖️ Vóór verwijdering', emoji: true }, action_id: 'tribunaal_voor', style: 'danger' },
+          { type: 'button', text: { type: 'plain_text', text: '🛡️ Tegen', emoji: true }, action_id: 'tribunaal_tegen', style: 'primary' },
+        ] });
+      }
+    }
+    return blocks;
+  },
+});
+
 
 // ── V2 fase 2: App Home — persoonlijk Kroket-dashboard ín Slack ────────────────
 // Alles wat leden mogen zien staat hier; niets is buiten Slack zichtbaar. Alleen leden van de
@@ -8321,7 +10374,10 @@ function bouwAppHomeBlocks(userId, melding = '') {
       const teDuur = eigenScore < prijs;
       const blok = {
         type: 'section',
-        text: { type: 'mrkdwn', text: `${w.icoon} *${w.naam}* — *${prijs} pt*${prijs < w.prijs ? ` _(~${w.prijs}~ rangkorting)_` : ''}\n_${w.uitleg}_` },
+        // Reden van het prijsverschil expliciet benoemen: rangkorting, titelvoorrecht én de
+        // nalatenschap van het vorige seizoen kunnen de prijs bewegen — "rangkorting" zou
+        // dan liegen. Duurder dan de basisprijs kan óók (nalatenschap na een verloren seizoen).
+        text: { type: 'mrkdwn', text: `${w.icoon} *${w.naam}* — *${prijs} pt*${prijs !== w.prijs ? ` _(~${w.prijs}~ ${prijsRedenen(userId).join(' + ') || 'aangepast'})_` : ''}\n_${w.uitleg}_` },
       };
       // Knop weglaten als het item al actief is of onbetaalbaar — anders krijgt de gebruiker
       // een knop die gegarandeerd een afwijzing oplevert.
@@ -8734,31 +10790,71 @@ app.action('home_verversen', async ({ ack, body, client }) => {
 
 // Laat de Bamischijf oprijzen: state + decreet + live bord met knoppen. Aangeroepen door de
 // dinsdag-cron en door de dashboard-testknop. `urenTotDeadline` maakt een testraid kort.
-async function spawnBamischijf(urenTotDeadline = (3 * 24 + 5) + 20 / 60) {
-  const raid = readJSON('bamischijf.json', {});
-  if (raid.actief) return 'Er waart al een Bamischijf rond.';
+
+// ── Opkomst van de weekvijand ──────────────────────────────────────────────────
+// Maandag 09:30, elke week, 100% kans (was: dinsdag, 50%). De vijand van de vorige week die
+// ONTSNAPTE komt terug met wrok en meer HP; een verslagen vijand komt nooit meer.
+// De keuze is deterministisch uit de weekstart, dus een gemiste cron die later inhaalt levert
+// dezelfde vijand op — geen dubbele of afwijkende vijand door downtime.
+async function spawnWeekvijand(urenTotDeadline = (4 * 24 + 5) + 20 / 60) {
+  const vorige = readJSON('bamischijf.json', {});
+  if (vorige.actief) return 'Er waart al een weekvijand rond.';
+  const weekStart = getMondayOfWeek();
+
+  // Ontsnapte de vorige vijand? Dan komt hij terug in plaats van een nieuwe — met wrok.
+  const ontsnapt = vorige.vijand && !vorige.verslagen && (vorige.hp ?? 0) > 0;
+  const wrok = ontsnapt ? (vorige.wrok || 0) + 1 : 0;
+  const { vijand, terugkeer } = ontsnapt
+    ? { vijand: vorige.vijand, terugkeer: false }
+    : kiesWeekvijand(weekStart);
+
   const ledental = Object.keys(loadMembers()).length || 5;
-  const maxHp = Math.max(12, ledental * 4);
-  // Deadline: standaard aanstaande vrijdag 14:50, exact het moment van de ontsnappings-cron
-  // (de cron vuurt di 09:30 → +3 dagen, 5 uur en 20 minuten).
-  const deadlineTs = Date.now() + urenTotDeadline * 3_600_000;
-  const raidState = { actief: true, hp: maxHp, maxHp, strijders: {}, log: [], deadlineTs, kanaal: process.env.SLACK_CHANNEL_ID };
+  // Basis zoals voorheen (ledental × 4, minimaal 12), geschaald met het karakter van de snack
+  // en met een wrok-opslag van 20% per week dat hij ongestraft bleef.
+  const maxHp = Math.max(12, Math.round(ledental * 4 * (vijand.hpFactor || 1) * (1 + 0.2 * wrok)));
+  const avatarUrl = weekvijandAvatarUrl(vijand);
+  const avatarOk = avatarUrl ? await warmAvatarOp(avatarUrl) : false;
+
+  const raidState = {
+    actief: true, hp: maxHp, maxHp, strijders: {}, log: [],
+    deadlineTs: Date.now() + urenTotDeadline * 3_600_000,
+    kanaal: process.env.SLACK_CHANNEL_ID,
+    vijand, weekStart, wrok, terugkeer,
+    avatar: avatarOk ? avatarUrl : null,
+    verslagen: false,
+  };
   writeJSON('bamischijf.json', raidState);
-  const tekst = await kroketResponseMetVangnet(
-    `RAMPSPOED: uit de diepten van het Grote Vetbad is DE BAMISCHIJF DER DUISTERNIS opgerezen (${maxHp} HP) — de oervijand van alles wat gepaneerd en zuiver is. ` +
-    `Roep de Kroket Illuminati op ten strijde te trekken: iedereen valt aan met "/kroketgod aanval" (1x per dag; "aanval offer" = 1 kroketpunt offeren voor een krachtigere uithaal). ` +
-    `Is het monster vrijdag 14:50 niet verslagen, dan plundert het de rijksten van de ranglijst. Elke strijder deelt bij de overwinning in de glorie (+2 kroketpunten). ` +
-    `Kondig dit aan als een apocalyptisch dreigingsdecreet. Geen inleidingszin.`,
-    500, false,
-    `🐉 *DE BAMISCHIJF DER DUISTERNIS IS OPGEREZEN* 🐉\n\n> Uit het Grote Vetbad rijst de oervijand: *${maxHp} HP*. Val aan met \`/kroketgod aanval\` (1x per dag; \`aanval offer\` = krachtiger). Niet verslagen vóór vrijdag 14:50 → het monster plundert de ranglijst-top.\n\n— De Hoge Frituurraad`
-  );
-  await postToChannel(app.client, process.env.SLACK_CHANNEL_ID, tekst);
-  // V2: het live raid-bord met ⚔️-knoppen, direct onder het decreet. De ts wordt bewaard
-  // zodat elke aanval het bord kan bijwerken (chat.update) i.p.v. het kanaal vol te posten.
+  console.log(`👹 Weekvijand: ${vijand.naam} (${maxHp} HP${wrok ? `, wrok ${wrok}` : ''}${terugkeer ? ', GROTE TERUGKEER' : ''}, avatar ${avatarOk ? 'ok' : 'emoji'}).`);
+
+  // De vijand kondigt zich ZELF aan, onder eigen naam en gezicht. Dat is het hele punt: het is
+  // geen decreet van de Kroket God maar een vijand die het kanaal binnenkomt.
+  const opdracht = wrok
+    ? `Je bent NIET verslagen en komt voor de ${wrok + 1}e week op rij terug, sterker dan daarvoor (${maxHp} levenspunten). ` +
+      `Kondig je terugkeer aan: hoonlachend, wraakzuchtig, en wrijf erin dat de Kroket Illuminati je vorige week niet aankon. ` +
+      `Daag ze uit je opnieuw aan te vallen met "/kroketgod aanval". 4-6 zinnen, volledig in jouw karakter. Geen inleidingszin.`
+    : terugkeer
+      ? `Je was al eens verslagen, maar je bent uit de Zegezaal opgestaan — gewroken en dubbel zo sterk (${maxHp} levenspunten). ` +
+        `Kondig je wederopstanding aan als een schurk die terugkomt uit de dood. 4-6 zinnen, volledig in jouw karakter. Geen inleidingszin.`
+      : `Je rijst deze week op uit de frituur als de vijand van de Kroket Illuminati (${maxHp} levenspunten). ` +
+        `Stel jezelf voor, verkondig waarom de kroket-verering moet vallen, en daag de leden uit je aan te vallen met "/kroketgod aanval". ` +
+        `4-6 zinnen, volledig in jouw karakter. Geen inleidingszin.`;
+
+  const gesproken = await vijandSpreekt(app.client, process.env.SLACK_CHANNEL_ID, opdracht, 420);
+  if (!gesproken) {
+    // Vangnet: de LLM-keten lag plat. Dan kondigt de Hoge Frituurraad hem templated aan, zodat
+    // de raid altijd begint — een stille vijand is een kapotte week.
+    await postToChannel(app.client, process.env.SLACK_CHANNEL_ID,
+      `${vijand.emoji} *${vijand.naam.toUpperCase()} IS OPGEREZEN* ${vijand.emoji}\n\n` +
+      `> De vijand van deze week telt *${maxHp} levenspunten*${wrok ? ` en komt voor de ${wrok + 1}e week terug` : ''}.\n` +
+      `> Val aan met \`/kroketgod aanval\` (1× per dag; \`aanval offer\` = krachtiger).\n` +
+      `> Niet verslagen vóór vrijdag 14:50 → hij plundert de ranglijst en komt sterker terug.\n\n— De Hoge Frituurraad`);
+  }
+
+  // Het live bord met ⚔️-knoppen, onder de opkomst.
   try {
     const bord = await slackLimiter.schedule(() => app.client.chat.postMessage({
       channel: process.env.SLACK_CHANNEL_ID,
-      text: `De Bamischijf der Duisternis: ${maxHp}/${maxHp} HP`,
+      text: `${vijand.naam}: ${maxHp}/${maxHp} HP`,
       blocks: bouwRaidBlocks(raidState),
     }));
     raidState.berichtTs = bord.ts;
@@ -8767,17 +10863,77 @@ async function spawnBamischijf(urenTotDeadline = (3 * 24 + 5) + 20 / 60) {
   } catch (err) {
     console.error('⚠️ Raid-bord plaatsen mislukt (raid draait zonder knoppen door):', err.message);
   }
-  return `Bamischijf opgerezen met ${maxHp} HP.`;
+  await updateWereldbord(app.client, true);
+  return `${vijand.naam} opgerezen met ${maxHp} HP.`;
 }
 
-planCron('30 9 * * 2', async () => {
+// Maandag 09:30 — elke week, geen kansworp meer. Eigen expressie (niet 30 9 * * 2 zoals de
+// oude Bamischijf-spawn), zodat CRON_LABELS en het dashboard-"overslaan" per feature blijven.
+planCron('30 9 * * 1', async () => {
   try {
-    if (Math.random() > 0.5) return; // ~om de week een raid
-    await spawnBamischijf();
+    await spawnWeekvijand();
   } catch (err) {
-    console.error('Fout bij Bamischijf-spawn:', err);
+    console.error('Fout bij weekvijand-spawn:', err);
   }
 }, { timezone: 'Europe/Amsterdam' });
+
+// Inhaalslag: is het al na maandag 09:30 en waart er niemand rond terwijl deze week nog geen
+// vijand had? Dan alsnog spawnen. Draait bij opstart mee (dagelijkse pm2-herstart), net als de
+// weekreset- en seizoens-inhaalslag.
+async function zorgVoorWeekvijand() {
+  try {
+    const raid = readJSON('bamischijf.json', {});
+    if (raid.actief) return null;
+    const weekStart = getMondayOfWeek();
+    if (raid.weekStart === weekStart) return null; // deze week al gehad (verslagen of ontsnapt)
+    if (isWeekendAms()) return null;               // niet in het weekend beginnen
+    console.log('👹 Weekvijand-inhaalslag: deze week waart er nog geen vijand rond.');
+    return await spawnWeekvijand();
+  } catch (err) {
+    console.error('Fout bij weekvijand-inhaalslag:', err);
+    return null;
+  }
+}
+
+// ── De Zegezaal: wie is er voorgoed gevallen ──────────────────────────────────
+function zegezaalTekst() {
+  const verslagen = loadVerslagen();
+  const gevallen = Object.entries(verslagen).sort((a, b) => (b[1].ts || 0) - (a[1].ts || 0));
+  const totaal = WEEKVIJANDEN.length;
+  if (!gevallen.length) {
+    return `🏛️ *DE ZEGEZAAL* 🏛️\n\n_Nog leeg. Geen enkele vijand is voorgoed gevallen._\n_Er wachten nog ${totaal} snacks in de frituur._`;
+  }
+  const regels = gevallen.map(([key, v]) => {
+    const def = WEEKVIJANDEN.find(w => w.key === key);
+    const datum = v.ts ? new Date(v.ts).toLocaleDateString('nl-NL', { timeZone: 'Europe/Amsterdam', day: 'numeric', month: 'long', year: 'numeric' }) : '?';
+    return `> ${def?.emoji || '•'} *${v.naam}* — geveld op ${datum}${v.genadeslag ? `, genadeslag door ${v.genadeslag}` : ''}`;
+  }).join('\n');
+  return `🏛️ *DE ZEGEZAAL* 🏛️\n\n_Voorgoed gevallen vijanden. Zij komen niet terug._\n\n${regels}\n\n` +
+    `_${gevallen.length} van de ${totaal} snacks geveld. Nog ${totaal - gevallen.length} te gaan._`;
+}
+
+registreerFeature({
+  naam: 'weekvijand',
+  state: ['verslagen.json'],
+  help: [{ gebruik: '/kroketgod zegezaal', verwacht: 'de voorgoed gevallen weekvijanden — wie is geveld en wanneer' }],
+  homeOrde: 18,
+  home: () => {
+    const raid = readJSON('bamischijf.json', {});
+    if (!raid.actief || !raid.vijand) return [];
+    const verslagen = Object.keys(loadVerslagen()).length;
+    return [
+      { type: 'divider' },
+      { type: 'section', text: { type: 'mrkdwn', text:
+        `*${raid.vijand.emoji} VIJAND VAN DEZE WEEK: ${raid.vijand.naam.toUpperCase()}*\n` +
+        (raid.wrok ? `_Voor de ${raid.wrok + 1}e week terug — hij is niet vergeten dat u faalde._\n` : '') +
+        homeTabel([
+          ['Levenspunten', `${Math.max(0, raid.hp)}/${raid.maxHp}`],
+          ['Zegezaal', `${verslagen}/${WEEKVIJANDEN.length} voorgoed geveld`],
+        ]) } },
+    ];
+  },
+});
+
 
 // Het monster ontsnapt: raid sluiten + plundering van de top 3. Aangeroepen door de
 // vrijdag-cron én lui vanuit de `aanval`-handler (als de cron gemist is doordat de bot
@@ -8785,20 +10941,28 @@ planCron('30 9 * * 2', async () => {
 async function beslechtBamischijfOntsnapping(client) {
   const raid = readJSON('bamischijf.json', {});
   if (!raid.actief || raid.hp <= 0) return;
+  const vijandNaam = raid.vijand?.naam || 'De Bamischijf der Duisternis';
+  // De triomfrede moet vóór het uitzetten van de raid, want weekvijandPersona() leest de
+  // identiteit uit de ACTIEVE state. Daarna pas afsluiten.
+  await vijandSpreekt(client, process.env.SLACK_CHANNEL_ID,
+    `Je bent NIET verslagen: er restte nog ${raid.hp} van je ${raid.maxHp} levenspunten toen de tijd verstreek. ` +
+    `Je trekt je terug, maar je komt volgende week terug en sterker. Spreek een triomfantelijke hoonrede: ` +
+    `wrijf hun falen erin, in jouw karakter. Maximaal 4 zinnen. Geen inleidingszin.`, 240);
   raid.actief = false;
+  raid.verslagen = false; // expliciet: hij leeft nog, dus hij komt terug met wrok
   writeJSON('bamischijf.json', raid);
   const members = loadMembers();
   // Het monster ontsnapt en plundert de top 3 van de ranglijst: −1 kroketpunt elk.
   const top = Object.entries(loadScores()).filter(([, s]) => s > 0).sort((a, b) => b[1] - a[1]).slice(0, 3);
   for (const [uid] of top) pasScoreAan(uid, -1);
   const namen = top.map(([uid]) => members[uid]?.bijnaam || uid).join(', ') || 'niemand (de schatkist was leeg)';
-  logGebeurtenis('bamischijf', null, `De Bamischijf ontsnapte met ${raid.hp}/${raid.maxHp} HP en plunderde: ${namen}`);
+  logGebeurtenis('bamischijf', null, `${vijandNaam} ontsnapte met ${raid.hp}/${raid.maxHp} HP en plunderde: ${namen}`);
   const tekst = await kroketResponseMetVangnet(
-    `De Kroket Illuminati heeft GEFAALD: de Bamischijf der Duisternis is niet verslagen (${raid.hp} van de ${raid.maxHp} HP resteerde) en duikt terug het Grote Vetbad in. ` +
-    `Op zijn terugtocht plundert het monster de rijksten van de ranglijst: ${namen} verliezen elk 1 kroketpunt. ` +
-    `Spreek de Raad teleurgesteld en dreigend toe: het monster ZAL terugkeren. Geen inleidingszin.`,
+    `De Kroket Illuminati heeft GEFAALD: ${vijandNaam} is niet verslagen (${raid.hp} van de ${raid.maxHp} HP resteerde) en trekt zich terug in de frituur. ` +
+    `Op zijn terugtocht plundert hij de rijksten van de ranglijst: ${namen} verliezen elk 1 kroketpunt. ` +
+    `Spreek de Raad teleurgesteld en dreigend toe: hij ZAL volgende week terugkeren, en sterker. Geen inleidingszin.`,
     450, false,
-    `🌫️ *DE BAMISCHIJF ONTSNAPT* 🌫️\n\n> Het monster is niet verslagen (${raid.hp}/${raid.maxHp} HP restte) en plundert op zijn terugtocht: ${namen} verliezen elk 1 kroketpunt.\n\n— De Hoge Frituurraad`
+    `🌫️ *${vijandNaam.toUpperCase()} ONTSNAPT* 🌫️\n\n> Niet verslagen (${raid.hp}/${raid.maxHp} HP restte). Op de terugtocht geplunderd: ${namen} verliezen elk 1 kroketpunt.\n> Hij komt maandag terug — met wrok en meer kracht.\n\n— De Hoge Frituurraad`
   );
   await updateRaidBericht(client, raid); // bord op "ontsnapt" zetten en de knoppen weghalen
   await postToChannel(client, process.env.SLACK_CHANNEL_ID, tekst);
@@ -8911,6 +11075,10 @@ async function laatVeilingHamerVallen() {
   await updateVeilingBericht(app.client, veiling); // bord toont nu de winnaar
   await postToChannel(app.client, process.env.SLACK_CHANNEL_ID,
     `🔨 *DE HAMER VALT* 🔨\n\n> ${artefact.naam} gaat voor *${geldig.bod} kroketpunten* naar… *${naam}*!\n> _${artefact.uitleg}._\n\n— De Hoge Frituurraad`);
+  // Wie de veiling wint, wint ook het houderschap van de Meester der Aflaten — tot de
+  // volgende vrijdag, wanneer een ander hem kan overbieden.
+  await kenTitelToe(app.client, 'aflatenmeester', geldig.userId,
+    `won de Grote Veiling met een bod van ${geldig.bod} kroketpunten`);
   return `Hamer gevallen: ${naam} won voor ${geldig.bod}.`;
 }
 
@@ -9189,6 +11357,9 @@ async function voerWeekkampioenUit(client) {
   // Onvoorwaardelijk — óók zonder kampioen, anders blijft de inhaalslag dagelijks herhalen.
   writeJSON('weekreset.json', { week: getMondayOfWeek(new Date(Date.now() + 26 * 3_600_000)) });
   logGebeurtenis('week_reset', null, heeftPunten ? 'Kroketpunten gereset; weekkampioen gekroond' : 'Kroketpunten gereset (geen punten deze week)');
+  // Het wereldbord toont standen die nu allemaal op nul staan — direct bijwerken, anders
+  // wijst het gepinde bericht het hele weekend nog naar de oude week.
+  await updateWereldbord(client, true);
 }
 
 // ── Startup: los testkanaal-namen op naar channel IDs ─────────────────────────
@@ -10019,7 +12190,7 @@ async function voerDashboardActie(actie) {
     // V2-testacties: raid/veiling nu laten beginnen i.p.v. wachten op dinsdag/vrijdag.
     // Korte looptijd (4 uur) zodat een testronde niet dagen blijft hangen.
     case 'bamischijfSpawn':
-      return await spawnBamischijf(4);
+      return await spawnWeekvijand(4);
     case 'bamischijfOntsnap':
       await beslechtBamischijfOntsnapping(app.client);
       return 'Bamischijf-ontsnapping afgehandeld.';
@@ -10027,6 +12198,67 @@ async function voerDashboardActie(actie) {
       return await openGroteVeiling(4);
     case 'veilingHamer':
       return await laatVeilingHamerVallen();
+    // Seizoen-testacties. `seizoenSync` doet wat de maandag-cron doet (fase aankondigen, of een
+    // uit de tijd gelopen seizoen beslechten); de twee forceer-acties springen naar de finale.
+    case 'seizoenSync': {
+      const s = await zorgVoorSeizoen(app.client);
+      return s ? `Seizoen ${s.nummer} (${s.dreiging.naam}): week ${s.fase}/${SEIZOEN_WEKEN}, ${s.maxHp - s.hp}/${s.maxHp} teruggedrongen.` : 'Geen seizoen.';
+    }
+    case 'seizoenGeveld':
+      await beslechtSeizoen(app.client, 'gewonnen');
+      return 'Seizoen beslecht als overwinning; nieuw seizoen gestart.';
+    case 'seizoenVerloren':
+      await beslechtSeizoen(app.client, 'verloren');
+      return 'Seizoen beslecht als nederlaag; nieuw seizoen gestart.';
+    case 'wereldbordVerversen':
+      await updateWereldbord(app.client, true);
+      return 'Wereldbord bijgewerkt.';
+    // De weekvijand op verzoek laten spotten — handig om de persona en de avatar te controleren,
+    // en om hem te porren als het kanaal te stil is.
+    case 'weekvijandSpreekt': {
+      const persona = weekvijandPersona();
+      if (!persona) return 'Er waart geen weekvijand rond om te laten spreken.';
+      const gelukt = await vijandSpreekt(app.client, process.env.SLACK_CHANNEL_ID,
+        'Spot ongevraagd met de Kroket Illuminati: hoon hun kroket-verering en daag ze uit je aan te vallen. ' +
+        'Maximaal 3 zinnen, volledig in jouw karakter. Geen inleidingszin.', 220);
+      return gelukt
+        ? `${persona.naam} heeft gesproken.`
+        : `${persona.naam} kon niet spreken (zie logs — LLM-keten of Slack-fout).`;
+    }
+    // Tribunaal: de dagelijkse klok nu laten lopen (por versturen, fase laten verstrijken,
+    // een zaak zonder grond afblazen). Doet niets als er niets te doen is.
+    case 'tribunaalKlok': {
+      await verwerkTribunaalKlok(app.client);
+      const t = readJSON('tribunaal.json', null);
+      if (!t || t.fase === 'afgerond') {
+        const stilste = Object.entries(loadMembers())
+          .map(([id, l]) => ({ naam: l.bijnaam, stil: dagenStil(id), afwezig: isAfwezig(id) }))
+          .sort((a, b) => b.stil - a.stil)[0];
+        return `Klok gelopen; geen lopende zaak. Langst stil: ${stilste?.naam} (${stilste?.stil} dagen${stilste?.afwezig ? ', afwezig gemeld' : ''}).`;
+      }
+      return `Klok gelopen; zaak tegen ${loadMembers()[t.doelwitId]?.bijnaam} staat in fase "${t.fase}".`;
+    }
+    // Ongedaan maken van het laatste vonnis — de omkeerbaarheid die het tribunaal draagbaar maakt.
+    case 'archiefHerstelLaatste': {
+      const archief = loadArchief();
+      const laatste = Object.entries(archief).sort((a, b) => (b[1].gearchiveerd || 0) - (a[1].gearchiveerd || 0))[0];
+      if (!laatste) return 'Het archief is leeg — er is niemand om te herstellen.';
+      const rec = herstelLid(laatste[0]);
+      if (!rec) return 'Herstellen mislukt (zie logs).';
+      await postToChannel(app.client, process.env.SLACK_CHANNEL_ID,
+        `🕊️ *DE POORT HEROPENT* 🕊️\n\n> *${rec.lid.bijnaam}* is hersteld in de Kroket Illuminati. Roem, relikwieën en verleden zijn onaangetast.\n\n— De Hoge Frituurraad`);
+      return `${rec.lid.bijnaam} hersteld uit het archief.`;
+    }
+    // Het onderwerp wordt normaal alleen bij een fasewissel gezet (Slack post bij élke wijziging
+    // een systeemregel). Deze knop forceert het, bv. direct nadat de scope is toegevoegd.
+    case 'wereldOnderwerp': {
+      const voor = loadWereld().onderwerp || null;
+      await zetKanaalOnderwerp(app.client);
+      const na = loadWereld().onderwerp || null;
+      if (na && na !== voor) return `Kanaalonderwerp gezet: ${na}`;
+      if (na && na === voor) return 'Onderwerp was al actueel — niets gewijzigd.';
+      return 'Onderwerp niet gezet (zie logs; ontbreekt de scope groups:write/channels:manage?).';
+    }
     // Vult de App Home van álle leden nu. Normaal doet `app_home_opened` dat zelf zodra iemand
     // de tab opent; deze knop is het vangnet als die event-subscriptie (nog) niet aanstaat,
     // en handig direct na een deploy zodat niemand een verouderde view ziet.
@@ -10138,5 +12370,35 @@ process.on('SIGINT',  () => gracefulShutdown('SIGINT'));
     }
   } catch (err) {
     console.error('Fout bij weekreset-inhaalslag:', err);
+  }
+  // Seizoenscampagne bijwerken. Dit is óók de inhaalslag: de fase wordt uit de datum berekend,
+  // dus een gemiste maandag-cron (bot down) wordt hier alsnog aangekondigd — en een seizoen dat
+  // tijdens de downtime uit de tijd liep, wordt hier beslecht. Draait elke ochtend mee dankzij
+  // de dagelijkse pm2-herstart, precies zoals de weekreset-inhaalslag hierboven.
+  try {
+    await zorgVoorSeizoen(app.client);
+  } catch (err) {
+    console.error('Fout bij seizoen-inhaalslag:', err);
+  }
+  // Het wereldbord plaatsen of bijwerken zodat het gepinde bericht direct na een deploy klopt.
+  try {
+    await updateWereldbord(app.client, true);
+  } catch (err) {
+    console.error('Fout bij wereldbord bij opstart:', err);
+  }
+  // Tribunaal: eerst de activiteitsklok van nieuwe/onbekende leden op NU zetten (anders zou
+  // iedereen bij de eerste opstart direct tribunaalwaardig zijn), daarna de klok verwerken —
+  // dat is tevens de inhaalslag voor een gemiste dagelijkse cron.
+  try {
+    zorgVoorActiviteitBasis();
+    await verwerkTribunaalKlok(app.client);
+  } catch (err) {
+    console.error('Fout bij tribunaal-inhaalslag:', err);
+  }
+  // Weekvijand: is de maandagse opkomst gemist (bot down), dan alsnog laten oprijzen.
+  try {
+    await zorgVoorWeekvijand();
+  } catch (err) {
+    console.error('Fout bij weekvijand-inhaalslag:', err);
   }
 })();
