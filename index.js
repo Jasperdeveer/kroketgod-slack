@@ -4294,25 +4294,25 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
 
     // ── Status: leden + scores + actieve bans
     if (input === 'status') {
-      const statusData = bouwLedenStatus();
-      const tekst = await kroketResponse(
-        `Geef een plechtig statusoverzicht van alle volgelingen en actieve verbannelingen. ` +
-        `Gebruik UITSLUITEND de onderstaande data — verzin geen getallen of namen. ` +
-        `Structuur: leden met scores, dan actieve verbannelingen, dan de actieve zegeningen en vloeken uit de Aflatenhandel ` +
-        `(sla die sectie over als er geen zijn). Wie een vloek heeft gelegd blijft ALTIJD anoniem — noem of raad nooit een koper. ` +
-        `Dramatisch maar informatief. Geen inleidingszin.\n\n${statusData}`,
-        700, false
+      // De LLM levert UITSLUITEND een korte plechtige aanhef; alle cijfers komen uit code.
+      // Eerder moest het model de hele ledentabel reciteren. Zodra Gemini's dagquota op is valt
+      // de keten terug op kleine modellen, en die maakten daar onleesbare soep van: verzonnen
+      // woorden, placeholders in plaats van inhoud, een afgekapte zin — en één lid ontbrak
+      // gewoon in de lijst. Een statusoverzicht dat een lid weglaat is erger dan geen overzicht.
+      const aanhef = await kroketResponseMetVangnet(
+        `Spreek één korte, plechtige aanhef uit boven een statusoverzicht van het genootschap. ` +
+        `Noem GEEN namen, GEEN getallen en GEEN standen — die volgen hieronder al. ` +
+        `Maximaal 2 zinnen. Geen inleidingszin, geen opsomming, geen kopje.`,
+        120, false,
+        '⚜️ _De Hoge Frituurraad opent het register. Aanschouw de staat van het Rijk._'
       );
-      // Het LLM-verhaal gaat over de groep; hieronder komen ÚW cijfers als templated blok.
-      // Bewust niet door de LLM: die verzint bij vrije tekst eigen aantallen, en een cooldown
-      // die er naast zit is erger dan geen cooldown tonen.
-      const eigenBlok = loadMembers()[command.user_id]
-        ? `\n\n━━━━━━━━━━━━━━━━━━━━\n\n${statusBlokTekst(command.user_id)}`
-        : '';
+      const isLid = !!loadMembers()[command.user_id];
+      const tekst = `${schoonOutput(aanhef)}\n\n${groepsStatusTekst(command.user_id)}` +
+        (isLid ? `\n\n━━━━━━━━━━━━━━━━━━━━\n\n${statusBlokTekst(command.user_id)}` : '');
       if (isDM) {
-        await client.chat.postMessage({ channel: command.channel_id, text: schoonOutput(tekst) + eigenBlok });
+        await client.chat.postMessage({ channel: command.channel_id, text: tekst });
       } else {
-        await respond({ text: schoonOutput(tekst) + eigenBlok, response_type: 'ephemeral' });
+        await respond({ text: tekst, response_type: 'ephemeral' });
       }
       return;
     }
@@ -9855,6 +9855,76 @@ function persoonlijkeStatus(userId) {
   return { powerups, titels, cooldowns, dagreset: msTotDagreset(), weekreset: msTotWeekreset() };
 }
 
+// Het GROEPSoverzicht, templated. Dit stond eerst in een LLM-prompt ("gebruik uitsluitend deze
+// data"), maar zodra Gemini's dagquota op is valt de keten terug op kleine modellen en die
+// reciteren geen tabel: er kwam verzonnen Nederlands uit ("ALMITCHELBARE", "GESLOTEN BANEN"),
+// placeholders in plaats van inhoud, een afgekapte zin, en ÉÉN LID ONTBRAK IN DE LIJST.
+// Vandaar dezelfde regel als bij het standenblok na een duel en de cooldowns hierboven: de LLM
+// levert de stem, de code levert de cijfers.
+function groepsStatusTekst(vragerId = null) {
+  const members = loadMembers();
+  const scores = loadScores();
+  const roem = loadRoem();
+  const nu = Date.now();
+  const regels = [];
+
+  regels.push('*⚜️ DE STAAT VAN HET GENOOTSCHAP*');
+  regels.push('');
+  const gesorteerd = Object.entries(members)
+    .map(([id, lid]) => ({ id, lid, punten: scores[id] || 0, roem: roem[id] || 0 }))
+    .sort((a, b) => b.punten - a.punten || b.roem - a.roem);
+  for (const { id, lid, punten, roem: r } of gesorteerd) {
+    const ban = loadVerbanning()[id];
+    const isBan = ban && nu < new Date(ban.tot).getTime();
+    const tot = isBan ? new Date(ban.tot).toLocaleString('nl-NL', { timeZone: 'Europe/Amsterdam', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : null;
+    const titels = titelsVan(id).map(t => t.icoon).join('');
+    regels.push(`> ${lid.bijnaam}${titels ? ` ${titels}` : ''} — *${punten}* kroketpunt${punten === 1 ? '' : 'en'} · ${r} roem (${getRang(r).kort})` +
+      (isBan ? `\n>    ⛔ verbannen tot ${tot}${ban.reden ? ` — _${ban.reden}_` : ''}` : ''));
+  }
+
+  const ballingen = gesorteerd.filter(({ id }) => {
+    const b = loadVerbanning()[id];
+    return b && nu < new Date(b.tot).getTime();
+  });
+  regels.push('');
+  regels.push(ballingen.length
+    ? `_${ballingen.length} van de ${gesorteerd.length} leden zit vast._`
+    : '_Niemand is verbannen. De frituur is in vrede._');
+
+  // Allianties: elk paar één keer.
+  const allianties = loadAllianties();
+  const gezien = new Set();
+  const paren = [];
+  for (const [a, b] of Object.entries(allianties)) {
+    if (gezien.has(a) || gezien.has(b) || !members[a] || !members[b]) continue;
+    gezien.add(a); gezien.add(b);
+    paren.push(`> ${members[a].bijnaam} ⚔️ ${members[b].bijnaam}`);
+  }
+  regels.push('');
+  regels.push('*⚔️ HEILIGE VERBONDEN*');
+  regels.push(paren.length ? paren.join('\n') : '> _Geen actieve verbonden._');
+
+  // Zegeningen van ANDEREN. Een vloek op de vrager zelf blijft verborgen — dezelfde regel als in
+  // de App Home en het dossier; anders verraadt dit overzicht de verrassing.
+  const zegenRegels = [];
+  for (const { id, lid } of gesorteerd) {
+    for (const p of getActievePowerups(id)) {
+      if (p.item === 'vloek' && id === vragerId) continue;
+      const w = WINKEL_ITEMS[p.item];
+      const v = VEILING_POOL.find(a => a.key === p.item);
+      const naam = p.item === 'vloek' ? '😈 VERVLOEKT' : `${w?.icoon || '🏺'} ${w?.naam || v?.naam || p.item}`;
+      zegenRegels.push(`> ${lid.bijnaam} — ${naam} (nog ${resterendeTijd(Math.max(0, p.tot - nu))})`);
+    }
+  }
+  if (zegenRegels.length) {
+    regels.push('');
+    regels.push('*✨ ACTIEVE ZEGENINGEN & VLOEKEN*');
+    regels.push(zegenRegels.join('\n'));
+    regels.push('_Wie een vloek legde, blijft bij de Hoge Frituurraad bekend en nergens anders._');
+  }
+  return regels.join('\n');
+}
+
 // Tekstweergave voor `/kroketgod status` — een templated blok dat ONDER het LLM-verhaal komt,
 // zodat de cijfers exact zijn.
 function statusBlokTekst(userId) {
@@ -9863,23 +9933,26 @@ function statusBlokTekst(userId) {
 
   if (st.powerups.length) {
     regels.push('*⏳ ACTIEF OP U*');
+    regels.push('');
     for (const p of st.powerups) {
       regels.push(`> ${p.icoon} ${p.naam} — nog *${resterendeTijd(p.restMs)}* _(${p.bron})_`);
     }
   }
   if (st.titels.length) {
-    if (!st.powerups.length) regels.push('*⏳ ACTIEF OP U*');
+    if (!st.powerups.length) { regels.push('*⏳ ACTIEF OP U*'); regels.push(''); }
     for (const t of st.titels) {
       regels.push(`> ${t.icoon} ${t.naam} — geen einddatum${t.verdedigingen ? `, ${t.verdedigingen}× verdedigd` : ''} _(${t.voorrecht})_`);
     }
   }
   if (!st.powerups.length && !st.titels.length) {
     regels.push('*⏳ ACTIEF OP U*');
+    regels.push('');
     regels.push('> _Niets. Geen zegen, geen artefact, geen titel._');
   }
 
   regels.push('');
   regels.push('*🕐 WAT KUNT U WANNEER WEER*');
+  regels.push('');
   for (const c of st.cooldowns) {
     const vrij = c.limiet - c.gebruikt;
     if (vrij > 0) {
