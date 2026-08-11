@@ -9572,6 +9572,151 @@ function bouwDossierBlok(userId) {
 }
 
 
+// ── DM-meldingen bij een statuswijziging ──────────────────────────────────────
+// Een zegen verloopt, een verbanning eindigt, een titel gaat naar iemand anders: dingen die je
+// zelf niet ziet gebeuren. De Kroket God stuurt daar nu een persoonlijk bericht over.
+//
+// NB: in juni 2026 zijn DM's bewust uitgezet — geen privé-audiënties, want dat kost onnodig
+// LLM-credits. Dit doorbreekt dat niet: het zijn TEMPLATED eenrichtings-meldingen, geen
+// gesprekken. Inkomende DM's blijven geweigerd, en er gaat geen enkele LLM-call in om.
+//
+// Werkwijze: SNAPSHOT-DIFF, niet het exacte verloopmoment betrappen. Elke vijf minuten wordt de
+// huidige staat per lid vergeleken met de vorige. Dat is robuust tegen downtime (een gemiste
+// ronde wordt de volgende ronde alsnog gezien), tegen de lui-opruimende getActievePowerups, en
+// het dekt in één mechaniek alles wat er nog bij komt.
+//
+// Vereist de Slack-scope `im:write`. Ontbreekt die, dan schakelt het zichzelf uit met één
+// waarschuwing in de log — niet elke vijf minuten opnieuw.
+
+const STATUS_MELD_MINUTEN = 5;
+
+const loadStatusVorig = () => readJSON('statusvorig.json', {});
+const saveStatusVorig = (data) => writeJSON('statusvorig.json', data);
+
+let _dmScopeOntbreekt = false;
+
+// Stuurt een persoonlijk bericht. Opent eerst het DM-kanaal (conversations.open), want een
+// user-ID is geen kanaal-ID.
+async function stuurDM(client, userId, tekst) {
+  if (_dmScopeOntbreekt) return false;
+  try {
+    const im = await slackLimiter.schedule(() => client.conversations.open({ users: userId }));
+    const kanaal = im.channel?.id;
+    if (!kanaal) return false;
+    await slackLimiter.schedule(() => client.chat.postMessage({ channel: kanaal, text: schoonOutput(tekst) }));
+    return true;
+  } catch (err) {
+    const code = err.data?.error || err.message;
+    if (code === 'missing_scope' || code === 'not_allowed_token_type') {
+      _dmScopeOntbreekt = true;
+      console.warn('⚠️ DM-meldingen liggen stil: de scope `im:write` ontbreekt. Voeg die toe in de app-config en herinstalleer; daarna werkt het zonder verdere wijziging.');
+    } else {
+      console.error(`⚠️ DM naar ${loadMembers()[userId]?.bijnaam || userId} mislukt:`, code);
+    }
+    return false;
+  }
+}
+
+// De vergelijkbare staat van één lid. GEHEIMHOUDING: een Vloek der Slappe Korst zit er niet in.
+// Zou hij erin zitten, dan zou het verlopen ervan een DM opleveren die verraadt dat er ooit een
+// vloek op u lag — en dat moet een verrassing blijven (zelfde keuze als status/App Home/dossier).
+function verzamelStatusSnapshot(userId) {
+  return {
+    powerups: getActievePowerups(userId).filter(p => p.item !== 'vloek').map(p => p.item).sort(),
+    titels: titelsVan(userId).map(t => t.key).sort(),
+    // Expliciet naar boolean: isVerbannen geeft het ban-record terug, en dat hele object in de
+    // snapshot zetten maakt statusvorig.json onnodig groot (en gevoelig voor velden die met de
+    // ban-status niets te maken hebben, zoals uitbreekPoging).
+    verbannen: !!isVerbannen(userId),
+    afwezig: !!isAfwezig(userId),
+  };
+}
+
+// Wat is er veranderd? Bewust alléén DINGEN DIE WEGVALLEN: een zegen die verloopt, een ban die
+// eindigt, een titel die je kwijt bent. Wat je erbij krijgt wordt al in het kanaal omgeroepen —
+// daar een DM bij sturen is dubbelop en maakt de meldingen makkelijk te negeren.
+function bepaalStatusWijzigingen(vorig, nu, userId) {
+  const regels = [];
+  const members = loadMembers();
+
+  for (const key of vorig.powerups || []) {
+    if ((nu.powerups || []).includes(key)) continue;
+    const winkel = WINKEL_ITEMS[key];
+    const veiling = VEILING_POOL.find(a => a.key === key);
+    const naam = winkel?.naam || veiling?.naam || key;
+    const icoon = winkel?.icoon || (veiling ? '🏺' : '•');
+    regels.push(`${icoon} *${naam}* is verlopen. De bescherming is van u afgevallen.`);
+  }
+
+  for (const key of vorig.titels || []) {
+    if ((nu.titels || []).includes(key)) continue;
+    const def = TITELS[key];
+    const houderNu = titelHouder(key);
+    regels.push(`${def?.icoon || '👑'} U bent de titel *${def?.naam || key}* kwijt` +
+      (houderNu && members[houderNu] ? ` — ${members[houderNu].bijnaam} draagt hem nu.` : ' — hij is vacant.'));
+  }
+
+  if (vorig.verbannen && !nu.verbannen) {
+    regels.push('⛔→🕊️ *Uw verbanning is verlopen.* De poorten staan weer open; u kunt weer duelleren, offeren en eren.');
+  }
+
+  if (vorig.afwezig && !nu.afwezig) {
+    regels.push('🏖️→👁️ *Uw vakantiestand is verlopen.* De Kroket God let weer op u — en de tribunaalklok loopt weer.');
+  }
+
+  return regels;
+}
+
+// Vergelijkt de staat van alle leden met de vorige ronde en stuurt per lid één DM met alles wat
+// er is veranderd. De EERSTE ronde stuurt niets: dan wordt de snapshot alleen aangelegd, anders
+// zou iedereen bij de eerste uitrol een lawine aan meldingen krijgen (zelfde voorzorg als de
+// seeding van de activiteitsklok).
+async function meldStatusWijzigingen(client) {
+  if (instelling('dmMeldingen') === false) return null;
+  const members = loadMembers();
+  const vorig = loadStatusVorig();
+  const nieuw = {};
+  const eersteRonde = Object.keys(vorig).length === 0;
+  let verstuurd = 0;
+
+  for (const [userId, lid] of Object.entries(members)) {
+    const nu = verzamelStatusSnapshot(userId);
+    nieuw[userId] = nu;
+    if (eersteRonde || !vorig[userId]) continue;
+
+    const regels = bepaalStatusWijzigingen(vorig[userId], nu, userId);
+    if (!regels.length) continue;
+
+    const tekst = `⚜️ *DE KROKET GOD BERICHT U* ⚜️\n\n` +
+      regels.map(r => `> ${r}`).join('\n') +
+      `\n\n_Uw volledige staat: \`/kroketgod status\` in het kanaal, of de Home-tab van de Kroket God._`;
+    // Ook als de DM niet aankomt gaat de snapshot mee: anders bouwt zich een achterstand op die
+    // bij een ontbrekende scope elke vijf minuten opnieuw wordt geprobeerd.
+    if (await stuurDM(client, userId, tekst)) {
+      verstuurd++;
+      console.log(`📬 Statusmelding naar ${lid.bijnaam}: ${regels.length} wijziging(en).`);
+    }
+  }
+
+  saveStatusVorig(nieuw);
+  if (eersteRonde) console.log(`📬 Statussnapshot aangelegd voor ${Object.keys(nieuw).length} lid/leden — meldingen beginnen bij de volgende wijziging.`);
+  return { verstuurd, eersteRonde, leden: Object.keys(nieuw).length };
+}
+
+planCron(`*/${STATUS_MELD_MINUTEN} * * * *`, async () => {
+  try {
+    await meldStatusWijzigingen(app.client);
+  } catch (err) {
+    console.error('Fout bij statusmeldingen:', err);
+  }
+}, { timezone: 'Europe/Amsterdam' });
+
+registreerFeature({
+  naam: 'dm-statusmeldingen',
+  state: ['statusvorig.json'],
+});
+
+
 // ── Persoonlijke status: wat is er op u actief, en wat kunt u wanneer weer ─────
 // Eén databron, twee weergaven: `/kroketgod status` (tekst) en de App Home (Block Kit). Zo
 // kunnen die twee nooit andere getallen noemen — hetzelfde motief als bij offerPlafond() en
@@ -12918,6 +13063,16 @@ async function voerDashboardActie(actie) {
     }
     // Tribunaal: de dagelijkse klok nu laten lopen (por versturen, fase laten verstrijken,
     // een zaak zonder grond afblazen). Doet niets als er niets te doen is.
+    // De statusmeldings-ronde nu laten lopen: vergelijkt de staat met de vorige ronde en stuurt
+    // per lid één DM met wat er is weggevallen. Handig om te zien of `im:write` werkt.
+    case 'statusMeldingen': {
+      const uit = await meldStatusWijzigingen(app.client);
+      if (!uit) return 'DM-meldingen staan uit (instelling dmMeldingen).';
+      if (uit.eersteRonde) return `Snapshot aangelegd voor ${uit.leden} lid/leden — meldingen beginnen bij de eerstvolgende wijziging.`;
+      return uit.verstuurd
+        ? `Ronde gelopen: ${uit.verstuurd} melding(en) verstuurd.`
+        : 'Ronde gelopen: niets veranderd, dus niets verstuurd.';
+    }
     // Activiteitsklok opnieuw reconstrueren uit Slack-historie. Handig als je wilt zien wie er
     // echt stil is i.p.v. wat de klok denkt, en als vangnet als de eenmalige backfill faalde.
     case 'activiteitBackfill': {
