@@ -10999,6 +10999,13 @@ async function verwerkTribunaalKlok(client) {
     const porStilte = stil === TRIBUNAAL_POR_DAGEN;
     const porZwijgen = TRIBUNAAL_WOORD_POR_DAGEN.includes(woord);
     if (!porStilte && !porZwijgen) continue;
+    // Eén por per grond per dag. Deze klok loopt niet alleen om 10:40 maar ook bij ELKE opstart
+    // (de inhaalslag), en de bot herstart dagelijks via pm2 — plus bij elke deploy. Zonder deze
+    // markering kreeg hetzelfde lid de identieke por zes keer op één dag.
+    const soort = porStilte ? 'stilte' : 'zwijgen';
+    const dagKey = dagSleutel();
+    const act = loadActiviteit();
+    if (act[id]?.porGestuurd?.[soort] === dagKey) continue;
     try {
       const tekst = porStilte
         ? `👁️ _${lid.bijnaam}, de Kroket God mist u. U bent ${stil} dagen volledig stil._\n` +
@@ -11008,6 +11015,10 @@ async function verwerkTribunaalKlok(client) {
           `_Over ${TRIBUNAAL_WOORD_DAGEN - woord} dag(en) kan de Raad daarover een Tribunaal der Vergetelheid openen — meespelen weegt daar niet tegen op._\n` +
           `_Eén bericht in het kanaal zet de teller terug. Bent u weg? \`/kroketgod afwezig 14\`._`;
       await postEphemeral(client, process.env.SLACK_CHANNEL_ID, id, tekst);
+      // Vastleggen ná verzenden: mislukt de por, dan mag hij het later opnieuw proberen.
+      const naVerzenden = loadActiviteit();
+      naVerzenden[id] = { ...(naVerzenden[id] || {}), porGestuurd: { ...(naVerzenden[id]?.porGestuurd || {}), [soort]: dagKey } };
+      saveActiviteit(naVerzenden);
       console.log(`👁️ Por gestuurd naar ${lid.bijnaam} (${porStilte ? `${stil} dagen stil` : `${woord} dagen zwijgen`}).`);
     } catch (_) {}
   }
