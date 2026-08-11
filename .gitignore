@@ -63,3 +63,4 @@ backups/
 
 # Claude Code: lokale (machine-specifieke) instellingen
 .claude/settings.local.json
+vetbadoverride.json

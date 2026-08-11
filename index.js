@@ -8464,7 +8464,27 @@ async function voerOffer(client, userId, inzet, channelId) {
   // van −5% naar positief en maakt er een geldmachine van (zie de toelichting bij getGeluk).
   // Voor iedereen exact dezelfde kansen; bescherming loopt via het inzetplafond hierboven en de
   // redistributie via de puntenbronnen.
-  const roll = Math.random();
+  //
+  // ── Eenmalige uitkomst-override (admin) ──────────────────────────────────────
+  // vetbadoverride.json op de Pi (gitignored, nergens in de stats, App Home of een kanaalbericht,
+  // net als geluk.json) forceert de uitkomst van het EERSTVOLGENDE offer van één lid en wordt
+  // daarbij verbruikt. Handmatig gezet; er is bewust geen dashboardknop, zodat dit geen gewoonte
+  // wordt. Vorm: { "U0XXXX": "jackpot" } — geldige waarden: jackpot, dubbel, terug, verzwolgen.
+  //   ⚠️ Dit doorbreekt de gelijke kansen die hierboven beschreven staan. De uitkomst wordt wél
+  //   normaal gelogd, dus hij verschijnt in het weekoverzicht als elk ander offer.
+  const override = readJSON('vetbadoverride.json', {});
+  let geforceerd = null;
+  if (override[userId]) {
+    geforceerd = String(override[userId]);
+    delete override[userId];
+    writeJSON('vetbadoverride.json', override);   // verbruikt: precies één keer
+    console.log(`🎯 Vetbad-override verbruikt voor ${bijnaam}: ${geforceerd}`);
+  }
+  const roll = geforceerd === 'jackpot'    ? 0.00
+             : geforceerd === 'dubbel'     ? 0.10
+             : geforceerd === 'terug'      ? 0.30
+             : geforceerd === 'verzwolgen' ? 0.99
+             : Math.random();
   let delta, kop, regel;
   if (roll < 0.06) {                 // 6% — jackpot (×3)
     delta = inzet * 3;
