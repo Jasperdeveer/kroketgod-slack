@@ -9572,47 +9572,35 @@ function bouwDossierBlok(userId) {
 }
 
 
-// ── DM-meldingen bij een statuswijziging ──────────────────────────────────────
+// ── Verborgen meldingen bij een statuswijziging ────────────────────────────────
 // Een zegen verloopt, een verbanning eindigt, een titel gaat naar iemand anders: dingen die je
-// zelf niet ziet gebeuren. De Kroket God stuurt daar nu een persoonlijk bericht over.
+// zelf niet ziet gebeuren. Daar krijgt u een bericht over dat alleen voor u zichtbaar is
+// ("Only visible to you") in het hoofdkanaal — geen DM, want die zijn in juni bewust uitgezet.
+// Bijkomend voordeel: een ephemeral heeft alleen `chat:write` nodig, geen `im:write`.
 //
-// NB: in juni 2026 zijn DM's bewust uitgezet — geen privé-audiënties, want dat kost onnodig
-// LLM-credits. Dit doorbreekt dat niet: het zijn TEMPLATED eenrichtings-meldingen, geen
-// gesprekken. Inkomende DM's blijven geweigerd, en er gaat geen enkele LLM-call in om.
+// ⚠️ EPHEMERALS ZIJN NIET BLIJVEND: Slack gooit ze weg zodra de gebruiker zijn client herlaadt.
+// Wie op dat moment niet kijkt, mist de melding. Daarom wordt elke wijziging óók bewaard in
+// `statusvorig.json` (veld `recent`) en getoond in de App Home — de ephemeral is de por, de
+// App Home is het archief.
 //
 // Werkwijze: SNAPSHOT-DIFF, niet het exacte verloopmoment betrappen. Elke vijf minuten wordt de
 // huidige staat per lid vergeleken met de vorige. Dat is robuust tegen downtime (een gemiste
 // ronde wordt de volgende ronde alsnog gezien), tegen de lui-opruimende getActievePowerups, en
 // het dekt in één mechaniek alles wat er nog bij komt.
-//
-// Vereist de Slack-scope `im:write`. Ontbreekt die, dan schakelt het zichzelf uit met één
-// waarschuwing in de log — niet elke vijf minuten opnieuw.
 
 const STATUS_MELD_MINUTEN = 5;
 
 const loadStatusVorig = () => readJSON('statusvorig.json', {});
 const saveStatusVorig = (data) => writeJSON('statusvorig.json', data);
 
-let _dmScopeOntbreekt = false;
-
-// Stuurt een persoonlijk bericht. Opent eerst het DM-kanaal (conversations.open), want een
-// user-ID is geen kanaal-ID.
-async function stuurDM(client, userId, tekst) {
-  if (_dmScopeOntbreekt) return false;
+// Stuurt een melding die alleen het lid zelf ziet, in het hoofdkanaal. Hergebruikt de bestaande
+// postEphemeral-helper (die door de rate limiter gaat).
+async function stuurVerborgenMelding(client, userId, tekst) {
   try {
-    const im = await slackLimiter.schedule(() => client.conversations.open({ users: userId }));
-    const kanaal = im.channel?.id;
-    if (!kanaal) return false;
-    await slackLimiter.schedule(() => client.chat.postMessage({ channel: kanaal, text: schoonOutput(tekst) }));
+    await postEphemeral(client, process.env.SLACK_CHANNEL_ID, userId, tekst);
     return true;
   } catch (err) {
-    const code = err.data?.error || err.message;
-    if (code === 'missing_scope' || code === 'not_allowed_token_type') {
-      _dmScopeOntbreekt = true;
-      console.warn('⚠️ DM-meldingen liggen stil: de scope `im:write` ontbreekt. Voeg die toe in de app-config en herinstalleer; daarna werkt het zonder verdere wijziging.');
-    } else {
-      console.error(`⚠️ DM naar ${loadMembers()[userId]?.bijnaam || userId} mislukt:`, code);
-    }
+    console.error(`⚠️ Verborgen melding aan ${loadMembers()[userId]?.bijnaam || userId} mislukt:`, err.data?.error || err.message);
     return false;
   }
 }
@@ -9672,7 +9660,7 @@ function bepaalStatusWijzigingen(vorig, nu, userId) {
 // zou iedereen bij de eerste uitrol een lawine aan meldingen krijgen (zelfde voorzorg als de
 // seeding van de activiteitsklok).
 async function meldStatusWijzigingen(client) {
-  if (instelling('dmMeldingen') === false) return null;
+  if (instelling('statusMeldingen') === false) return null;
   const members = loadMembers();
   const vorig = loadStatusVorig();
   const nieuw = {};
@@ -9681,6 +9669,7 @@ async function meldStatusWijzigingen(client) {
 
   for (const [userId, lid] of Object.entries(members)) {
     const nu = verzamelStatusSnapshot(userId);
+    nu.recent = vorig[userId]?.recent || [];   // archief overnemen, anders is het na één ronde leeg
     nieuw[userId] = nu;
     if (eersteRonde || !vorig[userId]) continue;
 
@@ -9689,12 +9678,13 @@ async function meldStatusWijzigingen(client) {
 
     const tekst = `⚜️ *DE KROKET GOD BERICHT U* ⚜️\n\n` +
       regels.map(r => `> ${r}`).join('\n') +
-      `\n\n_Uw volledige staat: \`/kroketgod status\` in het kanaal, of de Home-tab van de Kroket God._`;
-    // Ook als de DM niet aankomt gaat de snapshot mee: anders bouwt zich een achterstand op die
-    // bij een ontbrekende scope elke vijf minuten opnieuw wordt geprobeerd.
-    if (await stuurDM(client, userId, tekst)) {
+      `\n\n_Alleen u ziet dit. Uw volledige staat: \`/kroketgod status\`, of de Home-tab van de Kroket God._`;
+    // Bewaren vóór het versturen: een ephemeral verdwijnt bij een client-herlaad, dus de App Home
+    // is het enige waar de wijziging terug te vinden is. Laatste 5 per lid.
+    nu.recent = [...(vorig[userId].recent || []), { ts: Date.now(), regels }].slice(-5);
+    if (await stuurVerborgenMelding(client, userId, tekst)) {
       verstuurd++;
-      console.log(`📬 Statusmelding naar ${lid.bijnaam}: ${regels.length} wijziging(en).`);
+      console.log(`📬 Verborgen statusmelding aan ${lid.bijnaam}: ${regels.length} wijziging(en).`);
     }
   }
 
@@ -9711,9 +9701,29 @@ planCron(`*/${STATUS_MELD_MINUTEN} * * * *`, async () => {
   }
 }, { timezone: 'Europe/Amsterdam' });
 
+// De recent gemelde wijzigingen van één lid, voor de App Home. Dit is het vangnet onder de
+// ephemerals: die verdwijnen bij een client-herlaad, deze lijst niet.
+function recenteStatusmeldingen(userId, maxLeeftijdUren = 48) {
+  const recent = loadStatusVorig()[userId]?.recent || [];
+  const grens = Date.now() - maxLeeftijdUren * 3_600_000;
+  return recent.filter(r => r.ts >= grens).sort((a, b) => b.ts - a.ts);
+}
+
 registreerFeature({
-  naam: 'dm-statusmeldingen',
+  naam: 'statusmeldingen',
   state: ['statusvorig.json'],
+  homeOrde: 12, // vlak onder de statuskaart: dit is wat er sinds uw laatste bezoek veranderde
+  home: ({ userId }) => {
+    const recent = recenteStatusmeldingen(userId);
+    if (!recent.length) return [];
+    const regels = recent.flatMap(r => r.regels.map(t =>
+      `> ${t}  _(${resterendeTijd(Date.now() - r.ts)} geleden)_`));
+    return [
+      { type: 'divider' },
+      { type: 'section', text: { type: 'mrkdwn', text:
+        `*📬 SINDS UW LAATSTE BEZOEK*\n${regels.slice(0, 8).join('\n')}` } },
+    ];
+  },
 });
 
 
@@ -13067,7 +13077,7 @@ async function voerDashboardActie(actie) {
     // per lid één DM met wat er is weggevallen. Handig om te zien of `im:write` werkt.
     case 'statusMeldingen': {
       const uit = await meldStatusWijzigingen(app.client);
-      if (!uit) return 'DM-meldingen staan uit (instelling dmMeldingen).';
+      if (!uit) return 'Statusmeldingen staan uit (instelling statusMeldingen).';
       if (uit.eersteRonde) return `Snapshot aangelegd voor ${uit.leden} lid/leden — meldingen beginnen bij de eerstvolgende wijziging.`;
       return uit.verstuurd
         ? `Ronde gelopen: ${uit.verstuurd} melding(en) verstuurd.`

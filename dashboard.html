@@ -583,7 +583,7 @@ function renderInstellingen(d){
     +'<div><div class="lbl">Modi</div>'
       +chk('i_stil',s.stilModus,'Stil-modus (mute)','De Kroket God reageert nergens meer op, behalve in het testkanaal. Handig bij onderhoud.')
       +chk('i_weekend',s.weekendRust,'Weekend-rust','Aan = rust in het weekend (geen reacties). Uit = reageert ook in het weekend.')
-      +chk('i_dm',s.dmMeldingen,'DM bij statuswijziging','Aan = de Kroket God stuurt een persoonlijk bericht als een zegen verloopt, een verbanning eindigt of een titel van eigenaar wisselt. Alleen dingen die WEGvallen; wat je erbij krijgt wordt al in het kanaal omgeroepen. Vereist de Slack-scope im:write.')
+      +chk('i_dm',s.statusMeldingen,'Verborgen statusmelding','Aan = het lid krijgt een bericht dat alleen hij ziet ("only visible to you") als een zegen verloopt, een verbanning eindigt of een titel van eigenaar wisselt. Alleen dingen die WEGvallen; wat je erbij krijgt wordt al in het kanaal omgeroepen. Ephemerals verdwijnen bij een client-herlaad, dus de wijzigingen staan ook in de App Home.')
       +chk('i_test',s.alleenTestkanaal,'Alleen testkanaal','Reageert uitsluitend in het testkanaal (bruin-schaap), om te testen zonder het hoofdkanaal te storen.')
       +chk('i_spaar',s.spaarstand,'Spaarstand (licht)','Forceert het lichte, goedkope model en slaat Gemini en Cerebras over. Bespaart schaarse quota, iets lagere kwaliteit.')
     +'</div>'
@@ -651,7 +651,7 @@ function renderInstellingen(d){
 }
 function bewaar(){
   var uit=[];document.querySelectorAll('[data-prov]').forEach(function(c){if(c.checked)uit.push(c.getAttribute('data-prov'));});
-  post('/api/instellingen',{stemmingOverride:document.getElementById('i_stemming').value,stilModus:document.getElementById('i_stil').checked,weekendRust:document.getElementById('i_weekend').checked,dmMeldingen:document.getElementById('i_dm').checked,alleenTestkanaal:document.getElementById('i_test').checked,spaarstand:document.getElementById('i_spaar').checked,providerUit:uit,kortafKans:(+document.getElementById('i_kortaf').value||0)/100,warrigKans:(+document.getElementById('i_warrig').value||0)/100,vrijdagAppendKans:(+document.getElementById('i_vrijdag').value||0)/100,decreetVanDeDag:document.getElementById('i_decreet').value,decreetIntensiteit:(+document.getElementById('i_decreetInt').value||0)/100},'Opgeslagen');
+  post('/api/instellingen',{stemmingOverride:document.getElementById('i_stemming').value,stilModus:document.getElementById('i_stil').checked,weekendRust:document.getElementById('i_weekend').checked,statusMeldingen:document.getElementById('i_dm').checked,alleenTestkanaal:document.getElementById('i_test').checked,spaarstand:document.getElementById('i_spaar').checked,providerUit:uit,kortafKans:(+document.getElementById('i_kortaf').value||0)/100,warrigKans:(+document.getElementById('i_warrig').value||0)/100,vrijdagAppendKans:(+document.getElementById('i_vrijdag').value||0)/100,decreetVanDeDag:document.getElementById('i_decreet').value,decreetIntensiteit:(+document.getElementById('i_decreetInt').value||0)/100},'Opgeslagen');
 }
 function doeActie(a){post('/api/actie',{actie:a},'Uitgevoerd');}
 function skip(soort,key,ts,id){post('/api/overslaan',{soort:soort,key:key?decodeURIComponent(key):'',ts:ts,id:id},'Overgeslagen');}
