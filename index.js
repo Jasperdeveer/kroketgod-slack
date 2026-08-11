@@ -3897,7 +3897,7 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
       const GEHEIME_COMMANDO_S = [
         { categorie: '📊 De Hoge Frituurraad' },
         { cmd: 'ranglijst',                    uitleg: 'wie staat waar in de goddelijke hiërarchie' },
-        { cmd: 'status',                       uitleg: 'de volledige staat van het Rijk — leden, verbanden, ballingen' },
+        { cmd: 'status',                       uitleg: 'de staat van het Rijk, plus uw eigen actieve zegeningen met resttijd en al uw cooldowns' },
         { cmd: 'dossier [naam]',               uitleg: 'het volledige kroket-archief van een volgeling' },
         { cmd: 'streaks',                      uitleg: 'wie verschijnt trouw op het heilige vrijdagmoment' },
         { cmd: 'stem [naam]',                  uitleg: 'wijs de Held van de Week aan — één stem, één keer' },
@@ -4303,10 +4303,16 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
         `Dramatisch maar informatief. Geen inleidingszin.\n\n${statusData}`,
         700, false
       );
+      // Het LLM-verhaal gaat over de groep; hieronder komen ÚW cijfers als templated blok.
+      // Bewust niet door de LLM: die verzint bij vrije tekst eigen aantallen, en een cooldown
+      // die er naast zit is erger dan geen cooldown tonen.
+      const eigenBlok = loadMembers()[command.user_id]
+        ? `\n\n━━━━━━━━━━━━━━━━━━━━\n\n${statusBlokTekst(command.user_id)}`
+        : '';
       if (isDM) {
-        await client.chat.postMessage({ channel: command.channel_id, text: schoonOutput(tekst) });
+        await client.chat.postMessage({ channel: command.channel_id, text: schoonOutput(tekst) + eigenBlok });
       } else {
-        await respond({ text: schoonOutput(tekst), response_type: 'ephemeral' });
+        await respond({ text: schoonOutput(tekst) + eigenBlok, response_type: 'ephemeral' });
       }
       return;
     }
@@ -9566,6 +9572,197 @@ function bouwDossierBlok(userId) {
 }
 
 
+// ── Persoonlijke status: wat is er op u actief, en wat kunt u wanneer weer ─────
+// Eén databron, twee weergaven: `/kroketgod status` (tekst) en de App Home (Block Kit). Zo
+// kunnen die twee nooit andere getallen noemen — hetzelfde motief als bij offerPlafond() en
+// tribunaalGrond().
+//
+// Alle cijfers zijn TEMPLATED. Ze gaan expres niet door de LLM: die verzint bij vrije tekst
+// consequent eigen aantallen (zie UIT_KARAKTER_PATRONEN), en een cooldown die er naast zit is
+// erger dan geen cooldown tonen.
+
+// Resterende tijd leesbaar maken: "3 uur 12 min", "42 min", "< 1 min".
+function resterendeTijd(ms) {
+  if (ms <= 0) return 'nu';
+  const minuten = Math.floor(ms / 60_000);
+  if (minuten < 1) return '< 1 min';
+  if (minuten < 60) return `${minuten} min`;
+  const uren = Math.floor(minuten / 60);
+  const rest = minuten % 60;
+  if (uren < 24) return rest ? `${uren} uur ${rest} min` : `${uren} uur`;
+  const dagen = Math.floor(uren / 24);
+  const restUren = uren % 24;
+  return restUren ? `${dagen} dag${dagen === 1 ? '' : 'en'} ${restUren} uur` : `${dagen} dag${dagen === 1 ? '' : 'en'}`;
+}
+
+// Milliseconden tot de volgende Amsterdamse middernacht — het moment waarop alle daglimieten
+// terugspringen (die hangen aan de AMS-dagsleutel, niet aan UTC).
+function msTotDagreset() {
+  const nu = new Date();
+  const morgen = new Date(nu.getTime() + 24 * 3_600_000);
+  return Math.max(0, amsKlokTijdNaarUtc(morgen, 0, 0).getTime() - nu.getTime());
+}
+
+// Milliseconden tot maandag 00:00 AMS — daar hangen de weeklimieten aan (roof, bingo).
+function msTotWeekreset() {
+  const nu = new Date();
+  for (let i = 0; i <= 8; i++) {
+    const kandidaat = new Date(nu.getTime() + i * 24 * 3_600_000);
+    const amsDag = new Date(kandidaat.toLocaleString('en-US', { timeZone: 'Europe/Amsterdam' })).getDay();
+    if (amsDag !== 1) continue;                     // 1 = maandag
+    const ts = amsKlokTijdNaarUtc(kandidaat, 0, 0).getTime();
+    if (ts > nu.getTime()) return ts - nu.getTime();
+  }
+  return 0;
+}
+
+// Structurele status van één lid. GEHEIMHOUDING: een Vloek der Slappe Korst op uzelf staat er
+// bewust niet in — dezelfde keuze als in de App Home en het dossier; een vloek blijft een
+// verrassing tot hij toeslaat.
+function persoonlijkeStatus(userId) {
+  const nu = Date.now();
+  const vandaagKey = new Intl.DateTimeFormat('nl-NL', { timeZone: 'Europe/Amsterdam' }).format(new Date());
+  const weekNu = getMondayOfWeek();
+
+  // ── Actieve zegeningen en artefacten ──
+  const powerups = getActievePowerups(userId)
+    .filter(p => p.item !== 'vloek')
+    .map(p => {
+      const winkel = WINKEL_ITEMS[p.item];
+      const veiling = VEILING_POOL.find(a => a.key === p.item);
+      return {
+        naam: winkel?.naam || veiling?.naam || p.item,
+        icoon: winkel?.icoon || (veiling ? '🏺' : '•'),
+        restMs: Math.max(0, p.tot - nu),
+        bron: winkel ? 'Aflatenhandel' : veiling ? 'Grote Veiling' : 'onbekend',
+      };
+    })
+    .sort((a, b) => a.restMs - b.restMs);
+
+  // ── Titels: geen einddatum, maar wel "actief op u" ──
+  const titels = titelsVan(userId).map(t => ({
+    naam: t.naam, icoon: t.icoon, verdedigingen: t.verdedigingen || 0, voorrecht: t.voorrecht,
+  }));
+
+  // ── Cooldowns ──
+  const cooldowns = [];
+  const duels = readJSON('duels.json', {});
+  const duelsGebruikt = duels[userId]?.datum === vandaagKey ? (duels[userId].aantal ?? 1) : 0;
+  cooldowns.push({
+    naam: 'Duel', gebruikt: duelsGebruikt, limiet: duelLimiet(userId),
+    restMs: duelsGebruikt >= duelLimiet(userId) ? msTotDagreset() : 0, per: 'dag',
+  });
+
+  const vetbad = readJSON('vetbad.json', {});
+  const offersGebruikt = vetbad[userId]?.datum === vandaagKey ? (vetbad[userId].aantal || 0) : 0;
+  cooldowns.push({
+    naam: 'Vetbad-offer', gebruikt: offersGebruikt, limiet: offerLimiet(userId),
+    restMs: offersGebruikt >= offerLimiet(userId) ? msTotDagreset() : 0, per: 'dag',
+    extra: offerPlafond(userId) > 0 ? `max ${offerPlafond(userId)} punten inzet` : 'te weinig punten',
+  });
+
+  cooldowns.push({
+    naam: 'Eer geven', gebruikt: telEerVandaag(userId), limiet: eerLimiet(userId),
+    restMs: telEerVandaag(userId) >= eerLimiet(userId) ? msTotDagreset() : 0, per: 'dag',
+  });
+
+  const roofGebruikt = readJSON('cooldowns.json', {}).roof?.[userId] === weekNu;
+  cooldowns.push({
+    naam: 'Kroketroof', gebruikt: roofGebruikt ? 1 : 0, limiet: 1,
+    restMs: roofGebruikt ? msTotWeekreset() : 0, per: 'week',
+  });
+
+  const frituurRest = getFrituurCooldownRest(userId);
+  cooldowns.push({
+    naam: 'Frituur-visioen', gebruikt: frituurRest > 0 ? 1 : 0, limiet: 1,
+    restMs: frituurRest, per: 'uur',
+  });
+
+  const raid = readJSON('bamischijf.json', {});
+  if (raid.actief && raid.hp > 0) {
+    const aanvalGedaan = raid.strijders?.[userId]?.laatsteAanval === vandaagKey;
+    cooldowns.push({
+      naam: `Aanval op ${raid.vijand?.naam || 'de weekvijand'}`,
+      gebruikt: aanvalGedaan ? 1 : 0, limiet: 1,
+      restMs: aanvalGedaan ? msTotDagreset() : 0, per: 'dag',
+    });
+  }
+
+  const bingo = readJSON('bingo.json', null);
+  if (bingo?.weekStart === weekNu && bingo.opdrachten?.length) {
+    const geclaimd = (bingo.claims?.[userId] || []).length;
+    cooldowns.push({
+      naam: 'Bingo-claims', gebruikt: geclaimd, limiet: bingo.opdrachten.length,
+      restMs: geclaimd >= bingo.opdrachten.length ? msTotWeekreset() : 0, per: 'week',
+    });
+  }
+
+  return { powerups, titels, cooldowns, dagreset: msTotDagreset(), weekreset: msTotWeekreset() };
+}
+
+// Tekstweergave voor `/kroketgod status` — een templated blok dat ONDER het LLM-verhaal komt,
+// zodat de cijfers exact zijn.
+function statusBlokTekst(userId) {
+  const st = persoonlijkeStatus(userId);
+  const regels = [];
+
+  if (st.powerups.length) {
+    regels.push('*⏳ ACTIEF OP U*');
+    for (const p of st.powerups) {
+      regels.push(`> ${p.icoon} ${p.naam} — nog *${resterendeTijd(p.restMs)}* _(${p.bron})_`);
+    }
+  }
+  if (st.titels.length) {
+    if (!st.powerups.length) regels.push('*⏳ ACTIEF OP U*');
+    for (const t of st.titels) {
+      regels.push(`> ${t.icoon} ${t.naam} — geen einddatum${t.verdedigingen ? `, ${t.verdedigingen}× verdedigd` : ''} _(${t.voorrecht})_`);
+    }
+  }
+  if (!st.powerups.length && !st.titels.length) {
+    regels.push('*⏳ ACTIEF OP U*');
+    regels.push('> _Niets. Geen zegen, geen artefact, geen titel._');
+  }
+
+  regels.push('');
+  regels.push('*🕐 WAT KUNT U WANNEER WEER*');
+  for (const c of st.cooldowns) {
+    const vrij = c.limiet - c.gebruikt;
+    if (vrij > 0) {
+      regels.push(`> ✅ ${c.naam} — *${vrij}* over (${c.gebruikt}/${c.limiet} per ${c.per})${c.extra ? `, ${c.extra}` : ''}`);
+    } else {
+      regels.push(`> ⌛ ${c.naam} — op (${c.gebruikt}/${c.limiet} per ${c.per}), weer over *${resterendeTijd(c.restMs)}*`);
+    }
+  }
+  regels.push('');
+  regels.push(`_Daglimieten springen terug over ${resterendeTijd(st.dagreset)}; weeklimieten over ${resterendeTijd(st.weekreset)}._`);
+  return regels.join('\n');
+}
+
+// Block Kit-weergave voor de App Home. Zelfde data, dashboard-stijl (zie homeTabel).
+function statusBlokBlocks(userId) {
+  const st = persoonlijkeStatus(userId);
+  const blocks = [...homeKaartKop('⏳ ACTIEF OP U & COOLDOWNS')];
+
+  const actief = [
+    ...st.powerups.map(p => [`${p.naam}`, `nog ${resterendeTijd(p.restMs)}`]),
+    ...st.titels.map(t => [`${t.naam}`, t.verdedigingen ? `${t.verdedigingen}x verdedigd` : 'in bezit']),
+  ];
+  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: actief.length
+    ? homeTabel(actief)
+    : '_Niets actief op u — geen zegen, geen artefact, geen titel._' } });
+
+  // Cooldowns als tabel: naam → "3 over" of "over 4 uur 12 min".
+  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: homeTabel(st.cooldowns.map(c => {
+    const vrij = c.limiet - c.gebruikt;
+    return [c.naam, vrij > 0 ? `${vrij} van ${c.limiet} over` : `over ${resterendeTijd(c.restMs)}`];
+  })) } });
+
+  blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text:
+    `Daglimieten springen terug over ${resterendeTijd(st.dagreset)} · weeklimieten over ${resterendeTijd(st.weekreset)}` }] });
+  return blocks;
+}
+
+
 // ══════════════════════════════════════════════════════════════════════════════
 // GELE KAART OP VOORDRACHT: de Raad stemt, de Kroket God weegt dubbel
 // ══════════════════════════════════════════════════════════════════════════════
@@ -10717,9 +10914,15 @@ function bouwAppHomeBlocks(userId, melding = '') {
     if (p.item === 'vloek') continue; // een vloek op uzelf blijft een verrassing
     const winkel = WINKEL_ITEMS[p.item];
     const veiling = VEILING_POOL.find(a => a.key === p.item);
-    const uren = Math.max(1, Math.ceil((p.tot - Date.now()) / 3_600_000));
-    if (winkel) eretitels.push(`${winkel.icoon} ${winkel.naam} (nog ~${uren}u)`);
-    else if (veiling) eretitels.push(`🏺 ${veiling.naam} (nog ~${uren}u)`);
+    // Precieze resttijd i.p.v. naar boven afgeronde uren: "nog ~1u" bij twee minuten resterend
+    // is misleidend als je op die zegen rekent.
+    const rest = resterendeTijd(Math.max(0, p.tot - Date.now()));
+    if (winkel) eretitels.push(`${winkel.icoon} ${winkel.naam} — nog ${rest}`);
+    else if (veiling) eretitels.push(`🏺 ${veiling.naam} — nog ${rest}`);
+  }
+  // Titels horen ook in dit rijtje: ze zijn actief op u, alleen zonder einddatum.
+  for (const t of titelsVan(userId)) {
+    eretitels.push(`${t.icoon} ${t.naam} — geen einddatum${t.verdedigingen ? `, ${t.verdedigingen}× verdedigd` : ''}`);
   }
   const bondgenoot = getAlliantiePartner(userId);
   const verbannen = isVerbannen(userId);
@@ -10767,7 +10970,6 @@ function bouwAppHomeBlocks(userId, melding = '') {
   const cooldowns = readJSON('cooldowns.json', {});
   const duels = readJSON('duels.json', {});
   const vetbad = readJSON('vetbad.json', {});
-  const frituurRest = getFrituurCooldownRest(userId);
   const offersVandaag = vetbad[userId]?.datum === vandaagKey ? (vetbad[userId].aantal || 0) : 0;
   const raidNu = readJSON('bamischijf.json', {});
   const aanvalGedaan = raidNu.strijders?.[userId]?.laatsteAanval === vandaagKey;
@@ -10775,14 +10977,19 @@ function bouwAppHomeBlocks(userId, melding = '') {
   const duelKan = duelsVandaag < duelLimiet(userId);
   const roofKan = cooldowns.roof?.[userId] !== getMondayOfWeek();
   const offerKan = offersVandaag < offerLimiet(userId);
+  // Tabel komt uit persoonlijkeStatus(), dezelfde bron als `/kroketgod status`. Eerder stond hier
+  // een eigen, grovere berekening ("nog ~3 min", "deze week al geroofd"); twee tabellen met eigen
+  // rekenwerk gaan onvermijdelijk uiteenlopen.
   blocks.push(...homeKaartKop('WAT KUNT U NU DOEN'));
-  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: homeTabel([
-    ['Duel', `${duelKan ? '✅' : '⌛'} ${duelsVandaag}/${duelLimiet(userId)} vandaag`],
-    ['Kroketroof', roofKan ? '✅ beschikbaar (1x per week)' : '⌛ deze week al geroofd'],
-    ['Vetbad-offer', `${offerKan ? '✅' : '⌛'} ${offersVandaag}/${offerLimiet(userId)} vandaag`],
-    ['Frituur-visioen', frituurRest > 0 ? `⌛ nog ~${Math.ceil(frituurRest / 60_000)} min` : '✅ beschikbaar'],
-    ...(raidNu.actief ? [['Raid-aanval', aanvalGedaan ? '⌛ vandaag al aangevallen' : '✅ beschikbaar']] : []),
-  ]) } });
+  const statusNu = persoonlijkeStatus(userId);
+  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: homeTabel(statusNu.cooldowns.map(c => {
+    const vrij = c.limiet - c.gebruikt;
+    return [c.naam, vrij > 0
+      ? `${vrij} van ${c.limiet} over${c.extra ? ` · ${c.extra}` : ''}`
+      : `op — weer over ${resterendeTijd(c.restMs)}`];
+  })) } });
+  blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text:
+    `Daglimieten springen terug over ${resterendeTijd(statusNu.dagreset)} · weeklimieten over ${resterendeTijd(statusNu.weekreset)}` }] });
   if (!verbannen) {
     const acties = [];
     if (duelKan) acties.push({ type: 'button', text: { type: 'plain_text', text: '⚔️ Duelleren', emoji: true }, action_id: 'open_duel' });
