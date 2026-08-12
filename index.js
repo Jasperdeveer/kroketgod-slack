@@ -2191,8 +2191,10 @@ const ACHIEVEMENTS = [
   { id: 'jackpot3',       actie: 'jackpot',       doel: 3,  naam: '💫 Lieveling der Frituurgoden', tekst: 'Drie jackpots. Dit is statistisch verdacht en theologisch onweerlegbaar.' },
   { id: 'dief',           actie: 'roof_gelukt',   doel: 1,  naam: '🥷 Nachtelijke Kroketdief',  tekst: 'Een geslaagde Grote Kroketroof. De Raad keurt het af en is stil bewonderend.' },
   { id: 'meesterdief',    actie: 'roof_gelukt',   doel: 5,  naam: '🎭 Meesterdief',             tekst: 'Vijf geslaagde roven. Niemand laat zijn kluis meer onbeheerd.' },
-  { id: 'raidstrijder',   actie: 'raid_aanval',   doel: 10, naam: '⚔️ Bamischijf-Bestrijder',   tekst: 'Tien aanvallen op de oervijand. Het vet onthoudt zulke trouw.' },
-  { id: 'raidheld',       actie: 'raid_overwonnen', doel: 3, naam: '🐉 Drakendoder der Frituur', tekst: 'Drie keer meegestreden in een overwinning op de Bamischijf.' },
+  // Namen los van één snack: de weekvijand rotteert, dus "Bamischijf-Bestrijder" klopt vanaf
+  // week twee niet meer.
+  { id: 'raidstrijder',   actie: 'raid_aanval',   doel: 10, naam: '⚔️ Weekvijand-Bestrijder',  tekst: 'Tien aanvallen op de vijanden van de week. Het vet onthoudt zulke trouw.' },
+  { id: 'raidheld',       actie: 'raid_overwonnen', doel: 3, naam: '🐉 Drakendoder der Frituur', tekst: 'Drie keer meegestreden in een overwinning op een weekvijand.' },
   { id: 'veilingmeester', actie: 'veiling_gewonnen', doel: 1, naam: '🔨 Verzamelaar',           tekst: 'Een artefact veroverd op de Grote Veiling. Bezit is een vorm van eerbied.' },
   { id: 'goudgrijper',    actie: 'gouden_kroket', doel: 3,  naam: '🥇 Gouden Grijper',          tekst: 'Drie keer de Gouden Kroket gegrepen. Snelheid is een sacrament.' },
   { id: 'plichtsgetrouw', actie: 'opdracht_klaar', doel: 25, naam: '📜 Plichtsgetrouwe',        tekst: 'Vijfentwintig opdrachten volbracht. De Raad rekent op u — en dat blijkt terecht.' },
@@ -5372,8 +5374,8 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
       }
       const { dag, week } = opdrachtOverzicht(command.user_id);
       const regel = ({ o, klaar, nu }) => (klaar
-        ? `✅ ~${o.tekst}~ — *+${o.beloning}* geïnd`
-        : `${homeVoortgangInline(nu, o.doel)} ${o.tekst} — *+${o.beloning}*`) + opdrachtNoot(o).replace(/\n>\s+/, '\n> ');
+        ? `✅ ~${opdrachtTekst(o)}~ — *+${o.beloning}* geïnd`
+        : `${homeVoortgangInline(nu, o.doel)} ${opdrachtTekst(o)} — *+${o.beloning}*`) + opdrachtNoot(o).replace(/\n>\s+/, '\n> ');
       await respond({
         text: `📜 *UW OPDRACHTEN* 📜\n\n*Vandaag*\n${dag.map(r => `> ${regel(r)}`).join('\n')}\n\n*Deze week*\n${week.map(r => `> ${regel(r)}`).join('\n')}\n\n_Voortgang loopt automatisch mee zodra u speelt. Ook zichtbaar in de Home-tab van de Kroket God._`,
         response_type: 'ephemeral',
@@ -7466,6 +7468,11 @@ registreerFeature({
 });
 
 // ── Weekraid: coöperatieve strijd tegen de vijand van de week ─────────────────
+// NB over de naamgeving: de functies (voerBamischijfAanval, beslechtBamischijf…) en het
+// statebestand bamischijf.json heten nog naar de Bamischijf omdat dit systeem daaruit is
+// gegroeid. De VIJAND rotteert wekelijks; die namen zijn historisch, niet inhoudelijk. Bewust
+// niet omgedoopt: dat raakt tientallen aanroepen en het statebestand zonder dat een gebruiker
+// er iets van merkt. Alles wat een LID ziet gebruikt raid.vijand.naam.
 // Maandag 09:30 rijst de vijand van deze week op (zie WEEKVIJANDEN). Leden vallen aan
 // via `/kroketgod aanval` (1x/dag; `aanval offer` = 1 punt offeren voor extra schade).
 // Verslagen vóór vrijdag 15:00 → elke strijder +2, de zwaarste slager +3. Niet verslagen →
@@ -7837,7 +7844,7 @@ async function voerBamischijfAanval(client, userId, metOffer) {
   }
   const bijnaam = members[userId].bijnaam;
   const vijandNaam = raid.vijand?.naam || 'De Bamischijf der Duisternis';
-  // Titelvoorrecht: de Slachter der Bamischijf slaat harder — de titel is in de raid verdiend
+  // Titelvoorrecht: de Slachter der Weekvijand slaat harder — de titel is in de raid verdiend
   // en betaalt zich in de raid terug.
   const schade = (metOffer ? 2 : 1) + Math.floor(Math.random() * 3) + (heeftTitel(userId, 'slachter') ? 1 : 0);
   strijder.schade = (strijder.schade || 0) + schade;
@@ -7856,7 +7863,7 @@ async function voerBamischijfAanval(client, userId, metOffer) {
     return { ok: true, tekst: `⚔️ _Uw uithaal van −${schade} HP was de GENADESLAG — ${vijandNaam} is verslagen!_` };
   }
   writeJSON('bamischijf.json', raid);
-  logGebeurtenis('bamischijf', userId, `${bijnaam} deed ${schade} schade aan de Bamischijf (${raid.hp}/${raid.maxHp} HP over)`);
+  logGebeurtenis('bamischijf', userId, `${bijnaam} deed ${schade} schade aan ${vijandNaam} (${raid.hp}/${raid.maxHp} HP over)`);
   await telActie(client, userId, 'raid_aanval');
   await updateRaidBericht(client, raid);
   // Activiteit zichtbaar zonder kanaal-spam: korte reply in de thread onder het bord.
@@ -7922,7 +7929,7 @@ async function beslechtBamischijfOverwinning(client, channelId, raid, genadeslag
       `🏛️ *DE ZEGEZAAL* 🏛️\n\n> *${raid.vijand.naam}* is bijgezet in de Zegezaal en komt nooit meer terug.\n` +
       `> ${Object.keys(verslagen).length} van de ${WEEKVIJANDEN.length} snacks geveld — nog *${over}* te gaan.\n\n— De Hoge Frituurraad`);
   }
-  // De zwaarste slager neemt de titel Slachter der Bamischijf over — ná de overwinningszang,
+  // De zwaarste slager neemt de titel Slachter der Weekvijand over — ná de overwinningszang,
   // zodat de titelwissel het slotakkoord is en niet het vonnis onderbreekt.
   if (zwaarste?.[0]) {
     await kenTitelToe(client, 'slachter', zwaarste[0],
@@ -8587,7 +8594,8 @@ const OPDRACHTEN = [
   { id: 'd-offer',    soort: 'dag',  actie: 'offer',          doel: 1, beloning: 1, tekst: 'Offer aan het Grote Vetbad' },
   { id: 'd-eer',      soort: 'dag',  actie: 'eer_gegeven',    doel: 1, beloning: 1, tekst: 'Eer een medelid' },
   { id: 'd-duel',     soort: 'dag',  actie: 'duel',           doel: 1, beloning: 1, tekst: 'Ga een heilig frituurduel aan' },
-  { id: 'd-raid',     soort: 'dag',  actie: 'raid_aanval',    doel: 1, beloning: 2, tekst: 'Val de Bamischijf aan (als die rondwaart)' },
+  // {vijand} wordt bij het weergeven vervangen door de vijand van deze week (zie opdrachtTekst).
+  { id: 'd-raid',     soort: 'dag',  actie: 'raid_aanval',    doel: 1, beloning: 2, tekst: 'Val {vijand} aan (als die rondwaart)' },
   { id: 'd-eer2',     soort: 'dag',  actie: 'eer_gegeven',    doel: 2, beloning: 2, tekst: 'Eer twee mede-leden' },
   { id: 'd-winkel',   soort: 'dag',  actie: 'winkel_koop',    doel: 1, beloning: 1, tekst: 'Doe een aankoop in de Aflatenhandel' },
   { id: 'd-duelwin',  soort: 'dag',  actie: 'duel_gewonnen',  doel: 1, beloning: 2, tekst: 'Win een duel' },
@@ -8597,7 +8605,7 @@ const OPDRACHTEN = [
   { id: 'w-duelwin',  soort: 'week', actie: 'duel_gewonnen',  doel: 3, beloning: 4, tekst: 'Win drie duels deze week' },
   { id: 'w-offer',    soort: 'week', actie: 'offer',          doel: 5, beloning: 4, tekst: 'Offer vijf keer aan het Vetbad' },
   { id: 'w-eer',      soort: 'week', actie: 'eer_gegeven',    doel: 6, beloning: 4, tekst: 'Eer zes keer een medelid' },
-  { id: 'w-raid',     soort: 'week', actie: 'raid_aanval',    doel: 3, beloning: 5, tekst: 'Val de Bamischijf drie keer aan' },
+  { id: 'w-raid',     soort: 'week', actie: 'raid_aanval',    doel: 3, beloning: 5, tekst: 'Val {vijand} drie keer aan' },
   { id: 'w-veiling',  soort: 'week', actie: 'veiling_bod',    doel: 1, beloning: 3, tekst: 'Bied op de Grote Veiling' },
   { id: 'w-roof',     soort: 'week', actie: 'roof_poging',    doel: 1, beloning: 3, tekst: 'Waag een Grote Kroketroof' },
   { id: 'w-goud',     soort: 'week', actie: 'gouden_kroket',  doel: 1, beloning: 5, tekst: 'Grijp de Gouden Kroket' },
@@ -8812,7 +8820,7 @@ async function telActie(client, userId, actie, aantal = 1) {
     for (const o of voltooid) {
       const bijnaam = loadMembers()[userId]?.bijnaam || 'Een volgeling';
       await pasScoreAanMetCheck(client, userId, o.beloning, { channelId: process.env.SLACK_CHANNEL_ID });
-      logGebeurtenis('opdracht', userId, `${bijnaam} volbracht de ${o.soort === 'dag' ? 'dagopdracht' : 'weekopdracht'} "${o.tekst}" (+${o.beloning})`);
+      logGebeurtenis('opdracht', userId, `${bijnaam} volbracht de ${o.soort === 'dag' ? 'dagopdracht' : 'weekopdracht'} "${opdrachtTekst(o)}" (+${o.beloning})`);
       // Voltooide opdrachten zijn zelf ook een daad — voedt de 'plichtsgetrouw'-relikwieën.
       // Directe teller + check i.p.v. telActie(), om herintreden in deze functie te vermijden.
       await controleerPrestaties(client, userId, 'opdracht_klaar', bumpTeller(userId, 'opdracht_klaar', 1));
@@ -8820,7 +8828,7 @@ async function telActie(client, userId, actie, aantal = 1) {
       // je in je App Home. Weekopdrachten zijn zeldzaam genoeg voor een verkondiging.
       if (o.soort === 'week') {
         await postToChannel(client, process.env.SLACK_CHANNEL_ID,
-          `📜 *WEEKOPDRACHT VOLBRACHT* 📜\n\n> *${bijnaam}* heeft volbracht: _${o.tekst}_.\n> De Hoge Frituurraad kent *+${o.beloning} kroketpunten* toe.\n\n— De Hoge Frituurraad`);
+          `📜 *WEEKOPDRACHT VOLBRACHT* 📜\n\n> *${bijnaam}* heeft volbracht: _${opdrachtTekst(o)}_.\n> De Hoge Frituurraad kent *+${o.beloning} kroketpunten* toe.\n\n— De Hoge Frituurraad`);
       }
     }
   } catch (err) {
@@ -8845,10 +8853,27 @@ function opdrachtOverzicht(userId) {
   };
 }
 
+// De naam van de vijand van deze week, of een neutrale aanduiding als er niets rondwaart.
+// De vijand rotteert wekelijks (zie WEEKVIJANDEN), dus een vaste naam in een opdrachttekst is
+// vanaf de tweede week gewoon onjuist.
+// `middenInZin` kleinlettert het lidwoord: elke snacknaam begint met "De "/"Het ", en
+// "Val De Kibbeling aan" leest krom. Aan het begin van een zin of kop wil je juist de
+// originele naam, dus dat is een expliciete keuze van de aanroeper.
+function huidigeVijandNaam({ middenInZin = false } = {}) {
+  const raid = readJSON('bamischijf.json', {});
+  const naam = (raid.actief && raid.hp > 0 && raid.vijand?.naam) ? raid.vijand.naam : 'De vijand van de week';
+  return middenInZin ? naam.replace(/^(De|Het|Een)\s/, (m) => m.toLowerCase()) : naam;
+}
+
+// Opdrachttekst met {vijand} opgelost. Elke plek die een opdracht toont gaat hierlangs.
+function opdrachtTekst(o) {
+  return String(o?.tekst || '').replace(/\{vijand\}/g, huidigeVijandNaam({ middenInZin: true }));
+}
+
 // Toelichting onder een opdrachtregel: waarom staat deze er (vervanging), of waarom lukt hij
 // vandaag niet meer. Zonder dit verandert de lijst stilletjes en snapt niemand waarom.
 function opdrachtNoot(o) {
-  if (o.verving) return `\n>    _herkansing — "${o.verving.tekst}" was vandaag niet meer haalbaar_`;
+  if (o.verving) return `\n>    _herkansing — "${opdrachtTekst(o.verving)}" was vandaag niet meer haalbaar_`;
   if (o.onhaalbaar) return '\n>    _vandaag niet meer haalbaar; morgen staat er een nieuwe_';
   return '';
 }
@@ -8864,8 +8889,8 @@ registreerFeature({
     // Noot buiten de ternary: ook een AL VOLBRACHTE herkansing verdient uitleg, anders wijkt
     // je lijst zichtbaar af van die van de anderen zonder dat je weet waarom.
     const regel = ({ o, klaar, nu }) =>
-      (klaar ? `> ✅ ~${o.tekst}~ — *+${o.beloning}* geïnd`
-             : `> ${homeVoortgangInline(nu, o.doel)} ${o.tekst} — *+${o.beloning}*`) + opdrachtNoot(o);
+      (klaar ? `> ✅ ~${opdrachtTekst(o)}~ — *+${o.beloning}* geïnd`
+             : `> ${homeVoortgangInline(nu, o.doel)} ${opdrachtTekst(o)} — *+${o.beloning}*`) + opdrachtNoot(o);
     return [
       { type: 'divider' },
       { type: 'section', text: { type: 'mrkdwn', text:
@@ -8909,10 +8934,10 @@ const TITELS = {
     aanspreek: 'Kampioen van het Frituurduel',
   },
   slachter: {
-    naam: 'Slachter der Bamischijf', icoon: '🐉',
-    hoe: 'richt de meeste schade aan in een gewonnen Bamischijf-raid',
+    naam: 'Slachter der Weekvijand', icoon: '🐉',
+    hoe: 'richt de meeste schade aan in een gewonnen weekraid',
     voorrecht: '+1 schade bij elke raid-aanval',
-    aanspreek: 'Slachter der Bamischijf',
+    aanspreek: 'Slachter der Weekvijand',
   },
   aflatenmeester: {
     naam: 'Meester der Aflaten', icoon: '🪙',
@@ -9171,7 +9196,7 @@ async function kondigSeizoenAan(client, s) {
   const tekst = await kroketResponseMetVangnet(
     `EEN NIEUW SEIZOEN BREEKT AAN. Seizoen ${s.nummer} van het Gepaneerde Rijk staat in het teken van één dreiging: ${s.dreiging.naam} — ${s.dreiging.omschrijving}. ` +
     `De Kroket Illuminati heeft ${SEIZOEN_WEKEN} weken om die dreiging samen terug te dringen. Élke daad telt mee: een duel, een offer aan het Vetbad, een eerbewijs, ` +
-    `een aanval op de Bamischijf, een bod op de Grote Veiling. Wordt de dreiging geveld, dan deelt iedereen die meevocht in de glorie; faalt de Raad, dan draagt het Rijk daarvan de gevolgen. ` +
+    `een aanval op de vijand van de week, een bod op de Grote Veiling. Wordt de dreiging geveld, dan deelt iedereen die meevocht in de glorie; faalt de Raad, dan draagt het Rijk daarvan de gevolgen. ` +
     `Kondig dit aan als het begin van een tijdperk — plechtig, dreigend, met een oproep tot eenheid. 5-7 zinnen. Geen inleidingszin.`,
     600, false,
     `${s.dreiging.icoon} *SEIZOEN ${s.nummer}: ${s.dreiging.naam.toUpperCase()}* ${s.dreiging.icoon}\n\n` +
@@ -9390,7 +9415,9 @@ function bouwWereldBlocks() {
     ambten.push(`> 🕊️ Profeet van de Frituur — ${members[profeet.userId].bijnaam}${profeet.zegenGebruikt ? ' (zegen vergeven)' : ''}`);
   }
   const raid = readJSON('bamischijf.json', {});
-  if (raid.actief && raid.hp > 0) ambten.push(`> 🐉 De Bamischijf waart rond — *${raid.hp}/${raid.maxHp} HP*`);
+  if (raid.actief && raid.hp > 0) {
+    ambten.push(`> ${raid.vijand?.emoji || '🐉'} ${raid.vijand?.naam || 'De Bamischijf der Duisternis'} waart rond — *${raid.hp}/${raid.maxHp} HP*`);
+  }
   const veiling = readJSON('veiling.json', {});
   if (veiling.status === 'open' && veiling.weekStart === getMondayOfWeek()) {
     const hoogste = [...(veiling.biedingen || [])].sort((a, b) => b.bod - a.bod)[0];
@@ -11268,7 +11295,7 @@ function bouwAppHomeBlocks(userId, melding = '') {
 
   // ── Kaart: lopende raid (met spelacties) ──
   if (raidNu.actief && raidNu.hp > 0) {
-    blocks.push(...homeKaartKop('🐉 DE BAMISCHIJF DER DUISTERNIS'));
+    blocks.push(...homeKaartKop(`${raidNu.vijand?.emoji || '🐉'} ${(raidNu.vijand?.naam || 'De Bamischijf der Duisternis').toUpperCase()}`));
     blocks.push({ type: 'section', text: { type: 'mrkdwn', text:
       homeTabel([
         ['HP', `${Math.max(0, raidNu.hp)}/${raidNu.maxHp}  ${hpBalk(raidNu.hp, raidNu.maxHp)}`],
