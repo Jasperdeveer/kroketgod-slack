@@ -44,7 +44,7 @@ const { dashboardAuth, logAudit, leesDashboardHtml } = require('./lib/dashboardk
 const { readJSON, writeJSON } = require('./lib/state.js');
 const { isWeekendAms, getAmsOffsetMs, getMondayOfWeek, secondenTotVrijdagMiddag } = require('./lib/tijd.js');
 const { isHoofdletterSpam, kapAfOpZinsgrens, normaliseerOndertekening, AFKORTING_VOOR_PUNT } = require('./lib/tekst.js');
-const { hpBalk, homeTabel, homeBalken, homeVoortgang, homeVoortgangInline, homeKaartKop } = require('./lib/blocks.js');
+const { hpBalk, homeTabel, homeBalken, homeVoortgang, homeVoortgangInline, ladingMeter, METER_MAX, homeKaartKop } = require('./lib/blocks.js');
 const { STANDAARD_INSTELLINGEN, loadInstellingen, instelling, saveInstellingen } = require('./lib/instellingen.js');
 const { UIT_KARAKTER_PATRONEN, RIJKSGRENS_PATRONEN, INJECTIE_AFWIJZINGEN, KARAKTER_FALLBACK, RIJKSGRENS_FALLBACK, isUitKarakter, isRijksgrensOvertreding, willekeurigeInjectieAfwijzing } = require('./lib/karakter.js');
 const {
@@ -9902,6 +9902,106 @@ function persoonlijkeStatus(userId) {
   return { powerups, titels, cooldowns, dagreset: msTotDagreset(), weekreset: msTotWeekreset() };
 }
 
+// ── Cooldowns leesbaar maken ──────────────────────────────────────────────────
+// Het was één ononderbroken rij van acht regels waarin "3 over" en "weer over 4 uur 12 min" door
+// elkaar stonden, elk met een eigen resetvenster dat je er niet aan kon zien. Je moest hem lézen om
+// te weten wat er vandaag nog kan.
+//
+// Nu wordt er gegroepeerd op RESETVENSTER, want dat is precies de vraag: wat kan ik vandaag nog, en
+// wat is pas volgende week weer aan de orde. Elke groep noemt in de kop hoeveel er nog over is en
+// wanneer hij terugspringt, zodat de losse regels dat niet meer per stuk hoeven te herhalen.
+//
+// De volgorde binnen een groep is bewust STABIEL (de volgorde waarin persoonlijkeStatus ze zet) en
+// niet "beschikbare eerst": bij een lijst die je dagelijks bekijkt weegt weten-waar-iets-staat
+// zwaarder dan sorteren op wat vandaag toevallig nog kan. De meter laat de beschikbaarheid al zien.
+// Twee koppen per venster: in het kanaal staat de tekst op zichzelf en moet de kop zeggen waar het
+// over gaat; in de App Home zit hij al ónder een kaarttitel, dus daar is een lange kop dubbelop.
+const COOLDOWN_VENSTERS = [
+  { per: 'dag',  kop: '🕐 WAT KUNT U VANDAAG NOG',   homeKop: '🕐 VANDAAG',      reset: (st) => st.dagreset },
+  { per: 'week', kop: '📅 WAT KUNT U DEZE WEEK NOG', homeKop: '📅 DEZE WEEK',    reset: (st) => st.weekreset },
+  { per: 'uur',  kop: '⏱️ ELK UUR OPNIEUW',          homeKop: '⏱️ ELK UUR',      reset: () => null },
+];
+
+function cooldownGroepen(st) {
+  const groepen = [];
+  for (const v of COOLDOWN_VENSTERS) {
+    const items = st.cooldowns.filter(c => c.per === v.per);
+    if (!items.length) continue;
+    // Eén meterbreedte per groep: anders schuiven de statuskolommen per regel op en is de winst weg.
+    const breedte = Math.min(METER_MAX, Math.max(...items.map(c => (c.limiet > METER_MAX ? 0 : c.limiet || 0))));
+    groepen.push({
+      kop: v.kop, homeKop: v.homeKop, resetMs: v.reset(st), breedte,
+      vrij: items.filter(c => c.limiet - c.gebruikt > 0).length,
+      totaal: items.length,
+      items,
+    });
+  }
+  return groepen;
+}
+
+// "3 van de 5 over · terug over 6 uur" — de kop draagt het rekenwerk, niet elke regel.
+function cooldownGroepNoot(g) {
+  const telling = g.vrij === 0 ? 'alles op'
+    : g.vrij === g.totaal ? `alles nog open (${g.totaal})`
+    : `${g.vrij} van de ${g.totaal} nog open`;
+  return g.resetMs === null ? telling : `${telling} · terug over ${resterendeTijd(g.resetMs)}`;
+}
+
+// Eén regel, uit elkaar gehouden als naam/meter/status — de twee weergaven zetten ze anders in
+// elkaar (monospace-kolom versus backticks in een tekstregel), dus plakken doet de renderer.
+//
+// Een opgebruikte regel noemt zijn eigen resttijd alleen als die AFWIJKT van het resetvenster van de
+// groep: bij Kroketroof is "weer over 4 dagen 15 uur" letterlijk wat de groepskop al zegt, en dat
+// twee keer lezen is precies de ruis die dit overzicht onleesbaar maakte. Het Frituur-visioen loopt
+// op zijn eigen uurklok en houdt zijn tijd dus wél.
+function cooldownRij(c, breedte, groepResetMs = null) {
+  const vrij = c.limiet - c.gebruikt;
+  const eigenKlok = groepResetMs === null || Math.abs(c.restMs - groepResetMs) > 60_000;
+  const status = vrij <= 0 ? (eigenKlok ? `op, weer over ${resterendeTijd(c.restMs)}` : 'op')
+    : c.limiet === 1 ? 'vrij'
+    : `${vrij} van de ${c.limiet} over`;
+  return {
+    naam: c.naam,
+    meter: ladingMeter(c.gebruikt, c.limiet, breedte),
+    status: `${status}${c.extra && vrij > 0 ? ` · ${c.extra}` : ''}`,
+  };
+}
+
+// Tekstvorm voor het kanaal. Bewust GEEN monospace-tabel zoals in de App Home: een codeblok schuift
+// op de telefoon horizontaal weg, en dit overzicht wordt vooral op de telefoon gelezen. De meter
+// staat wél in backticks — dan zijn de blokjes in een groep even breed en lopen de namen gelijk op.
+function cooldownTekst(st) {
+  const regels = [];
+  for (const g of cooldownGroepen(st)) {
+    if (regels.length) regels.push('');
+    regels.push(`*${g.kop}*`);
+    regels.push(`_${cooldownGroepNoot(g)}_`);
+    for (const c of g.items) {
+      const r = cooldownRij(c, g.breedte, g.resetMs);
+      // Een regel met te veel beurten voor een meter krijgt er geen. Dan ook geen backticks: een
+      // codeblokje met enkel opvulspaties erin ziet uit als een weergavefout.
+      regels.push(`> ${r.meter.trim() ? `\`${r.meter}\` ` : ''}*${r.naam}* — ${r.status}`);
+    }
+  }
+  // Eén legenda onderaan in plaats van per regel: de meter is nieuw, de betekenis moet één keer
+  // ergens staan.
+  if (regels.some(r => r.includes('`'))) regels.push('', '_`▓` = nog te doen · `░` = verbruikt_');
+  return regels.join('\n');
+}
+
+// Block Kit-vorm voor de App Home: daar is de ruimte breder en is monospace juist de huisstijl
+// (zie homeTabel), dus daar lijnen de kolommen echt uit.
+function cooldownBlocks(st) {
+  const blocks = [];
+  for (const g of cooldownGroepen(st)) {
+    const rijen = g.items.map(c => cooldownRij(c, g.breedte, g.resetMs));
+    blocks.push({ type: 'section', text: { type: 'mrkdwn', text:
+      `*${g.homeKop}*\n${homeTabel(rijen.map(r => [r.naam, `${r.meter ? `${r.meter}  ` : ''}${r.status}`]))}` } });
+    blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: cooldownGroepNoot(g) }] });
+  }
+  return blocks;
+}
+
 // Het GROEPSoverzicht, templated. Dit stond eerst in een LLM-prompt ("gebruik uitsluitend deze
 // data"), maar zodra Gemini's dagquota op is valt de keten terug op kleine modellen en die
 // reciteren geen tabel: er kwam verzonnen Nederlands uit ("ALMITCHELBARE", "GESLOTEN BANEN"),
@@ -9998,43 +10098,8 @@ function statusBlokTekst(userId) {
   }
 
   regels.push('');
-  regels.push('*🕐 WAT KUNT U WANNEER WEER*');
-  regels.push('');
-  for (const c of st.cooldowns) {
-    const vrij = c.limiet - c.gebruikt;
-    if (vrij > 0) {
-      regels.push(`> ✅ ${c.naam} — *${vrij}* over (${c.gebruikt}/${c.limiet} per ${c.per})${c.extra ? `, ${c.extra}` : ''}`);
-    } else {
-      regels.push(`> ⌛ ${c.naam} — op (${c.gebruikt}/${c.limiet} per ${c.per}), weer over *${resterendeTijd(c.restMs)}*`);
-    }
-  }
-  regels.push('');
-  regels.push(`_Daglimieten springen terug over ${resterendeTijd(st.dagreset)}; weeklimieten over ${resterendeTijd(st.weekreset)}._`);
+  regels.push(cooldownTekst(st));
   return regels.join('\n');
-}
-
-// Block Kit-weergave voor de App Home. Zelfde data, dashboard-stijl (zie homeTabel).
-function statusBlokBlocks(userId) {
-  const st = persoonlijkeStatus(userId);
-  const blocks = [...homeKaartKop('⏳ ACTIEF OP U & COOLDOWNS')];
-
-  const actief = [
-    ...st.powerups.map(p => [`${p.naam}`, `nog ${resterendeTijd(p.restMs)}`]),
-    ...st.titels.map(t => [`${t.naam}`, t.verdedigingen ? `${t.verdedigingen}x verdedigd` : 'in bezit']),
-  ];
-  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: actief.length
-    ? homeTabel(actief)
-    : '_Niets actief op u — geen zegen, geen artefact, geen titel._' } });
-
-  // Cooldowns als tabel: naam → "3 over" of "over 4 uur 12 min".
-  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: homeTabel(st.cooldowns.map(c => {
-    const vrij = c.limiet - c.gebruikt;
-    return [c.naam, vrij > 0 ? `${vrij} van ${c.limiet} over` : `over ${resterendeTijd(c.restMs)}`];
-  })) } });
-
-  blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text:
-    `Daglimieten springen terug over ${resterendeTijd(st.dagreset)} · weeklimieten over ${resterendeTijd(st.weekreset)}` }] });
-  return blocks;
 }
 
 
@@ -11268,14 +11333,8 @@ function bouwAppHomeBlocks(userId, melding = '') {
   // rekenwerk gaan onvermijdelijk uiteenlopen.
   blocks.push(...homeKaartKop('WAT KUNT U NU DOEN'));
   const statusNu = persoonlijkeStatus(userId);
-  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: homeTabel(statusNu.cooldowns.map(c => {
-    const vrij = c.limiet - c.gebruikt;
-    return [c.naam, vrij > 0
-      ? `${vrij} van ${c.limiet} over${c.extra ? ` · ${c.extra}` : ''}`
-      : `op — weer over ${resterendeTijd(c.restMs)}`];
-  })) } });
-  blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text:
-    `Daglimieten springen terug over ${resterendeTijd(statusNu.dagreset)} · weeklimieten over ${resterendeTijd(statusNu.weekreset)}` }] });
+  blocks.push(...cooldownBlocks(statusNu));
+  blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: '`▓` = nog te doen · `░` = verbruikt' }] });
   if (!verbannen) {
     const acties = [];
     if (duelKan) acties.push({ type: 'button', text: { type: 'plain_text', text: '⚔️ Duelleren', emoji: true }, action_id: 'open_duel' });
