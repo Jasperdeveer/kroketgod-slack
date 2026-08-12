@@ -5928,6 +5928,15 @@ Reply with EXACTLY one word: BELEDIGING, SARCASME, LOFZANG, BEDELARIJ, or NEUTRA
 
 // ── @-mention ──────────────────────────────────────────────────────────────────
 
+// Waar hoort het antwoord op een mention? ALTIJD in een thread: zat de mention al in een
+// thread, dan daar; stond hij los in het kanaal, dan als thread ónder die mention. Zo blijft
+// het kanaal een leesbare lijst met vragen in plaats van een afwisseling van korte vraag en
+// lang decreet. Voorheen kreeg een losse mention een nieuw kanaalbericht (parent_user_id was
+// dan leeg), en dat is precies wat het kanaal vol liet lopen.
+function antwoordThread(event) {
+  return event.thread_ts || event.ts;
+}
+
 app.event('app_mention', async ({ event, client }) => {
   // Deduplicatie: Slack herverzendt events als ack te laat komt. Prefix per handler-type:
   // een @-mention levert TWEE events op (app_mention én message) met dezelfde client_msg_id —
@@ -5979,7 +5988,7 @@ app.event('app_mention', async ({ event, client }) => {
     if (isPromptInjectie(input)) {
       console.warn(`🚨 Prompt-injectie gedetecteerd van ${bijnaam}: "${input.substring(0, 80)}"`);
       logGebeurtenis('belediging', userId, `${bijnaam} probeerde een prompt-injectie aanval`, input.substring(0, 100));
-      const thread_ts = event.thread_ts || (event.parent_user_id ? event.ts : undefined);
+      const thread_ts = antwoordThread(event);
       await postToChannel(client, event.channel, willekeurigeInjectieAfwijzing(), { thread_ts });
       return;
     }
@@ -6001,7 +6010,7 @@ app.event('app_mention', async ({ event, client }) => {
         `Maximaal 2 zinnen. Geen inleidingszin.`,
         150, false
       );
-      const thread_ts = event.thread_ts || (event.parent_user_id ? event.ts : undefined);
+      const thread_ts = antwoordThread(event);
       await postToChannel(client, event.channel,
         `${afvalligeTekst}\n\n_De poorten heropenen zich op ${terugTijd}._`,
         { thread_ts }
@@ -6022,7 +6031,7 @@ app.event('app_mention', async ({ event, client }) => {
         if (gevonden) geeerden.push(gevonden);
       }
       if (geeerden.length > 0) {
-        const thread_ts = event.thread_ts || (event.parent_user_id ? event.ts : undefined);
+        const thread_ts = antwoordThread(event);
         // Daglimiet — zelfde regel als de slash command: max 3 eerbewijzen per dag
         const reedsBesteed = telEerVandaag(userId);
         if (reedsBesteed >= eerLimiet(userId)) {
@@ -6115,7 +6124,7 @@ app.event('app_mention', async ({ event, client }) => {
             `Als straf wordt 1 kroketpunt afgenomen. Benoem dit met gepaste minachting. Geen inleidingszin.`,
             350, false
           );
-          const thread_ts = event.thread_ts || (event.parent_user_id ? event.ts : undefined);
+          const thread_ts = antwoordThread(event);
           await postToChannel(client, event.channel, `<@${userId}>\n\n${bedelTekst}`, { thread_ts });
           return;
         }
@@ -6170,7 +6179,7 @@ app.event('app_mention', async ({ event, client }) => {
         await verbanAlliantiePartnerMee(client, userId, bijnaam, event.channel);
 
         const terugDatum = tot.toLocaleDateString('nl-NL', { timeZone: 'Europe/Amsterdam', day: 'numeric', month: 'long' });
-        const banThreadTs = event.thread_ts || (event.parent_user_id ? event.ts : undefined);
+        const banThreadTs = antwoordThread(event);
         await postEphemeral(client, event.channel, userId,
           `${verdictTekst}\n\n_Terugkeer verwacht: ${terugDatum}._`,
           { thread_ts: banThreadTs });
@@ -6183,7 +6192,7 @@ app.event('app_mention', async ({ event, client }) => {
 
         // Heeft dit lid al een gele kaart deze week? → directe ban, geen vergrijp-accumultie
         if (heeftGeleKaartDezeWeek(userId)) {
-          const thread_ts = event.thread_ts || (event.parent_user_id ? event.ts : undefined);
+          const thread_ts = antwoordThread(event);
           await legGeleKaartBanOp(client, event.channel, userId, bijnaam,
             `${type} na gele kaart`, input, thread_ts);
           return true;
@@ -6214,7 +6223,7 @@ app.event('app_mention', async ({ event, client }) => {
             `Gebruik het decreet-formaat. Noem dat het gedrag een patroon vormt. Geen inleidingszin.`,
             450, false
           );
-          const thread_ts = event.thread_ts || (event.parent_user_id ? event.ts : undefined);
+          const thread_ts = antwoordThread(event);
           await postEphemeral(client, event.channel, userId,
             `${verdictTekst}\n\n_De poorten heropenen zich om ${terugTijd}._`,
             { thread_ts });
@@ -6270,7 +6279,7 @@ app.event('app_mention', async ({ event, client }) => {
         prompt = `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} heeft zich respectvol uitgelaten: "${input}". Reageer met een warme zegen. Vermeld GEEN puntenaantal — het systeem heeft niets gewijzigd. Begin de inleidingszin letterlijk met: ${introStart}`;
       } else if (/\bmop\b|vertel.*grap|vertel.*mop|maak.*lachen|grap.*vertellen/i.test(input)) {
         // Mop-verzoek — haal echte mop op via JokeAPI
-        const thread_ts = event.thread_ts || (event.parent_user_id ? event.ts : undefined);
+        const thread_ts = antwoordThread(event);
         await stuurMop(client, event.channel);
         return; // stuurMop post zelf, geen verdere verwerking nodig
       } else if (magKortafGrap(input) && Math.random() < instelling('kortafKans')) {
@@ -6280,7 +6289,7 @@ app.event('app_mention', async ({ event, client }) => {
           'Akkoord.', 'Vermeld.', 'Juist.', ':thumbsup::skin-tone-3:', ':ok_hand::skin-tone-3:',
           ':pinched_fingers::skin-tone-3:', '👍', 'k', 'Begrepen.'];
         const kort = KORTAF[Math.floor(Math.random() * KORTAF.length)];
-        const thread_ts = event.thread_ts || (event.parent_user_id ? event.ts : undefined);
+        const thread_ts = antwoordThread(event);
         await postToChannel(client, event.channel, kort, { thread_ts });
         return;
       } else {
@@ -6384,7 +6393,7 @@ app.event('app_mention', async ({ event, client }) => {
       tekst = await kroketResponse(prompt);
     }
     // Reageer in thread als de mention zelf in een thread plaatsvond
-    const thread_ts = event.thread_ts || (event.parent_user_id ? event.ts : undefined);
+    const thread_ts = antwoordThread(event);
 
     // Verwerk [EER:bijnaam] token dat de LLM organisch kan uitsturen — boek echte punten.
     // BELANGRIJK: dit moet vóór de vrijdag-append, anders staat de token niet meer aan het eind.
@@ -6432,7 +6441,7 @@ app.event('app_mention', async ({ event, client }) => {
       '⚜️ _De Hoge Frituurraad is in spoedberaad. Een antwoord volgt zodra het vet is gestabiliseerd._\n\n— De Almachtige Kroket God',
     ];
     try {
-      const thread_ts = event.thread_ts || (event.parent_user_id ? event.ts : undefined);
+      const thread_ts = antwoordThread(event);
       // Ephemeral: de foutmelding is alleen zichtbaar voor de verzender, niet voor het hele kanaal.
       await postEphemeral(client, event.channel, event.user,
         FALLBACKS[Math.floor(Math.random() * FALLBACKS.length)], { thread_ts });
