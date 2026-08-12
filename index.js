@@ -977,6 +977,56 @@ function pasScoreAan(userId, delta) {
   return scores[userId];
 }
 
+// ── NASPEL: het kleine grut ná een spelactie ──────────────────────────────────
+// Eén duel kon tot zeventien losse kanaalberichten opleveren: het vonnis, plus een eigen bericht voor
+// elke verbondszegen, titelwissel, relikwie, rangverheffing en volbrachte weekopdracht. Wie dat
+// terugleest is het overzicht kwijt.
+//
+// Een spelactie levert nu ÉÉN kanaalbericht: de uitkomst, met onderaan de betrokkenen als
+// @-vermelding. Al het naspel gaat als één antwoord in de thread daaronder. Het kanaal wordt
+// leesbaar zonder dat er iets verdwijnt — wie het naspel wil zien klapt de thread open, en de
+// @-vermelding zorgt dat je hoort dat het over jou ging zonder alles te hoeven lezen.
+//
+// De bundel wordt door de spelactie aangemaakt en meegegeven aan alles wat onderweg iets te melden
+// heeft. ZONDER bundel gedragen die functies zich exact als voorheen (los kanaalbericht): een
+// cron-taak heeft geen hoofdbericht om onder te hangen, en niet elke aanroepplek is omgebouwd.
+function maakNaspel(betrokkenIds = []) {
+  return {
+    regels: [],
+    betrokken: new Set(betrokkenIds.filter(Boolean)),
+    zegenGehad: new Set(), // partners die in DEZE actie hun kans op een verbondszegen al hadden
+  };
+}
+
+// Voegt een regel toe. Geeft false terug als er geen bundel is, zodat de aanroeper weet dat hij het
+// zelf moet posten: `if (!naspelRegel(...)) await postToChannel(...)`.
+function naspelRegel(naspel, regel, ...betrokkenIds) {
+  if (!naspel || !Array.isArray(naspel.regels)) return false;
+  naspel.regels.push(regel);
+  for (const id of betrokkenIds) if (id) naspel.betrokken.add(id);
+  return true;
+}
+
+// De @-voetnoot onder het hoofdbericht. Alleen echte leden: een <@...> van een onbekende id rendert
+// in Slack als rauwe tekst.
+function naspelMenties(naspel) {
+  if (!naspel?.betrokken?.size) return '';
+  const members = loadMembers();
+  const ids = [...naspel.betrokken].filter(id => members[id]);
+  return ids.length ? `\n\n👥 ${ids.map(id => `<@${id}>`).join(' ')}` : '';
+}
+
+// Het naspel als ÉÉN thread-antwoord, niet één per regel: dezelfde inhoud met één notificatie in
+// plaats van vijf. De regels worden geleegd, zodat een tweede aanroep niets herhaalt.
+async function postNaspel(client, channelId, hoofdTs, naspel) {
+  if (!naspel?.regels?.length) return;
+  const tekst = `🧾 *NASPEL*\n${naspel.regels.map(r => `> ${r}`).join('\n')}`;
+  naspel.regels = [];
+  // Geen ts (post mislukt of een aanroeper zonder hoofdbericht)? Dan liever een los bericht dan het
+  // naspel weggooien — punten die geboekt zijn moeten navolgbaar blijven.
+  await postToChannel(client, channelId, tekst, hoofdTs ? { thread_ts: hoofdTs } : undefined);
+}
+
 // Score wijzigen + achievements + roem checken (gebruik in plaats van pasScoreAan waar mogelijk).
 // Elke POSITIEVE puntentoekenning straalt af op de alliantie-partner (zie kenAlliantiePuntenBonus),
 // tenzij opties.alliantieBonus === false (gebruikt om oneindige recursie te voorkomen).
@@ -992,27 +1042,44 @@ async function pasScoreAanMetCheck(client, userId, delta, opties = {}) {
   const oude = scores[userId] || 0;
   const nieuwe = pasScoreAan(userId, delta);
   if (delta > 0) {
-    await controleerAchievements(client, userId, oude, nieuwe);
+    await controleerAchievements(client, userId, oude, nieuwe, opties);
+    // pasRoemAan krijgt bewust GEEN naspel-bundel: een rang-verheffing is zeldzaam en permanent en
+    // hoort in het kanaal te staan, niet weggestopt in een thread. Relikwieën en verbondszegens zijn
+    // dat wél — die komen meermaals per dag voorbij.
     await pasRoemAan(client, userId, delta);
     if (opties.alliantieBonus !== false) await kenAlliantiePuntenBonus(client, userId, opties);
   }
   return nieuwe;
 }
 
-// Verbondszegen: bij ELKE uitgedeelde punt krijgt de alliantie-partner 80% kans op een bonus (soms +2).
+// Verbondszegen: de alliantie-partner krijgt 80% kans op een bonus.
 // Bewust zonder LLM-call (templated) zodat frequente bronnen zoals lofzang geen quota verbranden.
+//
+// MÉT een naspel-bundel geldt: ÉÉN kans per SPELACTIE, niet per puntenboeking. Dat was de grootste
+// bron van kanaalruis — één duel boekt punten tot vijf keer (duelwinst, premie, en per volbrachte
+// opdracht) en gaf de bondgenoot dus twee tot vier bonussen, elk met een eigen bericht, soms letterlijk
+// identiek. De uitkering staat daarom hoger: 1-3 in plaats van 1-2. Dat is geen exacte compensatie —
+// bij een actie die vroeger één keer boekte wint de bondgenoot iets, bij een duel met premie en
+// opdrachten levert hij iets in — maar het houdt een verbond ongeveer even lonend.
+// De markering staat VÓÓR de kansworp: precies één worp per actie, of hij lukt of niet.
 async function kenAlliantiePuntenBonus(client, userId, opties = {}) {
   try {
     const partnerId = getAlliantiePartner(userId);
     if (!partnerId || isVerbannen(partnerId)) return;
     if (opties.geverId && partnerId === opties.geverId) return; // gever niet via eigen partner bevoordelen
+    const naspel = opties.naspel;
+    if (naspel?.zegenGehad) {
+      if (naspel.zegenGehad.has(partnerId)) return;
+      naspel.zegenGehad.add(partnerId);
+    }
     if (Math.random() >= 0.80) return;                          // 80% kans
-    const bonus = Math.random() < 0.30 ? 2 : 1;                 // soms +2
+    const bonus = naspel ? 1 + Math.floor(Math.random() * 3) : (Math.random() < 0.30 ? 2 : 1);
     const voor = loadScores()[partnerId] || 0;
-    // channelId/uitgesteldeZegens doorgeven zodat een eventuele vloek-post in hetzelfde kanaal
+    // channelId/naspel/uitgesteldeZegens doorgeven zodat een eventuele vloek-post in hetzelfde kanaal
     // en in de juiste volgorde belandt. alliantieBonus: false → geen nieuwe bonus (geen recursie).
     await pasScoreAanMetCheck(client, partnerId, bonus, {
-      alliantieBonus: false, channelId: opties.channelId, uitgesteldeZegens: opties.uitgesteldeZegens,
+      alliantieBonus: false, channelId: opties.channelId,
+      naspel, uitgesteldeZegens: opties.uitgesteldeZegens,
     });
     // Verbrandde de bonus in een Vloek der Slappe Korst? Dan géén zegen-aankondiging — de vloek
     // post zijn eigen bericht, en het kanaal mag geen punten claimen die nooit zijn geboekt.
@@ -1021,9 +1088,12 @@ async function kenAlliantiePuntenBonus(client, userId, opties = {}) {
     const naam = members[userId]?.bijnaam || 'een volgeling';
     const partnerNaam = members[partnerId]?.bijnaam || 'de bondgenoot';
     const kanaal = opties.channelId || process.env.SLACK_CHANNEL_ID;
+    const punten = `+${bonus} kroketpunt${bonus > 1 ? 'en' : ''}`;
+    // In de bundel wordt het één regel in het naspel; zonder bundel blijft het het oude losse bericht.
+    if (naspelRegel(naspel, `⚔️ *Verbondszegen* — ${partnerNaam} ${punten} (trouw aan ${naam})`, partnerId)) return;
     const tekst =
       `⚔️ *VERBONDSZEGEN* ⚔️\n` +
-      `> Via het heilige verbond ontvangt ${partnerNaam} +${bonus} kroketpunt${bonus > 1 ? 'en' : ''} — ` +
+      `> Via het heilige verbond ontvangt ${partnerNaam} ${punten} — ` +
       `de trouw aan ${naam} draagt vruchten.\n` +
       `— De Hoge Frituurraad`;
     const post = () => postToChannel(client, kanaal, tekst, opties.threadTs ? { thread_ts: opties.threadTs } : undefined);
@@ -2204,7 +2274,12 @@ const ACHIEVEMENTS = [
 // Roem per verdiend daad-relikwie. Zo voeden daden de rangprogressie.
 const PRESTATIE_ROEM = 3;
 
-async function controleerAchievements(client, userId, oudeScore, nieuweScore) {
+// opties komt rechtstreeks van pasScoreAanMetCheck: `naspel` bundelt de meldingen, en
+// `alliantieBonus: false` betekent "dit is zelf al een afgeleide toekenning" — dan mag de
+// solidariteitsbonus hieronder niet opnieuw vuren, want dan kaatst hij tussen twee bondgenoten
+// heen en weer.
+async function controleerAchievements(client, userId, oudeScore, nieuweScore, opties = {}) {
+  const naspel = opties.naspel;
   const all = loadAchievements();
   const eigen = new Set(all[userId] || []);
   const members = loadMembers();
@@ -2221,34 +2296,39 @@ async function controleerAchievements(client, userId, oudeScore, nieuweScore) {
 
       // Alleen aankondigen als de drempel NU is gepasseerd (oude score lag eronder)
       if (oudeScore < a.drempel) {
-        const bericht =
-          `🏆 *RELIKWIE ONTGRENDELD* 🏆\n\n` +
-          `> ${bijnaam} heeft *${a.naam}* verworven.\n` +
-          `> _${a.tekst}_\n\n` +
-          `— De Hoge Frituurraad`;
         try {
-          await postToChannel(client, process.env.SLACK_CHANNEL_ID, bericht);
+          if (!naspelRegel(naspel, `🏆 *Relikwie* — ${bijnaam}: *${a.naam}* (_${a.tekst}_)`, userId)) {
+            await postToChannel(client, process.env.SLACK_CHANNEL_ID,
+              `🏆 *RELIKWIE ONTGRENDELD* 🏆\n\n` +
+              `> ${bijnaam} heeft *${a.naam}* verworven.\n` +
+              `> _${a.tekst}_\n\n` +
+              `— De Hoge Frituurraad`);
+          }
         } catch (err) {
           console.error('Achievement post fout:', err.message);
         }
         logGebeurtenis('achievement', userId, `${bijnaam} verdiende het relikwie "${a.naam}"`);
 
-        // Solidariteitsbonus: actieve alliantie-partner krijgt +1 als beloning voor trouw (geen verdere cascade)
+        // Solidariteitsbonus: actieve alliantie-partner krijgt +1 als beloning voor trouw.
+        // Niet als DEZE toekenning zelf al een afgeleide was (alliantieBonus: false) — anders
+        // ketst de bonus heen en weer: A verdient een relikwie → B krijgt +1 → B passeert een
+        // drempel → A krijgt +1 → A passeert een drempel → …
         try {
-          const partnerId = getAlliantiePartner(userId);
+          const partnerId = opties.alliantieBonus === false ? null : getAlliantiePartner(userId);
           if (partnerId && !isVerbannen(partnerId)) {
             const partnerBijnaam = members[partnerId]?.bijnaam || 'de bondgenoot';
             const voorSolid = loadScores()[partnerId] || 0;
-            await pasScoreAanMetCheck(client, partnerId, 1, { alliantieBonus: false });
+            await pasScoreAanMetCheck(client, partnerId, 1, { alliantieBonus: false, naspel });
             // Verbrand in een vloek? Dan geen aankondiging van punten die er niet zijn.
             if ((loadScores()[partnerId] || 0) <= voorSolid) throw new Error('bonus verbrand');
-            const solidTekst =
-              `⚔️ *SOLIDARITEITSBONUS* ⚔️\n\n` +
-              `> ${partnerBijnaam} ontvangt +1 kroketpunt als bondgenoot van ${bijnaam}, ` +
-              `die zojuist *${a.naam}* verdiende.\n` +
-              `> _Een verbond draagt zijn vruchten — ook voor de trouwe partner._\n\n` +
-              `— De Hoge Frituurraad`;
-            await postToChannel(client, process.env.SLACK_CHANNEL_ID, solidTekst);
+            if (!naspelRegel(naspel, `⚔️ *Solidariteitsbonus* — ${partnerBijnaam} +1 kroketpunt als bondgenoot van ${bijnaam}`, partnerId)) {
+              await postToChannel(client, process.env.SLACK_CHANNEL_ID,
+                `⚔️ *SOLIDARITEITSBONUS* ⚔️\n\n` +
+                `> ${partnerBijnaam} ontvangt +1 kroketpunt als bondgenoot van ${bijnaam}, ` +
+                `die zojuist *${a.naam}* verdiende.\n` +
+                `> _Een verbond draagt zijn vruchten — ook voor de trouwe partner._\n\n` +
+                `— De Hoge Frituurraad`);
+            }
           }
         } catch (_) {}
       }
@@ -2279,7 +2359,7 @@ function bumpTeller(userId, actie, aantal = 1) {
 
 // Controleert de daad-relikwieën voor één actie. Verdiend relikwie → verkondiging + roem,
 // zodat daden de rang laten stijgen. Gooit nooit: een relikwie mag geen spel breken.
-async function controleerPrestaties(client, userId, actie, stand) {
+async function controleerPrestaties(client, userId, actie, stand, naspel = null) {
   try {
     const kandidaten = ACHIEVEMENTS.filter(a => a.actie === actie && stand >= a.doel);
     if (!kandidaten.length) return;
@@ -2293,8 +2373,10 @@ async function controleerPrestaties(client, userId, actie, stand) {
     saveAchievements(all);
     for (const a of nieuw) {
       logGebeurtenis('achievement', userId, `${bijnaam} verdiende het relikwie "${a.naam}" (${actie}: ${stand})`);
-      await postToChannel(client, process.env.SLACK_CHANNEL_ID,
-        `🏆 *RELIKWIE ONTGRENDELD* 🏆\n\n> ${bijnaam} heeft *${a.naam}* verworven.\n> _${a.tekst}_\n> ⚜️ *+${PRESTATIE_ROEM} roem* — daden wegen zwaarder dan punten.\n\n— De Hoge Frituurraad`);
+      if (!naspelRegel(naspel, `🏆 *Relikwie* — ${bijnaam}: *${a.naam}* (+${PRESTATIE_ROEM} roem)`, userId)) {
+        await postToChannel(client, process.env.SLACK_CHANNEL_ID,
+          `🏆 *RELIKWIE ONTGRENDELD* 🏆\n\n> ${bijnaam} heeft *${a.naam}* verworven.\n> _${a.tekst}_\n> ⚜️ *+${PRESTATIE_ROEM} roem* — daden wegen zwaarder dan punten.\n\n— De Hoge Frituurraad`);
+      }
       await pasRoemAan(client, userId, PRESTATIE_ROEM);
     }
   } catch (err) {
@@ -2723,10 +2805,18 @@ function vervangNamen(tekst) {
 }
 
 
-// Combineerde output-filter: namen vervangen + ondertekening normaliseren
+// Het systeem kent precies ÉÉN stuurtoken: [EER:bijnaam]. Het model kent dat uit de systeemprompt en
+// extrapoleert er vrolijk op los — in productie stond "[STRAF:De Groene Kroket]" onderaan een publiek
+// duel-vonnis. Daarom wordt niet alleen EER gestript maar elk token van de vorm [HOOFDLETTERS:...],
+// waar het ook staat. Dat is geen gok: alleen verzonnen stuurtokens hebben die vorm, en de echte
+// EER-token is op dit punt al geparseerd (zie de mention-handler) — schoonOutput is het vangnet.
+// De hoofdletter-eis houdt gewone tekst als "[zie onder]" of een voetnoot "[3]" buiten schot.
+// De voorafgaande spatie hoort bij de match, anders laat een token middenin een dubbele spatie
+// achter. Alleen die spatie — geen algemene spatie-normalisatie, want schoonOutput raakt ook tekst
+// waar uitlijning in een codeblok betekenis heeft.
+const VERZONNEN_TOKEN = /[ \t]*\[[A-Z][A-Z_]{1,14}:[^\]\n]*\]/g;
 const schoonOutput = (tekst) => normaliseerOndertekening(vervangNamen(
-  // Strip eventuele [EER:...] tokens die de LLM per ongeluk in de output laat staan
-  tekst.replace(/\[EER:[^\]\n]+\]\s*$/im, '').trim()
+  tekst.replace(VERZONNEN_TOKEN, '').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim()
 ));
 
 // ── WK 2026 actuele data ─────────────────────────────────────────────────────
@@ -2880,7 +2970,7 @@ async function postToChannel(client, channelId, text, options = {}) {
   };
   if (options.thread_ts) payload.thread_ts = options.thread_ts;
   // Stuur via de rate limiter — voorkomt 429-errors bij burst van berichten
-  await slackLimiter.schedule(() => client.chat.postMessage(payload));
+  const verstuurd = await slackLimiter.schedule(() => client.chat.postMessage(payload));
   // Log de eigen reactie in de gespreksgeschiedenis, zodat de AI bij het volgende bericht
   // weet wat hij zelf zei en de draad van het gesprek vasthoudt.
   // Max 300 tekens — ruim genoeg om de vorige beurt intact te houden zonder het geheugen
@@ -2890,7 +2980,11 @@ async function postToChannel(client, channelId, text, options = {}) {
     if (samenvatting) logBericht('Kroket God', samenvatting);
   }
   // Nevenentiteiten (personas) krijgen af en toe de kans om ongevraagd op dit bericht in te vallen.
-  overwegPersonaInterjecties(client, channelId, gefilterd, 'kroketgod');
+  // thread_ts moet mee: viel dit bericht in een thread, dan hoort het weerwoord daar ook. Zonder dit
+  // sprong de weekvijand vanuit een raid-thread ineens boven in het kanaal.
+  overwegPersonaInterjecties(client, channelId, gefilterd, 'kroketgod', options.thread_ts);
+  // De ts teruggeven zodat de aanroeper zijn naspel eronder in de thread kan hangen (zie maakNaspel).
+  return verstuurd;
 }
 
 // ── Personas — dynamische nevenentiteiten (aanmaken/bewerken via het dashboard) ────────────────
@@ -2937,6 +3031,21 @@ const PERSONA_MEMBER_INTERJECT_KANS = 0.03; // lagere kans op een steek na een g
 const PERSONA_INTERJECT_COOLDOWN_MS = 90 * 60_000; // min. 90 min tussen ongevraagde steken per persona
 const _personaLaatsteInterjectie = new Map(); // personaId → timestamp
 
+// Gerichte personas: met `alleenVoorLid: '<userId>'` reageert een nevenentiteit UITSLUITEND op
+// berichten van dat ene lid. Zonder dit veld gedraagt een persona zich als voorheen.
+// Bewust ook de trefwoord-route afgeschermd: anders zou iedereen zo'n persona kunnen oproepen
+// door zijn naam te typen, en dan is de exclusieve band weg.
+function personaMagReagerenOp(persona, spreker) {
+  if (!persona?.alleenVoorLid) return true;   // niet gericht → geldt voor iedereen
+  return spreker === persona.alleenVoorLid;
+}
+
+// Cooldown per persona: gerichte personas mogen een eigen, veel langere pauze hebben zodat ze
+// echt zeldzaam blijven (`cooldownMs` in het persona-record).
+function personaCooldownMs(persona) {
+  return persona?.cooldownMs || PERSONA_INTERJECT_COOLDOWN_MS;
+}
+
 // Diakritische tekens strippen + lowercase, zodat "satébal" en "satebal" gelijk zijn.
 function normaliseerVoorMatch(tekst) {
   return (tekst || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
@@ -2951,12 +3060,15 @@ function trefwoordKomtVoor(genormaliseerdeTekst, trefwoord) {
   return new RegExp(`(^|[^a-z0-9])${geescaped}`).test(genormaliseerdeTekst);
 }
 
-function vindPersonaTrigger(tekst) {
+function vindPersonaTrigger(tekst, spreker = null) {
   const genormaliseerd = normaliseerVoorMatch(tekst);
   if (!genormaliseerd) return null;
   const personas = alleActievePersonas(); // incl. de weekvijand, zie weekvijandPersona()
   for (const [id, persona] of Object.entries(personas)) {
     if (persona.actief === false) continue;
+    // Gerichte persona: reageert ook op zijn trefwoord alleen voor zíjn lid, anders zou
+    // iedereen hem kunnen oproepen door de naam te typen.
+    if (!personaMagReagerenOp(persona, spreker)) continue;
     const trefwoorden = (persona.trefwoord || '').split(',').map(w => normaliseerVoorMatch(w).trim()).filter(Boolean);
     if (trefwoorden.some(w => trefwoordKomtVoor(genormaliseerd, w))) return { id, ...persona };
   }
@@ -3078,27 +3190,30 @@ async function postAlsPersona(client, channelId, persona, text, options = {}) {
 // Rolt een kans om ongevraagd in te vallen op iets dat zojuist in het hoofdkanaal is gezegd
 // (door Kroket God of een lid). Nooit in stille modus, alleen-testkanaal of weekendrust, en met
 // een cooldown per persona zodat er niet te vaak wordt meegepraat.
-function magPersonaInterjecteren(personaId, kans) {
+function magPersonaInterjecteren(personaId, kans, cooldownMs = PERSONA_INTERJECT_COOLDOWN_MS) {
   if (instelling('stilModus') || instelling('alleenTestkanaal')) return false;
   if (isWeekendAms() && instelling('weekendRust')) return false;
   const laatste = _personaLaatsteInterjectie.get(personaId) || 0;
-  if (Date.now() - laatste < PERSONA_INTERJECT_COOLDOWN_MS) return false;
+  if (Date.now() - laatste < cooldownMs) return false;
   return Math.random() < kans;
 }
 
 // `bron`: 'kroketgod' (na een bericht van de Kroket God, hogere kans) of 'lid' (na een gewoon
 // kanaalbericht, lagere kans). Loopt over alle actieve personas met `ongevraagd: true`.
-async function overwegPersonaInterjecties(client, channelId, aanleidingTekst, bron) {
+async function overwegPersonaInterjecties(client, channelId, aanleidingTekst, bron, threadTs = undefined, spreker = null) {
   try {
     if (channelId !== process.env.SLACK_CHANNEL_ID) return;
     if (!aanleidingTekst?.trim()) return;
     const personas = alleActievePersonas(); // incl. de weekvijand, zie weekvijandPersona()
     for (const [id, persona] of Object.entries(personas)) {
       if (persona.actief === false || !persona.ongevraagd) continue;
+      // Gerichte persona: alleen invallen op een bericht van zíjn lid. Berichten van de Kroket
+      // God zelf (bron 'kroketgod') hebben geen spreker, dus die slaat hij per definitie over.
+      if (persona.alleenVoorLid && !personaMagReagerenOp(persona, spreker)) continue;
       const kans = bron === 'kroketgod'
         ? (persona.interjectKans ?? PERSONA_INTERJECT_KANS)
         : (persona.memberInterjectKans ?? PERSONA_MEMBER_INTERJECT_KANS);
-      if (!magPersonaInterjecteren(id, kans)) continue;
+      if (!magPersonaInterjecteren(id, kans, personaCooldownMs(persona))) continue;
       _personaLaatsteInterjectie.set(id, Date.now());
       const vertraging = 4000 + Math.floor(Math.random() * 6000); // 4-10s, voelt als een reactie
       setTimeout(async () => {
@@ -3109,7 +3224,7 @@ async function overwegPersonaInterjecties(client, channelId, aanleidingTekst, br
             `Val ongevraagd in met een korte, droge steek in jouw karakter. Geen inleidingszin.`,
             150
           );
-          await postAlsPersona(client, channelId, persona, tekst);
+          await postAlsPersona(client, channelId, persona, tekst, threadTs ? { thread_ts: threadTs } : undefined);
         } catch (err) {
           console.warn(`Persona-interjectie (${persona.naam}) mislukt:`, err.message);
         }
@@ -3932,7 +4047,9 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
         { cmd: 'frituur [beschrijving]',       uitleg: 'de Kroket God visualiseert uw verzoek' },
 
         { categorie: '🎰 Kansspel & macht' },
-        { cmd: 'offer [aantal]',               uitleg: 'offer kroketpunten aan het Grote Vetbad — fortuin of ondergang (max 10, 5×/dag)' },
+        // Aantal per dag uit offerLimiet(): dat hangt van de rang af, dus een vast getal hier zou
+        // voor de helft van de leden gelogen zijn (en verouderen zodra de limiet wijzigt).
+        { cmd: 'offer [aantal]',               uitleg: `offer kroketpunten aan het Grote Vetbad — fortuin of ondergang (max ${VETBAD_MAX_INZET}, ${offerLimiet(command.user_id)}×/dag)` },
         { cmd: 'troon',                        uitleg: 'aanschouw de huidige Frituurkoning en hoe lang hij heerst' },
         { cmd: 'troon uitdagen',               uitleg: 'bestrijd de koning om de troon — 3 punten inzet, 1×/dag' },
 
@@ -6438,7 +6555,7 @@ app.event('message', async ({ event, client }) => {
     const gerichtAanKroketGod = !!(BOT_USER_ID && event.text.includes(`<@${BOT_USER_ID}>`));
     const personasStilgelegd = gerichtAanKroketGod
       || (!isTestKanaalMsg && (instelling('stilModus') || instelling('alleenTestkanaal')));
-    const persona = !personasStilgelegd ? vindPersonaTrigger(event.text) : null;
+    const persona = !personasStilgelegd ? vindPersonaTrigger(event.text, event.user) : null;
     if (persona && !isPromptInjectie(event.text)) {
       try {
         const thread_ts = event.thread_ts || undefined;
@@ -6452,7 +6569,7 @@ app.event('message', async ({ event, client }) => {
         console.warn(`Persona-reactie (${persona.naam}) mislukt:`, err.message);
       }
     } else if (!isTestKanaalMsg && !event.thread_ts && !gerichtAanKroketGod) {
-      overwegPersonaInterjecties(client, event.channel, event.text, 'lid');
+      overwegPersonaInterjecties(client, event.channel, event.text, 'lid', undefined, event.user);
     }
 
     // Testkanaal: altijd reageren, geen gatekeeper, geen cooldown — behalve als een persona het
@@ -8089,15 +8206,19 @@ async function voerDuel(client, userId, doelId, channelId, wapenId = null) {
   const talisman = heeftPowerup(verliesId, 'duel_talisman');
   if (talisman) verwijderPowerup(verliesId, 'duel_talisman');
   else pasScoreAan(verliesId, -1);
-  const uitgesteldeZegens = []; // verbondszegen pas posten ná het duel-vonnis
-  await pasScoreAanMetCheck(client, winId, 1, { channelId, uitgesteldeZegens });
+  // Eén bundel voor het hele duel: alles wat hierna nog iets te melden heeft (verbondszegen,
+  // titelwissel, relikwie, weekopdracht) schrijft erin, en het geheel gaat als één thread-antwoord
+  // onder het vonnis. Beide duellisten staan er meteen in, ook de verliezer — die wil wéten dat er
+  // iets met hem gebeurd is.
+  const naspel = maakNaspel([userId, doelId]);
+  await pasScoreAanMetCheck(client, winId, 1, { channelId, naspel });
   // Premiejacht: stond er deze week een premie op het hoofd van de verliezer? De winnaar int hem.
   let premieBlok = '';
   const premie = readJSON('premie.json', {});
   if (premie.weekStart === getMondayOfWeek() && premie.doelwitId === verliesId && !premie.geind) {
     premie.geind = true;
     writeJSON('premie.json', premie);
-    await pasScoreAanMetCheck(client, winId, premie.bonus || 3, { channelId, uitgesteldeZegens });
+    await pasScoreAanMetCheck(client, winId, premie.bonus || 3, { channelId, naspel });
     logGebeurtenis('premie', winId, `${winNaam} inde de premie op ${verliesNaam} (+${premie.bonus || 3})`);
     premieBlok = `\n\n🎯 *PREMIE GEÏND* — op het hoofd van ${verliesNaam} stond een premie van de Kroket God. ${winNaam} int *+${premie.bonus || 3} kroketpunten* extra.`;
   }
@@ -8126,17 +8247,18 @@ async function voerDuel(client, userId, doelId, channelId, wapenId = null) {
     ? `\n\n🧿 _De Talisman van de Onverliesbare Korst vangt het verlies van ${verliesNaam} op — geen punt verloren. De talisman is verbruikt._`
     : '';
   const standBlok = `\n\n⚖️ *DE NIEUWE STANDEN*\n\n> ${winNaam}: *${standNa[winId] ?? 0} kroketpunten*\n> ${verliesNaam}: *${standNa[verliesId] ?? 0} kroketpunten*`;
-  await postToChannel(client, channelId, duelTekst + premieBlok + talismanBlok + standBlok);
-  // Nu pas de verbondszegen, ná het vonnis — logische volgorde op Slack.
-  for (const post of uitgesteldeZegens) await post();
+  const hoofd = await postToChannel(client, channelId,
+    duelTekst + premieBlok + talismanBlok + standBlok + naspelMenties(naspel));
   // Het houderschap van de Kampioen-titel hangt aan deze uitslag: de verliezer kan hem kwijt
   // zijn, de winnaar kan hem veroverd of verdedigd hebben. Ná het vonnis, want de titelwissel
   // is het naspel van het duel.
-  await verwerkDuelTitel(client, winId, verliesId, channelId);
+  await verwerkDuelTitel(client, winId, verliesId, channelId, naspel);
   // Opdracht-voortgang: deelnemen telt voor beide, winnen alleen voor de winnaar.
-  await telActie(client, userId, 'duel');
-  await telActie(client, doelId, 'duel');
-  await telActie(client, winId, 'duel_gewonnen');
+  await telActie(client, userId, 'duel', 1, naspel);
+  await telActie(client, doelId, 'duel', 1, naspel);
+  await telActie(client, winId, 'duel_gewonnen', 1, naspel);
+  // Alles wat hierboven iets meldde, in één antwoord in de thread onder het vonnis.
+  await postNaspel(client, channelId, hoofd?.ts, naspel);
   return { ok: true, tekst: `⚔️ _Het duel is beslecht: *${winNaam}* won. Zie het kanaal voor het vonnis._` };
 }
 
@@ -8412,7 +8534,11 @@ function vetbadTeruggave(userId, inzet) {
 }
 
 const VETBAD_MAX_INZET = 10;
-const VETBAD_BASIS_PER_DAG = 5; // rang-voorrechten kunnen dit verhogen, zie offerLimiet()
+// De basis staat op 1 en niet op 3, omdat het voorrecht van de Paneerknecht (+2, vanaf 25 roem) er
+// bovenop komt: iedereen in het genootschap zit daar ruim boven en komt dus precies op drie offers
+// per dag uit. Zo blijft dat voorrecht echt bestaan zonder dat het plafond weer oploopt. Zie
+// offerLimiet().
+const VETBAD_BASIS_PER_DAG = 1;
 
 // Het maximum dat dit lid NU mag offeren: nooit meer dan VETBAD_MAX_INZET, en nooit meer dan de
 // helft van het bezit. Bestaat als aparte functie omdat de modal, de hulptekst en de toets
@@ -8454,7 +8580,7 @@ async function voerOffer(client, userId, inzet, channelId) {
   if (inzet > plafond) {
     return { ok: false, tekst: `_Het Vetbad aanvaardt hoogstens de helft van uw bezit: *${plafond}* kroketpunt${plafond === 1 ? '' : 'en'} (u bezit er ${scores[userId] || 0}). Uw offer van ${inzet} is dus geweigerd — probeer \`offer ${plafond}\`. De Hoge Frituurraad beschermt u tegen uzelf._` };
   }
-  // Max 5 offers per dag — het Vetbad is geen gokhal.
+  // Een handvol offers per dag (zie offerLimiet) — het Vetbad is geen gokhal.
   const vetbad = readJSON('vetbad.json', {});
   const vandaagKey = new Intl.DateTimeFormat('nl-NL', { timeZone: 'Europe/Amsterdam' }).format(new Date());
   const rec = vetbad[userId]?.datum === vandaagKey ? vetbad[userId] : { datum: vandaagKey, aantal: 0 };
@@ -8775,7 +8901,9 @@ function opdrachtBakken(userId) {
 // Faalt nooit hard: een opdracht of relikwie mag een spel niet kunnen breken.
 // Beloningen lopen via pasScoreAanMetCheck, dus roem/achievements/verbondszegen tellen mee.
 // Bewust GEEN opdrachten op "punten verdienen" — dat zou zichzelf kunnen voeden.
-async function telActie(client, userId, actie, aantal = 1) {
+// naspel: bundelt de meldingen van deze funnel (relikwie, weekopdracht, verbondszegen) in de thread
+// onder het hoofdbericht van de spelactie die hem aanriep.
+async function telActie(client, userId, actie, aantal = 1, naspel = null) {
   try {
     if (!userId || !loadMembers()[userId]) return;
     // Teken van leven: een daad in de frituur telt net zo goed als een bericht (zie tribunaal).
@@ -8786,7 +8914,7 @@ async function telActie(client, userId, actie, aantal = 1) {
 
     // Altijd tellen, ook als er vandaag geen opdracht op deze actie staat.
     const stand = bumpTeller(userId, actie, aantal);
-    await controleerPrestaties(client, userId, actie, stand);
+    await controleerPrestaties(client, userId, actie, stand, naspel);
 
     // Seizoenscampagne: élke daad drukt de dreiging van dit seizoen terug. Deze funnel is
     // precies de juiste plek — zo hoeft er geen nieuw commando te bestaan en telt gewoon
@@ -8819,14 +8947,15 @@ async function telActie(client, userId, actie, aantal = 1) {
 
     for (const o of voltooid) {
       const bijnaam = loadMembers()[userId]?.bijnaam || 'Een volgeling';
-      await pasScoreAanMetCheck(client, userId, o.beloning, { channelId: process.env.SLACK_CHANNEL_ID });
+      await pasScoreAanMetCheck(client, userId, o.beloning, { channelId: process.env.SLACK_CHANNEL_ID, naspel });
       logGebeurtenis('opdracht', userId, `${bijnaam} volbracht de ${o.soort === 'dag' ? 'dagopdracht' : 'weekopdracht'} "${opdrachtTekst(o)}" (+${o.beloning})`);
       // Voltooide opdrachten zijn zelf ook een daad — voedt de 'plichtsgetrouw'-relikwieën.
       // Directe teller + check i.p.v. telActie(), om herintreden in deze functie te vermijden.
-      await controleerPrestaties(client, userId, 'opdracht_klaar', bumpTeller(userId, 'opdracht_klaar', 1));
+      await controleerPrestaties(client, userId, 'opdracht_klaar', bumpTeller(userId, 'opdracht_klaar', 1), naspel);
       // Dagopdrachten blijven stil (drie per lid per dag zou het kanaal verzuipen) — die zie
       // je in je App Home. Weekopdrachten zijn zeldzaam genoeg voor een verkondiging.
-      if (o.soort === 'week') {
+      if (o.soort === 'week'
+          && !naspelRegel(naspel, `📜 *Weekopdracht* — ${bijnaam} volbracht _${opdrachtTekst(o)}_ (+${o.beloning})`, userId)) {
         await postToChannel(client, process.env.SLACK_CHANNEL_ID,
           `📜 *WEEKOPDRACHT VOLBRACHT* 📜\n\n> *${bijnaam}* heeft volbracht: _${opdrachtTekst(o)}_.\n> De Hoge Frituurraad kent *+${o.beloning} kroketpunten* toe.\n\n— De Hoge Frituurraad`);
       }
@@ -8973,7 +9102,7 @@ function titelsVan(userId) {
 // verdediging levert roem op). Een andere houder = een AFNAME, en dat is het hele punt van
 // het systeem: er wordt iets van iemand afgepakt, en het kanaal ziet dat gebeuren.
 // Templated — titels kunnen meerdere keren per dag wisselen en een duel kost al een LLM-call.
-async function kenTitelToe(client, key, nieuweHouderId, reden, channelId = process.env.SLACK_CHANNEL_ID) {
+async function kenTitelToe(client, key, nieuweHouderId, reden, channelId = process.env.SLACK_CHANNEL_ID, naspel = null) {
   const def = TITELS[key];
   if (!def || !nieuweHouderId) return null;
   const members = loadMembers();
@@ -8990,9 +9119,11 @@ async function kenTitelToe(client, key, nieuweHouderId, reden, channelId = proce
     if (rec.verdedigingen % 3 === 0) {
       await pasRoemAan(client, nieuweHouderId, 1);
       logGebeurtenis('titel', nieuweHouderId, `${naam} verdedigde ${def.naam} voor de ${rec.verdedigingen}e keer (+1 roem)`);
-      await postToChannel(client, channelId,
-        `${def.icoon} *HET HOUDERSCHAP HOUDT STAND* ${def.icoon}\n\n` +
-        `> *${naam}* verdedigt *${def.naam}* voor de ${rec.verdedigingen}e keer. De Hoge Frituurraad kent *+1 roempunt* toe voor standvastigheid.\n\n— De Hoge Frituurraad`);
+      if (!naspelRegel(naspel, `${def.icoon} *Titel* — ${naam} verdedigt *${def.naam}* voor de ${rec.verdedigingen}e keer (+1 roem)`, nieuweHouderId)) {
+        await postToChannel(client, channelId,
+          `${def.icoon} *HET HOUDERSCHAP HOUDT STAND* ${def.icoon}\n\n` +
+          `> *${naam}* verdedigt *${def.naam}* voor de ${rec.verdedigingen}e keer. De Hoge Frituurraad kent *+1 roempunt* toe voor standvastigheid.\n\n— De Hoge Frituurraad`);
+      }
     }
     return { key, houderId: nieuweHouderId, verdediging: true, verdedigingen: rec.verdedigingen };
   }
@@ -9004,13 +9135,18 @@ async function kenTitelToe(client, key, nieuweHouderId, reden, channelId = proce
   const vorigeNaam = vorige ? (members[vorige]?.bijnaam || 'een vergeten volgeling') : null;
   logGebeurtenis('titel', nieuweHouderId,
     vorigeNaam ? `${naam} nam ${def.naam} af van ${vorigeNaam} (${reden})` : `${naam} claimde de vacante titel ${def.naam} (${reden})`);
-  await postToChannel(client, channelId, vorigeNaam
-    ? `${def.icoon} *DE TITEL WISSELT VAN DRAGER* ${def.icoon}\n\n` +
-      `> *${naam}* neemt *${def.naam}* af van *${vorigeNaam}*.\n> _${reden}._\n` +
-      `> Voorrecht van de drager: ${def.voorrecht}. Roem: *+2*.\n\n— De Hoge Frituurraad`
-    : `${def.icoon} *EEN TITEL VINDT EEN DRAGER* ${def.icoon}\n\n` +
-      `> *${naam}* claimt de vacante titel *${def.naam}*.\n> _${reden}._\n` +
-      `> Voorrecht van de drager: ${def.voorrecht}. Roem: *+2*.\n\n— De Hoge Frituurraad`);
+  const titelRegel = vorigeNaam
+    ? `${def.icoon} *Titel* — ${naam} neemt *${def.naam}* af van ${vorigeNaam} (+2 roem)`
+    : `${def.icoon} *Titel* — ${naam} claimt de vacante *${def.naam}* (+2 roem)`;
+  if (!naspelRegel(naspel, titelRegel, nieuweHouderId, vorige)) {
+    await postToChannel(client, channelId, vorigeNaam
+      ? `${def.icoon} *DE TITEL WISSELT VAN DRAGER* ${def.icoon}\n\n` +
+        `> *${naam}* neemt *${def.naam}* af van *${vorigeNaam}*.\n> _${reden}._\n` +
+        `> Voorrecht van de drager: ${def.voorrecht}. Roem: *+2*.\n\n— De Hoge Frituurraad`
+      : `${def.icoon} *EEN TITEL VINDT EEN DRAGER* ${def.icoon}\n\n` +
+        `> *${naam}* claimt de vacante titel *${def.naam}*.\n> _${reden}._\n` +
+        `> Voorrecht van de drager: ${def.voorrecht}. Roem: *+2*.\n\n— De Hoge Frituurraad`);
+  }
   await updateWereldbord(client, true);
   return { key, houderId: nieuweHouderId, verdediging: false, vorige };
 }
@@ -9018,14 +9154,14 @@ async function kenTitelToe(client, key, nieuweHouderId, reden, channelId = proce
 // De duel-uitslag bepaalt het houderschap van de Kampioen-titel. Drie gevallen, in deze orde:
 // de verliezer was kampioen (afname), de winnaar was kampioen (verdediging), niemand droeg
 // hem (de winnaar claimt). Zo vindt de titel altijd een drager zonder aparte "startceremonie".
-async function verwerkDuelTitel(client, winId, verliesId, channelId) {
+async function verwerkDuelTitel(client, winId, verliesId, channelId, naspel = null) {
   const houder = titelHouder('duelkampioen');
   if (houder === verliesId) {
-    return kenTitelToe(client, 'duelkampioen', winId, `${loadMembers()[winId]?.bijnaam || 'de winnaar'} versloeg de regerend kampioen in het heilige frituurduel`, channelId);
+    return kenTitelToe(client, 'duelkampioen', winId, `${loadMembers()[winId]?.bijnaam || 'de winnaar'} versloeg de regerend kampioen in het heilige frituurduel`, channelId, naspel);
   }
-  if (houder === winId) return kenTitelToe(client, 'duelkampioen', winId, 'houdt de titel', channelId);
+  if (houder === winId) return kenTitelToe(client, 'duelkampioen', winId, 'houdt de titel', channelId, naspel);
   if (!houder) {
-    return kenTitelToe(client, 'duelkampioen', winId, 'de titel lag onbewaakt en werd in een duel opgeëist', channelId);
+    return kenTitelToe(client, 'duelkampioen', winId, 'de titel lag onbewaakt en werd in een duel opgeëist', channelId, naspel);
   }
   return null;
 }
