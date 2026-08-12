@@ -977,6 +977,18 @@ function pasScoreAan(userId, delta) {
   return scores[userId];
 }
 
+// Punten overdragen zonder er bij te drukken. pasScoreAan klemt op 0, dus een simpele
+// -inzet/+inzet is GEEN nulsom als de verliezer minder heeft dan de inzet: hij verliest wat hij
+// heeft en de winnaar krijgt de volle inzet. Deze functie verplaatst hooguit wat er echt is en
+// geeft dat bedrag terug, zodat het bericht erover de waarheid kan vertellen.
+function verplaatsPunten(vanId, naarId, gewenst) {
+  const echt = Math.min(gewenst, loadScores()[vanId] || 0);
+  if (echt <= 0) return 0;
+  pasScoreAan(vanId, -echt);
+  pasScoreAan(naarId, echt);
+  return echt;
+}
+
 // ── NASPEL: het kleine grut ná een spelactie ──────────────────────────────────
 // Eén duel kon tot zeventien losse kanaalberichten opleveren: het vonnis, plus een eigen bericht voor
 // elke verbondszegen, titelwissel, relikwie, rangverheffing en volbrachte weekopdracht. Wie dat
@@ -2814,7 +2826,13 @@ function vervangNamen(tekst) {
 // De voorafgaande spatie hoort bij de match, anders laat een token middenin een dubbele spatie
 // achter. Alleen die spatie — geen algemene spatie-normalisatie, want schoonOutput raakt ook tekst
 // waar uitlijning in een codeblok betekenis heeft.
-const VERZONNEN_TOKEN = /[ \t]*\[[A-Z][A-Z_]{1,14}:[^\]\n]*\]/g;
+//
+// Spaties moeten IN het label passen: de systeemprompts staan vol sprekerlabels als
+// "[ACTIEVE SPREKER: Mr. KroketPet]", "[BESCHULDIGDE: …]" en "[AANKLAGER: …]". Dat is juist het
+// patroon waaruit het model [STRAF:…] extrapoleerde, en een echo van zo'n label hoort net zo goed
+// niet in het kanaal. Zonder de spatie in de klasse mist dit filter precies de meest waarschijnlijke
+// echo.
+const VERZONNEN_TOKEN = /[ \t]*\[[A-Z][A-Z _]{1,24}:[^\]\n]*\]/g;
 const schoonOutput = (tekst) => normaliseerOndertekening(vervangNamen(
   tekst.replace(VERZONNEN_TOKEN, '').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim()
 ));
@@ -3244,9 +3262,14 @@ async function postEphemeral(client, channelId, userId, text, options = {}) {
   if (options.thread_ts) payload.thread_ts = options.thread_ts;
   try {
     await slackLimiter.schedule(() => client.chat.postEphemeral(payload));
+    return true;
   } catch (err) {
-    // user_not_in_channel e.d. — log, maar laat de aanroeper niet crashen
+    // user_not_in_channel e.d. — log, maar laat de aanroeper niet crashen. Wél de UITKOMST
+    // teruggeven: een aanroeper die onthoudt "dit heb ik verstuurd" moet kunnen zien dat het
+    // mislukte. Omdat deze functie nooit gooit, dacht de tribunaal-por dat elke por was aangekomen
+    // en markeerde hem als verzonden — waarna het lid nooit meer gewaarschuwd werd.
     console.warn(`Ephemeral naar ${userId} mislukt:`, err.data?.error || err.message);
+    return false;
   }
 }
 
@@ -4983,23 +5006,31 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
         // verschil in geluksfactor tussen uitdager en koning (zie getGeluk).
         const uitdagerWint = Math.random() < 0.45 + (getGeluk(command.user_id) - getGeluk(koningId));
         let kop, verhaal;
+        // Alleen de UITDAGER is hierboven op saldo getoetst. De koning niet — en pasScoreAan klemt
+        // op 0, dus een koning met 1 punt verloor er 1 terwijl de uitdager er 3 kreeg: twee punten
+        // uit niets. Een troonstrijd verplaatst nu precies wat de verliezer werkelijk bezit, en het
+        // bericht noemt dat bedrag, want anders klopt de tekst niet met de standen eronder.
+        const verplaatst = uitdagerWint
+          ? verplaatsPunten(koningId, command.user_id, INZET)
+          : verplaatsPunten(command.user_id, koningId, INZET);
+        const buit = `${verplaatst} kroketpunt${verplaatst === 1 ? '' : 'en'}`;
         if (uitdagerWint) {
-          pasScoreAan(koningId, -INZET);
-          pasScoreAan(command.user_id, INZET);
           writeJSON('troon.json', { koningId: command.user_id, sinds: new Date().toISOString() });
-          logGebeurtenis('troon', command.user_id, `${uitdagerNaam} onttroonde ${koningNaam} (+${INZET})`);
+          logGebeurtenis('troon', command.user_id, `${uitdagerNaam} onttroonde ${koningNaam} (+${verplaatst})`);
           kop = '👑 *DE TROON IS GEVALLEN* 👑';
-          verhaal = `${uitdagerNaam} stormde de frituurzaal binnen en wierp ${koningNaam} van de troon! De inzet van ${INZET} kroketpunten wisselt van eigenaar.`;
+          verhaal = verplaatst > 0
+            ? `${uitdagerNaam} stormde de frituurzaal binnen en wierp ${koningNaam} van de troon! De inzet van ${buit} wisselt van eigenaar.`
+            : `${uitdagerNaam} stormde de frituurzaal binnen en wierp ${koningNaam} van de troon — maar diens schatkist was leeg. De kroon is de enige buit.`;
         } else {
-          pasScoreAan(command.user_id, -INZET);
-          pasScoreAan(koningId, INZET);
-          logGebeurtenis('troon', command.user_id, `${uitdagerNaam} faalde tegen ${koningNaam} (−${INZET})`);
+          logGebeurtenis('troon', command.user_id, `${uitdagerNaam} faalde tegen ${koningNaam} (−${verplaatst})`);
           kop = '🛡️ *DE KONING HOUDT STAND* 🛡️';
-          verhaal = `${uitdagerNaam} bestormde de troon, maar ${koningNaam} pareerde met goddelijke kalmte. De ${INZET} kroketpunten inzet vallen toe aan de kroon.`;
+          verhaal = `${uitdagerNaam} bestormde de troon, maar ${koningNaam} pareerde met goddelijke kalmte. De ${buit} inzet vallen toe aan de kroon.`;
         }
         const scoresNa = loadScores();
         const standBlok = `\n\n⚖️ *STANDEN*\n> ${koningNaam}: *${scoresNa[koningId] ?? 0}*\n> ${uitdagerNaam}: *${scoresNa[command.user_id] ?? 0}*`;
-        await postToChannel(client, command.channel_id, `${kop}\n\n> ${verhaal}${standBlok}\n\n— De Hoge Frituurraad`);
+        const troonNaspel = maakNaspel([command.user_id, koningId]);
+        await postToChannel(client, command.channel_id,
+          `${kop}\n\n> ${verhaal}${standBlok}\n\n— De Hoge Frituurraad${naspelMenties(troonNaspel)}`);
         return;
       }
 
@@ -6357,10 +6388,14 @@ app.event('app_mention', async ({ event, client }) => {
 
     // Verwerk [EER:bijnaam] token dat de LLM organisch kan uitsturen — boek echte punten.
     // BELANGRIJK: dit moet vóór de vrijdag-append, anders staat de token niet meer aan het eind.
-    const eerTokenMatch = tekst.match(/\[EER:([^\]\n]+)\]\s*$/i);
+    // Niet aan het eind geankerd. Het model zet de marker ook wel eens middenin of vóór een
+    // afsluitende ondertekening; schoonOutput strookt hem inmiddels waar hij ook staat, dus met een
+    // $-anker zou hij geruisloos verdwijnen ZONDER dat de punten geboekt worden. Eer die zichtbaar
+    // wegvalt is erger dan een marker op een rare plek.
+    const eerTokenMatch = tekst.match(/\[EER:([^\]\n]+)\]/i);
     if (eerTokenMatch) {
       const bijnaamTarget = eerTokenMatch[1].trim();
-      tekst = tekst.replace(/\[EER:[^\]\n]+\]\s*$/i, '').trim();
+      tekst = tekst.replace(/[ \t]*\[EER:[^\]\n]+\]/i, '').trim();
       const gevonden = getMemberByNaam(bijnaamTarget);
       if (gevonden && gevonden[0] !== userId && telEerVandaag(userId) < eerLimiet(userId)) {
         const [eerId, eerLid] = gevonden;
@@ -7424,7 +7459,11 @@ function planWillekeurigKroketEvent(client) {
 // PERSISTENT in kroketevent.json (zoals de Gouden Kroket): een in-memory setTimeout van
 // max. 4,5 dag overleefde de dagelijkse pm2-herstart (03:00) niet, waardoor het event in
 // ~80% van de weken nooit vuurde. De minuut-cron voert de planning uit zodra het moment daar is.
-planCron('30 9 * * 1', () => {
+// Eigen minuut (09:31), NIET 09:30: daar hangt de opkomst van de weekvijand aan, en CRON_LABELS is
+// per EXPRESSIE gesleuteld. Met twee taken op één expressie kregen beide de skip-wrapper van het
+// label 'Weekvijand (opkomst)', zodat een dashboard-"overslaan" van de weekvijand net zo goed deze
+// weekplanning kon uitschakelen — wie van de twee het eerst vuurde, verbruikte de vlag.
+planCron('31 9 * * 1', () => {
   const extraDagen = Math.floor(Math.random() * 5);         // 0=ma … 4=vr
   const doelUur   = 10 + Math.floor(Math.random() * 7);    // 10–16
   const doelMin   = Math.floor(Math.random() * 60);
@@ -8395,6 +8434,10 @@ function getGeluk(userId) {
 async function verwerkBingoClaim(client, userId, nr, bewijs, channelId) {
   const members = loadMembers();
   if (!members[userId]) return { ok: false, tekst: 'Alleen leden van de Kroket Illuminati spelen kroket-bingo.' };
+  // Ontbrak, terwijl duel/roof/offer/winkel hem allemaal hebben. De App Home-knop blijft na een
+  // verbanning zichtbaar tot de tab ververst, dus een balling hoefde alleen zijn oude tab te
+  // gebruiken om door te blijven scoren.
+  if (isVerbannen(userId)) return { ok: false, tekst: '_Een balling claimt geen bingo. Toon eerst berouw met `/kroketgod beroep`._' };
   const bingo = readJSON('bingo.json', null);
   const weekNu = getMondayOfWeek();
   if (!bingo || bingo.weekStart !== weekNu || !bingo.opdrachten?.length) {
@@ -8463,21 +8506,31 @@ async function verwerkBingoClaim(client, userId, nr, bewijs, channelId) {
 // namen er zijn opgegeven.
 async function voerEer(client, geverId, ontvangerIds, reden, channelId) {
   const members = loadMembers();
-  const geefNaam = members[geverId]?.bijnaam || 'Een volgeling';
-  const ontvangers = ontvangerIds.filter(id => members[id]);
+  // De gever moet zelf lid zijn. De drie ingangen (commando, App Home-modal, organisch
+  // [EER:]-token) controleerden dat allemaal niet, waardoor een gast uit het kanaal punten kon
+  // laten uitdelen — en de daglimiet van een niet-lid is nooit vol.
+  if (!members[geverId]) return { ok: false, tekst: '_Alleen leden van de Kroket Illuminati kunnen eer bewijzen._' };
+  const geefNaam = members[geverId].bijnaam;
+  // Ontdubbelen: `eer piet piet` boekte tweemaal punten voor dezelfde persoon en verbrandde twee
+  // plekken van de daglimiet. Eén naam is één eerbewijs.
+  const ontvangers = [...new Set(ontvangerIds)].filter(id => members[id]);
   if (!ontvangers.length) return { ok: false, tekst: '_Er is niemand om te eren._' };
 
+  // De daglimiet-teller EERST bijschrijven. Hij stond onderaan, ná de puntenboekingen en dus ná
+  // Slack- en LLM-I/O: twee eerbewijzen kort na elkaar lazen beide de oude stand en glipten samen
+  // door de limiet. De aanroeper heeft de limiet al getoetst; dit legt het gebruik vast vóór er
+  // iets kan wachten.
+  registreerEer(geverId, ontvangers.length);
   const eerPunten = {};
   const verdubbeld = {};
-  const uitgesteldeZegens = []; // verbondszegens pas posten ná de hoofd-zegen
+  const naspel = maakNaspel([geverId, ...ontvangers]);
   for (const id of ontvangers) {
     let punten = Math.floor(Math.random() * 2) + 1; // 1 of 2
     if (heeftPowerup(id, 'dubbele_eer')) { punten *= 2; verdubbeld[id] = true; }
     eerPunten[id] = punten;
-    await pasScoreAanMetCheck(client, id, punten, { geverId, channelId, uitgesteldeZegens });
+    await pasScoreAanMetCheck(client, id, punten, { geverId, channelId, naspel });
   }
-  registreerEer(geverId, ontvangers.length);
-  await telActie(client, geverId, 'eer_gegeven', ontvangers.length);
+  await telActie(client, geverId, 'eer_gegeven', ontvangers.length, naspel);
 
   const namen = ontvangers.map(id => members[id].bijnaam);
   const dubbelNamen = ontvangers.filter(id => verdubbeld[id]).map(id => members[id].bijnaam);
@@ -8498,10 +8551,9 @@ async function voerEer(client, geverId, ontvangerIds, reden, channelId) {
         `Kondig dit gezamenlijk aan. Geen inleidingszin. VERBODEN: voeg GEEN [EER:...]-token toe — het systeem heeft de punten al geboekt.`,
         400, false,
         `🙏 *EER BEWEZEN* 🙏\n\n> ${ontvangers.map(id => `*${members[id].bijnaam}*: +${eerPunten[id]}`).join(' · ')} — op voorspraak van ${geefNaam}.\n\n— De Almachtige Kroket God`);
-  // Strip eventuele [EER:...] token die de LLM per ongeluk toevoegt aan eer-reacties
-  await postToChannel(client, channelId, tekst.replace(/\[EER:[^\]\n]+\]\s*$/i, '').trim());
-  // Nu pas de verbondszegens, ná de hoofd-zegen — zo is de volgorde op Slack logisch.
-  for (const post of uitgesteldeZegens) await post();
+  // Het [EER:...]-token wordt in schoonOutput al gestript (samen met elk ander verzonnen token).
+  const hoofd = await postToChannel(client, channelId, tekst + naspelMenties(naspel));
+  await postNaspel(client, channelId, hoofd?.ts, naspel);
   for (const id of ontvangers) {
     logGebeurtenis('eer', id, `${geefNaam} eerde ${members[id].bijnaam} (+${eerPunten[id]})${reden ? `: ${reden}` : ''}`, null, geverId);
   }
@@ -8643,11 +8695,13 @@ async function voerOffer(client, userId, inzet, channelId) {
   }
   if (delta !== 0) pasScoreAan(userId, delta);
   logGebeurtenis('offer', userId, `${bijnaam} offerde ${inzet} aan het Vetbad → ${delta >= 0 ? '+' : ''}${delta}`);
-  if (roll < 0.06) await telActie(client, userId, 'jackpot');
+  const naspel = maakNaspel([userId]);
+  if (roll < 0.06) await telActie(client, userId, 'jackpot', 1, naspel);
   const nieuweStand = loadScores()[userId] || 0;
-  await postToChannel(client, channelId,
-    `⚜️ *HET GROTE VETBAD* ⚜️\n\n${kop}\n\n> ${regel}\n\n_Nieuwe stand: *${nieuweStand} kroketpunten*_\n\n— De Hoge Frituurraad`);
-  await telActie(client, userId, 'offer');
+  const hoofd = await postToChannel(client, channelId,
+    `⚜️ *HET GROTE VETBAD* ⚜️\n\n${kop}\n\n> ${regel}\n\n_Nieuwe stand: *${nieuweStand} kroketpunten*_\n\n— De Hoge Frituurraad${naspelMenties(naspel)}`);
+  await telActie(client, userId, 'offer', 1, naspel);
+  await postNaspel(client, channelId, hoofd?.ts, naspel);
   return { ok: true, tekst: `_Het Vetbad heeft gesproken: ${delta > 0 ? `+${delta}` : delta} kroketpunt${Math.abs(delta) === 1 ? '' : 'en'}. Nieuwe stand: ${nieuweStand}._` };
 }
 
@@ -9413,6 +9467,8 @@ async function beslechtSeizoen(client, uitkomst) {
 // Brengt het seizoen in overeenstemming met de kalender. `stil` onderdrukt alle aankondigingen
 // en beslechtingen — dat is de stand die lees-paden (bord, App Home, commando) nodig hebben.
 // Alleen de maandag-cron en de opstart mogen beslechten, precies zoals de weekreset-inhaalslag.
+const SEIZOEN_FASE_MOMENT = { uur: 9, min: 5 }; // maandag 09:05 AMS — zie de cron verderop
+
 async function zorgVoorSeizoen(client, { stil = false } = {}) {
   let s = loadSeizoen();
   if (!s) {
@@ -9433,6 +9489,10 @@ async function zorgVoorSeizoen(client, { stil = false } = {}) {
     return loadSeizoen();
   }
   const fase = Math.min(SEIZOEN_WEKEN, wekenVerstreken(s.startWeek) + 1);
+  // De fasewissel niet vóór het geplande moment (maandag 09:05) doorvoeren. De opstart-inhaalslag
+  // draait om 03:00 en zette de fase dan al door, waarna de cron van 09:05 een fase zag die al
+  // klopte en dus niets meer verkondigde. Gevolg: elk seizoensdecreet landde midden in de nacht.
+  if (!stil && !maandagMomentGeweest(SEIZOEN_FASE_MOMENT.uur, SEIZOEN_FASE_MOMENT.min)) return s;
   if (fase > (s.fase || 1)) {
     s.fase = fase;
     writeJSON('seizoen.json', s);
@@ -10409,6 +10469,9 @@ async function leesGeleKaartStemmen(client, poll) {
       for (const u of r.users || []) {
         if (u === BOT_USER_ID) continue;      // de voorgezette reacties van de bot tellen niet
         if (!members[u]) continue;            // alleen leden hebben stemrecht
+        // …en een balling niet. Wie zelf van de frituurtafel is verbannen, hoort niet mee te
+        // beslissen wie de volgende is. Alleen lidmaatschap werd getoetst, niet de verbanning.
+        if (isVerbannen(u)) continue;
         if (!bak.includes(u)) bak.push(u);
       }
     }
@@ -11262,8 +11325,10 @@ async function verwerkTribunaalKlok(client) {
         : `👁️ _${lid.bijnaam}, u speelt wel mee, maar heeft ${woord} dagen niets gezegd._\n` +
           `_Over ${TRIBUNAAL_WOORD_DAGEN - woord} dag(en) kan de Raad daarover een Tribunaal der Vergetelheid openen — meespelen weegt daar niet tegen op._\n` +
           `_Eén bericht in het kanaal zet de teller terug. Bent u weg? \`/kroketgod afwezig 14\`._`;
-      await postEphemeral(client, process.env.SLACK_CHANNEL_ID, id, tekst);
-      // Vastleggen ná verzenden: mislukt de por, dan mag hij het later opnieuw proberen.
+      // Alleen markeren als hij ook echt is aangekomen: postEphemeral gooit niet, dus zonder deze
+      // uitkomst gold een mislukte por als verstuurd en kreeg het lid nooit meer een waarschuwing —
+      // om vervolgens wél voor het tribunaal te worden gesleept.
+      if (!await postEphemeral(client, process.env.SLACK_CHANNEL_ID, id, tekst)) continue;
       const naVerzenden = loadActiviteit();
       naVerzenden[id] = { ...(naVerzenden[id] || {}), porGestuurd: { ...(naVerzenden[id]?.porGestuurd || {}), [soort]: dagKey } };
       saveActiviteit(naVerzenden);
@@ -11968,9 +12033,48 @@ app.action('home_verversen', async ({ ack, body, client }) => {
 // ONTSNAPTE komt terug met wrok en meer HP; een verslagen vijand komt nooit meer.
 // De keuze is deterministisch uit de weekstart, dus een gemiste cron die later inhaalt levert
 // dezelfde vijand op — geen dubbele of afwijkende vijand door downtime.
-async function spawnWeekvijand(urenTotDeadline = (4 * 24 + 5) + 20 / 60) {
+// Hoe lang een halve opkomst de volgende tegenhoudt. Ruim boven de tijd die warmAvatarOp nodig
+// heeft, en kort genoeg dat een mislukte opkomst binnen één cron-slag hersteld kan worden.
+const SPAWN_CLAIM_MS = 120_000;
+
+// Deadline van de weekvijand: de vaste wekelijkse hamerslag (vrijdag 14:50 AMS), NIET "nu + 4 dagen
+// 5 uur". Dat laatste schoof mee met het moment van opkomst: rees de vijand op bij een herstart om
+// 03:00 in plaats van bij de cron van 09:30, dan verstreek zijn deadline op vrijdag 08:20 — zes en
+// een half uur vóór de cron die de ontsnapping afhandelt. In dat gat gold hij al als ontsnapt terwijl
+// het bord nog aanvalsknoppen toonde. Uit de kalender rekenen maakt dat onmogelijk, ongeacht wanneer
+// de opkomst plaatsvindt: dezelfde regel als bij de andere downtime-proof taken.
+const WEEKVIJAND_HAMER   = { dag: 5, uur: 14, min: 50 }; // vrijdag 14:50 AMS — zie de cron hieronder
+const WEEKVIJAND_OPKOMST = { dag: 1, uur:  9, min: 30 }; // maandag 09:30 AMS — idem
+function weekvijandDeadlineTs() {
+  const nu = new Date();
+  for (let i = 0; i <= 8; i++) {
+    const kandidaat = new Date(nu.getTime() + i * 24 * 3_600_000);
+    const amsDag = new Date(kandidaat.toLocaleString('en-US', { timeZone: 'Europe/Amsterdam' })).getDay();
+    if (amsDag !== WEEKVIJAND_HAMER.dag) continue;
+    const ts = amsKlokTijdNaarUtc(kandidaat, WEEKVIJAND_HAMER.uur, WEEKVIJAND_HAMER.min).getTime();
+    // Minstens een uur speeltijd: rijst hij vrijdagmiddag om 14:00 op, dan is de hamerslag van
+    // diezelfde dag geen deadline maar een onmiddellijke dood — dan die van de week erna.
+    if (ts > nu.getTime() + 3_600_000) return ts;
+  }
+  return nu.getTime() + 4 * 24 * 3_600_000; // vangnet, mag nooit nodig zijn
+}
+
+// urenTotDeadline: alleen voor het dashboard, dat een korte proefraid wil kunnen neerzetten.
+async function spawnWeekvijand(urenTotDeadline = null) {
   const vorige = readJSON('bamischijf.json', {});
   if (vorige.actief) return 'Er waart al een weekvijand rond.';
+  // Verderop staat `await warmAvatarOp(...)`, een netwerk-call van tientallen seconden, en de write
+  // die de raid vastlegt komt daarná. Twee aanroepers in dat venster — de maandagcron plus de
+  // opstart-inhaalslag, of twee snelle deploys — zagen beide `actief: false` en lieten dus twee
+  // vijanden oprijzen, met twee borden en twee aankondigingen.
+  // Daarom een reservering. Bewust een APARTE, VERLOPENDE vlag en niet alvast `actief: true`: gaat
+  // het opwarmen onderweg stuk, dan zou een blijvende claim élke volgende opkomst blokkeren, en dat
+  // is erger dan de dubbele spawn. Deze vervalt vanzelf. De read en write hieronder staan zonder
+  // await tegen elkaar aan, dus de claim zelf is atomair binnen één tick.
+  if (vorige.bezetting && Date.now() - vorige.bezetting < SPAWN_CLAIM_MS) {
+    return 'Er rijst al een weekvijand op — even geduld.';
+  }
+  writeJSON('bamischijf.json', { ...vorige, bezetting: Date.now() });
   const weekStart = getMondayOfWeek();
 
   // Ontsnapte de vorige vijand? Dan komt hij terug in plaats van een nieuwe — met wrok.
@@ -11989,7 +12093,7 @@ async function spawnWeekvijand(urenTotDeadline = (4 * 24 + 5) + 20 / 60) {
 
   const raidState = {
     actief: true, hp: maxHp, maxHp, strijders: {}, log: [],
-    deadlineTs: Date.now() + urenTotDeadline * 3_600_000,
+    deadlineTs: urenTotDeadline ? Date.now() + urenTotDeadline * 3_600_000 : weekvijandDeadlineTs(),
     kanaal: process.env.SLACK_CHANNEL_ID,
     vijand, weekStart, wrok, terugkeer,
     avatar: avatarOk ? avatarUrl : null,
@@ -12052,6 +12156,18 @@ planCron('30 9 * * 1', async () => {
 // Inhaalslag: is het al na maandag 09:30 en waart er niemand rond terwijl deze week nog geen
 // vijand had? Dan alsnog spawnen. Draait bij opstart mee (dagelijkse pm2-herstart), net als de
 // weekreset- en seizoens-inhaalslag.
+// Is een gepland maandagmoment van DEZE week al verstreken?
+//
+// Waarom dit bestaat: pm2 herstart de bot elke dag om 03:00, en bij het opstarten lopen de
+// inhaalslagen. Maandagochtend betekende dat elke wekelijkse gebeurtenis om 03:00 werd afgevuurd —
+// zes uur vóór het geplande moment, terwijl niemand kijkt en de cron van 09:30 daarna niets meer te
+// doen had. Een inhaalslag hoort te repareren wat GEMIST is, niet over te nemen wat nog moet komen.
+function maandagMomentGeweest(uur, min) {
+  const nu = new Date();
+  const maandag = new Date(`${getMondayOfWeek()}T12:00:00Z`); // middag: veilig binnen de juiste dag
+  return nu.getTime() >= amsKlokTijdNaarUtc(maandag, uur, min).getTime();
+}
+
 async function zorgVoorWeekvijand() {
   try {
     const raid = readJSON('bamischijf.json', {});
@@ -12059,6 +12175,11 @@ async function zorgVoorWeekvijand() {
     const weekStart = getMondayOfWeek();
     if (raid.weekStart === weekStart) return null; // deze week al gehad (verslagen of ontsnapt)
     if (isWeekendAms()) return null;               // niet in het weekend beginnen
+    // Niet vóór de geplande opkomst inhalen. pm2 herstart dagelijks om 03:00, dus maandagochtend
+    // riep deze inhaalslag de vijand om 03:00 op — zes en een half uur te vroeg, terwijl de cron van
+    // 09:30 het gewoon zou doen. Een inhaalslag hoort iets te repareren dat GEMIST is, niet iets
+    // over te nemen dat nog moet komen.
+    if (!maandagMomentGeweest(WEEKVIJAND_OPKOMST.uur, WEEKVIJAND_OPKOMST.min)) return null;
     console.log('👹 Weekvijand-inhaalslag: deze week waart er nog geen vijand rond.');
     return await spawnWeekvijand();
   } catch (err) {
@@ -12111,18 +12232,24 @@ registreerFeature({
 // vrijdag-cron én lui vanuit de `aanval`-handler (als de cron gemist is doordat de bot
 // down was — anders blijft een raid eeuwig actief en blokkeert hij nieuwe spawns).
 async function beslechtBamischijfOntsnapping(client) {
+  // EERST claimen, dan pas praten. Hieronder staat een LLM-call van tientallen seconden plus twee
+  // Slack-posts; stond het afsluiten daarná, dan liep elke tweede aanroeper in dat venster de hele
+  // functie opnieuw: twee hoonredes, twee ONTSNAPT-berichten en de top 3 twee keer geplunderd. En er
+  // zijn drie aanroepers die kunnen samenvallen — de cron van vrijdag 14:50, de luie inhaalslag bij
+  // elke aanval ná de deadline, en de testknop op het dashboard.
+  // De claim is read-en-write zonder await ertussen, dus atomair binnen één tick (projectafspraak).
   const raid = readJSON('bamischijf.json', {});
   if (!raid.actief || raid.hp <= 0) return;
-  const vijandNaam = raid.vijand?.naam || 'De Bamischijf der Duisternis';
-  // De triomfrede moet vóór het uitzetten van de raid, want weekvijandPersona() leest de
-  // identiteit uit de ACTIEVE state. Daarna pas afsluiten.
-  await vijandSpreekt(client, process.env.SLACK_CHANNEL_ID,
-    `Je bent NIET verslagen: er restte nog ${raid.hp} van je ${raid.maxHp} levenspunten toen de tijd verstreek. ` +
-    `Je trekt je terug, maar je komt volgende week terug en sterker. Spreek een triomfantelijke hoonrede: ` +
-    `wrijf hun falen erin, in jouw karakter. Maximaal 4 zinnen. Geen inleidingszin.`, 240);
   raid.actief = false;
   raid.verslagen = false; // expliciet: hij leeft nog, dus hij komt terug met wrok
   writeJSON('bamischijf.json', raid);
+  const vijandNaam = raid.vijand?.naam || 'De Bamischijf der Duisternis';
+  // De hoonrede kan nu pas: weekvijandPersona() leest normaal de ACTIEVE state, en die staat
+  // inmiddels op false — daarom de identiteit expliciet meegeven (zie weekvijandPersona(raidState)).
+  await vijandSpreekt(client, process.env.SLACK_CHANNEL_ID,
+    `Je bent NIET verslagen: er restte nog ${raid.hp} van je ${raid.maxHp} levenspunten toen de tijd verstreek. ` +
+    `Je trekt je terug, maar je komt volgende week terug en sterker. Spreek een triomfantelijke hoonrede: ` +
+    `wrijf hun falen erin, in jouw karakter. Maximaal 4 zinnen. Geen inleidingszin.`, 240, raid);
   const members = loadMembers();
   // Het monster ontsnapt en plundert de top 3 van de ranglijst: −1 kroketpunt elk.
   const top = Object.entries(loadScores()).filter(([, s]) => s > 0).sort((a, b) => b[1] - a[1]).slice(0, 3);
@@ -12224,7 +12351,19 @@ planCron('30 9 * * 5', async () => {
 // door de vrijdag-cron en door de dashboard-testknop.
 async function laatVeilingHamerVallen() {
   const veiling = readJSON('veiling.json', {});
-  if (veiling.status !== 'open' || veiling.weekStart !== getMondayOfWeek()) return 'Geen open veiling.';
+  // Zeg WAAROM er niets gebeurt: "Geen open veiling" liet iemand die op de knop drukte in het
+  // ongewisse of de actie was aangekomen. De twee oorzaken vragen om verschillende vervolgacties.
+  if (veiling.status !== 'open' || veiling.weekStart !== getMondayOfWeek()) {
+    const members = loadMembers();
+    if (veiling.status === 'gesloten' && veiling.winnaar) {
+      const naam = members[veiling.winnaar.userId]?.bijnaam || 'een volgeling';
+      return `Geen open veiling: de laatste is al beslecht — ${naam} won ${veiling.artefact?.naam || 'het artefact'} voor ${veiling.winnaar.bod} punten. Open eerst een nieuwe veiling.`;
+    }
+    if (veiling.weekStart && veiling.weekStart !== getMondayOfWeek()) {
+      return `Geen open veiling: de laatste was van de week van ${veiling.weekStart} en die is voorbij. Open eerst een nieuwe veiling.`;
+    }
+    return 'Geen open veiling. Open er eerst een met "Veiling openen".';
+  }
   veiling.status = 'gesloten';
   const members = loadMembers();
   // Escrow-model: de hoogste bieder heeft zijn bod al betaald bij het bieden; lagere bieders
@@ -12870,6 +13009,12 @@ async function onthulQuiz(client) {
   for (const reply of replies) {
     const tekst = (reply.text || '').replace(/<@[^>]+>/g, '').trim();
     if (!tekst) continue;
+    // Alleen leden, en geen ballingen. Dit ontbrak: elke gast in het kanaal die het juiste antwoord
+    // in de thread zette kreeg kroketpunten én EEUWIGE roem, en een balling kon zo gewoon
+    // doorspelen. Elke andere spelactie toetst dit wel — de quiz was het gat, juist omdat de
+    // deelname hier niet via een commando loopt maar via een gewoon threadbericht.
+    if (!members[reply.user]) continue;
+    if (isVerbannen(reply.user)) continue;
     // Sla dubbele gebruikers over — alleen eerste antwoord per persoon telt
     if (juisteAntwoorders.some(w => w.userId === reply.user)) continue;
     if (await isJuistAntwoord(tekst, quiz.antwoord, quiz.vraag)) {
@@ -12878,11 +13023,11 @@ async function onthulQuiz(client) {
   }
 
   // Punten uitdelen: eerste = 2 punten, rest = 1 punt
-  const uitgesteldeZegens = []; // verbondszegens pas posten ná de onthulling
+  const naspel = maakNaspel(juisteAntwoorders.map(w => w.userId));
   for (let i = 0; i < juisteAntwoorders.length; i++) {
     const { userId } = juisteAntwoorders[i];
     const punten = i === 0 ? 2 : 1;
-    await pasScoreAanMetCheck(client, userId, punten, { uitgesteldeZegens });
+    await pasScoreAanMetCheck(client, userId, punten, { naspel });
   }
 
   // Reveal-bericht in de thread
@@ -12912,8 +13057,10 @@ async function onthulQuiz(client) {
   }
 
   const onthulTekst = schoonOutput(await kroketResponse(onthulPrompt, 400, false));
-  await client.chat.postMessage({ channel: quiz.channel, thread_ts: quiz.ts, text: onthulTekst });
-  for (const post of uitgesteldeZegens) await post();
+  await client.chat.postMessage({ channel: quiz.channel, thread_ts: quiz.ts,
+    text: onthulTekst + naspelMenties(naspel) });
+  // De onthulling hangt zelf al in de quiz-thread, dus het naspel gaat daar netjes onder.
+  await postNaspel(client, quiz.channel, quiz.ts, naspel);
   quiz.afgerond = true;
   saveQuiz(quiz);
   console.log(`✅ Quiz onthuld. ${juisteAntwoorders.length} correct — eerste: ${juisteAntwoorders[0]?.userId || 'niemand'}`);
@@ -13307,19 +13454,37 @@ function planVerkondiging(tekst, kanaalKeuze, wanneerTs) {
 
 // Verwerkt elke minuut de openstaande geplande berichten die op tijd zijn.
 async function verwerkGeplandeBerichten() {
-  const data = loadGeplandeBerichten();
   const nu = Date.now();
-  let gewijzigd = false;
-  for (const b of data.berichten) {
-    if (b.status === 'wacht' && b.ts <= nu) {
-      try { await plaatsVerkondiging(b.tekst, b.kanaal); b.status = 'verzonden'; b.verzondenTs = nu; }
-      catch (e) { b.status = 'mislukt'; b.fout = String(e.message || e); }
-      gewijzigd = true;
-    }
+  // EERST claimen, dan pas plaatsen. Deze taak draait elke minuut, en plaatsVerkondiging is een
+  // LLM-call plus een Slack-post die makkelijk langer dan een minuut duurt. Met de status-write ná
+  // die await zag de volgende minuutslag hetzelfde bericht nog op 'wacht' staan en plaatste het
+  // opnieuw; en werd er tussentijds een nieuw bericht ingepland, dan overschreef deze write dat
+  // (de `data` van vóór de await). Claimen is read-en-write zonder await ertussen, dus atomair.
+  const claim = loadGeplandeBerichten();
+  // Een claim die een herstart niet overleefde staat nog op 'bezig' en zou daar voor altijd blijven
+  // staan. Na vijf minuten is er geen post meer onderweg, dus dan mag hij het opnieuw proberen —
+  // dezelfde inhaalgedachte als bij de andere taken: de staat volgt uit tijdstempels.
+  for (const b of claim.berichten) {
+    if (b.status === 'bezig' && nu - (b.geclaimdTs || 0) > 5 * 60_000) b.status = 'wacht';
   }
+  const teDoen = claim.berichten.filter(b => b.status === 'wacht' && b.ts <= nu);
+  for (const b of teDoen) { b.status = 'bezig'; b.geclaimdTs = nu; }
+  saveGeplandeBerichten(claim);
+  for (const geclaimd of teDoen) {
+    let status, extra;
+    try { await plaatsVerkondiging(geclaimd.tekst, geclaimd.kanaal); status = 'verzonden'; }
+    catch (e) { status = 'mislukt'; extra = String(e.message || e); }
+    // Vers inlezen: tijdens de post kan er een nieuw bericht bij zijn gekomen.
+    const na = loadGeplandeBerichten();
+    const rij = na.berichten.find(x => x.id === geclaimd.id);
+    if (rij) { rij.status = status; rij.verzondenTs = Date.now(); if (extra) rij.fout = extra; }
+    saveGeplandeBerichten(na);
+  }
+  const data = loadGeplandeBerichten();
+  let gewijzigd = false;
   // Oude afgehandelde berichten opruimen (ouder dan 7 dagen).
   const voor = data.berichten.length;
-  data.berichten = data.berichten.filter(b => b.status === 'wacht' || (b.verzondenTs || b.ts) > nu - 7 * 86_400_000);
+  data.berichten = data.berichten.filter(b => b.status === 'wacht' || b.status === 'bezig' || (b.verzondenTs || b.ts) > nu - 7 * 86_400_000);
   if (gewijzigd || data.berichten.length !== voor) saveGeplandeBerichten(data);
 }
 planCron('* * * * *', verwerkGeplandeBerichten, { timezone: 'Europe/Amsterdam' });

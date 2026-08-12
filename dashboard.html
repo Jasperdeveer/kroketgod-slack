@@ -611,6 +611,10 @@ function renderInstellingen(d){
     +'<button class="btn" data-actie="veilingOpen">🔨 Veiling openen</button>'
     +'<button class="btn" data-actie="veilingHamer">⚖️ Hamer laten vallen</button>'
     +'<button class="btn" data-actie="appHomeVerversen">🏠 App Home verversen</button></div>'
+    // Statusregel direct ónder de knoppen. De uitkomst ging eerder naar het spannetje bij de
+    // kaarttitel, ver hierboven, waardoor een melding als "Geen open veiling" onzichtbaar bleef
+    // en het leek alsof er niets gebeurde.
+    +'<div id="i_actiestatus" class="muted" style="margin-top:8px;min-height:1.2em"></div>'
     +'<div class="lbl" style="margin-top:16px;border-top:1px solid var(--line);padding-top:13px">🗓️ Seizoen &amp; wereldbord'+tip('Het seizoen loopt zes weken tegen één dreiging die door ieders spel wordt teruggedrongen. Synchroniseren doet wat de maandag-cron doet: de fase aankondigen, of een seizoen dat uit de tijd liep beslechten. Geveld/Verloren springt direct naar de finale en start meteen een nieuw seizoen — de uitkomst laat een week lang een zegen of vloek na op de winkelprijzen.')+'</div>'
     +'<div><button class="btn" data-actie="seizoenSync">🔄 Seizoen synchroniseren</button>'
     +'<button class="btn" data-actie="seizoenGeveld">🏆 Finale: geveld</button>'
@@ -653,7 +657,7 @@ function bewaar(){
   var uit=[];document.querySelectorAll('[data-prov]').forEach(function(c){if(c.checked)uit.push(c.getAttribute('data-prov'));});
   post('/api/instellingen',{stemmingOverride:document.getElementById('i_stemming').value,stilModus:document.getElementById('i_stil').checked,weekendRust:document.getElementById('i_weekend').checked,statusMeldingen:document.getElementById('i_dm').checked,alleenTestkanaal:document.getElementById('i_test').checked,spaarstand:document.getElementById('i_spaar').checked,providerUit:uit,kortafKans:(+document.getElementById('i_kortaf').value||0)/100,warrigKans:(+document.getElementById('i_warrig').value||0)/100,vrijdagAppendKans:(+document.getElementById('i_vrijdag').value||0)/100,decreetVanDeDag:document.getElementById('i_decreet').value,decreetIntensiteit:(+document.getElementById('i_decreetInt').value||0)/100},'Opgeslagen');
 }
-function doeActie(a){post('/api/actie',{actie:a},'Uitgevoerd');}
+function doeActie(a){post('/api/actie',{actie:a},'Uitgevoerd','i_actiestatus');}
 function skip(soort,key,ts,id){post('/api/overslaan',{soort:soort,key:key?decodeURIComponent(key):'',ts:ts,id:id},'Overgeslagen');}
 function verkondig(modus){
   var st=document.getElementById('i_status');
