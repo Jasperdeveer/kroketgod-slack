@@ -1002,9 +1002,12 @@ function verplaatsPunten(vanId, naarId, gewenst) {
 // De bundel wordt door de spelactie aangemaakt en meegegeven aan alles wat onderweg iets te melden
 // heeft. ZONDER bundel gedragen die functies zich exact als voorheen (los kanaalbericht): een
 // cron-taak heeft geen hoofdbericht om onder te hangen, en niet elke aanroepplek is omgebouwd.
-function maakNaspel(betrokkenIds = []) {
+// actorId: wie de actie zélf uitvoerde. Die wordt NOOIT ge-@'d — een ping voor iets wat je net zelf
+// hebt gedaan is per definitie ruis, en dat was precies de klacht.
+function maakNaspel(betrokkenIds = [], actorId = null) {
   return {
     regels: [],
+    actorId,
     betrokken: new Set(betrokkenIds.filter(Boolean)),
     zegenGehad: new Set(), // partners die in DEZE actie hun kans op een verbondszegen al hadden
   };
@@ -1019,12 +1022,23 @@ function naspelRegel(naspel, regel, ...betrokkenIds) {
   return true;
 }
 
-// De @-voetnoot onder het hoofdbericht. Alleen echte leden: een <@...> van een onbekende id rendert
-// in Slack als rauwe tekst.
+// De @-voetnoot onder het hoofdbericht. STAAT STANDAARD UIT.
+//
+// Waarom uit: in een kanaal van vijf leest iedereen toch alles, en de namen staan al vet in de tekst.
+// Een <@...> pingt écht, dus tagging bij elke duel, elk offer en elk eerbewijs maakt het notificatie-
+// lawaai erger dan het kanaallawaai dat het moest oplossen. En voor het geval dat het wél moet
+// opvallen — een zegen die verloopt, een titel die je kwijt bent, een verbanning die eindigt — bestaat
+// er al een eigen systeem: de verborgen statusmelding plus "SINDS UW LAATSTE BEZOEK" in de App Home.
+// Deze voetnoot was daar een luidruchtige verdubbeling van.
+//
+// Aan te zetten via het dashboard (instelling `menties`). Ook dán wordt de uitvoerder van de actie
+// nooit ge-@'d: alleen wie het passief overkomt.
+// Alleen echte leden: een <@...> van een onbekende id rendert in Slack als rauwe tekst.
 function naspelMenties(naspel) {
+  if (!instelling('menties')) return '';
   if (!naspel?.betrokken?.size) return '';
   const members = loadMembers();
-  const ids = [...naspel.betrokken].filter(id => members[id]);
+  const ids = [...naspel.betrokken].filter(id => members[id] && id !== naspel.actorId);
   return ids.length ? `\n\n👥 ${ids.map(id => `<@${id}>`).join(' ')}` : '';
 }
 
@@ -5028,7 +5042,7 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
         }
         const scoresNa = loadScores();
         const standBlok = `\n\n⚖️ *STANDEN*\n> ${koningNaam}: *${scoresNa[koningId] ?? 0}*\n> ${uitdagerNaam}: *${scoresNa[command.user_id] ?? 0}*`;
-        const troonNaspel = maakNaspel([command.user_id, koningId]);
+        const troonNaspel = maakNaspel([command.user_id, koningId], command.user_id);
         await postToChannel(client, command.channel_id,
           `${kop}\n\n> ${verhaal}${standBlok}\n\n— De Hoge Frituurraad${naspelMenties(troonNaspel)}`);
         return;
@@ -8258,7 +8272,7 @@ async function voerDuel(client, userId, doelId, channelId, wapenId = null) {
   // titelwissel, relikwie, weekopdracht) schrijft erin, en het geheel gaat als één thread-antwoord
   // onder het vonnis. Beide duellisten staan er meteen in, ook de verliezer — die wil wéten dat er
   // iets met hem gebeurd is.
-  const naspel = maakNaspel([userId, doelId]);
+  const naspel = maakNaspel([userId, doelId], userId);
   await pasScoreAanMetCheck(client, winId, 1, { channelId, naspel });
   // Premiejacht: stond er deze week een premie op het hoofd van de verliezer? De winnaar int hem.
   let premieBlok = '';
@@ -8532,7 +8546,7 @@ async function voerEer(client, geverId, ontvangerIds, reden, channelId) {
   registreerEer(geverId, ontvangers.length);
   const eerPunten = {};
   const verdubbeld = {};
-  const naspel = maakNaspel([geverId, ...ontvangers]);
+  const naspel = maakNaspel([geverId, ...ontvangers], geverId);
   for (const id of ontvangers) {
     let punten = Math.floor(Math.random() * 2) + 1; // 1 of 2
     if (heeftPowerup(id, 'dubbele_eer')) { punten *= 2; verdubbeld[id] = true; }
@@ -8704,7 +8718,7 @@ async function voerOffer(client, userId, inzet, channelId) {
   }
   if (delta !== 0) pasScoreAan(userId, delta);
   logGebeurtenis('offer', userId, `${bijnaam} offerde ${inzet} aan het Vetbad → ${delta >= 0 ? '+' : ''}${delta}`);
-  const naspel = maakNaspel([userId]);
+  const naspel = maakNaspel([userId], userId);
   if (roll < 0.06) await telActie(client, userId, 'jackpot', 1, naspel);
   const nieuweStand = loadScores()[userId] || 0;
   const hoofd = await postToChannel(client, channelId,
