@@ -2556,7 +2556,7 @@ const COMMANDO_LIJST = [
   { gebruik: '/kroketgod troon',      verwacht: 'aanschouw de Frituurkoning; grijp de kroon met `troon uitdagen`' },
   { gebruik: '/kroketgod winkel',     verwacht: 'de Heilige Aflatenhandel — besteed kroketpunten aan power-ups en status (ook met koopknoppen in de Home-tab van de bot)' },
   { gebruik: '/kroketgod gok krokant|slap', verwacht: 'voorspel het oordeel over de Kroket van de Dag (+2 bij juist)' },
-  { gebruik: '/kroketgod frituur [beschrijving]', verwacht: 'de Kroket God fritueert een visioen (afbeelding, 1x/uur)' },
+  { gebruik: '/kroketgod frituur [beschrijving]', verwacht: 'de Kroket God fritueert een visioen (afbeelding, 1x/uur) — of klik 🔮 Visioen in de Home-tab' },
 ];
 
 // Basislijst + wat features zelf declareren (zie registreerFeature). Functie i.p.v. const,
@@ -3571,12 +3571,17 @@ OUTPUT: Only the prompt. No explanation, no quotes.`,
     return false;
   }
 
-  const toelichting = await kroketResponse(
+  // MET vangnet: het beeld is op dit punt al gemaakt en de provider-quota al verbruikt. Gooide de
+  // toelichting een fout (LLM-keten plat, quota op), dan viel het hele visioen weg en kreeg de
+  // gebruiker "het vetbad is overbelast" te zien terwijl er een afbeelding klaarlag. Een ontbrekende
+  // sierzin mag nooit een geslaagd beeld weggooien.
+  const toelichting = await kroketResponseMetVangnet(
     `De Kroket God heeft een visioen laten verschijnen over: "${beschrijving}". Geef een korte, dramatische toelichting (2-3 zinnen) op dit visioen als goddelijke openbaring. ` +
     `KRITIEK: de Kroket God IS en BLIJFT de enige ware god — het visioen toont een BEELD, geen concurrent of gelijkwaardige godheid. ` +
     `Als het visioen gaat over een andere snack (frikandel, bitterbal, etc.), behandel het dan als een curieuze verschijning in de heilige frituurwalm — nooit als een god of opperwezen. ` +
     `Geen inleidingszin.`,
-    300, false
+    300, false,
+    '⚜️ _Het Grote Vetbad heeft gesproken. Aanschouw._'
   );
 
   const ext = mimeType.includes('jpeg') || mimeType.includes('jpg') ? 'jpg' : 'png';
@@ -4081,7 +4086,7 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
         { cmd: 'advies',                       uitleg: 'goddelijk advies voor aardse problemen' },
         { cmd: 'bs',                           uitleg: 'een heilige openbaring in managementtaal' },
         { cmd: 'orakel [vraag]',               uitleg: 'stel een vraag — het antwoord is zelden direct' },
-        { cmd: 'frituur [beschrijving]',       uitleg: 'de Kroket God visualiseert uw verzoek' },
+        { cmd: 'frituur [beschrijving]',       uitleg: 'de Kroket God visualiseert uw verzoek (1x/uur) — ook als 🔮-knop in de Home-tab' },
 
         { categorie: '🎰 Kansspel & macht' },
         // Aantal per dag uit offerLimiet(): dat hangt van de rang af, dus een vast getal hier zou
@@ -5134,45 +5139,10 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
 
     // ── Beeld genereren
     if (input.startsWith('frituur')) {
-      // Alleen leden van de kroket-illuminati mogen het Grote Vetbad activeren
-      const members = loadMembers();
-      if (!members[command.user_id]) {
-        const afwijzing = await kroketResponse(
-          `Een onbekende vreemdeling waagt het het Grote Vetbad te activeren zonder lid te zijn van de Kroket Illuminati. Wijs hem af in hoogstens 2 zinnen. Geen inleidingszin.`,
-          150, false
-        );
-        await respond({ text: schoonOutput(afwijzing), response_type: 'ephemeral' });
-        return;
-      }
-
-      // Cooldown: maximaal 1x per uur per lid (persistent — overleeft restarts)
-      const restMs = getFrituurCooldownRest(command.user_id);
-      if (restMs > 0) {
-        const restMin = Math.ceil(restMs / 60_000);
-        const bijnaam = members[command.user_id]?.bijnaam || 'Volgeling';
-        const wachtBericht = await kroketResponse(
-          `${bijnaam} probeert het Grote Vetbad opnieuw te activeren, maar het mag pas over ${restMin} minuut(en). Stuur hem weg in de huidige stemming van de Kroket God. Noem de resterende tijd. Hoogstens 2 zinnen. Geen inleidingszin.`,
-          150, false
-        );
-        await respond({ text: schoonOutput(wachtBericht), response_type: 'ephemeral' });
-        return;
-      }
-
-      zetFrituurCooldown(command.user_id);
-
-      const beschrijving = input.replace(/^frituur\s*/, '').trim() || 'de almachtige Kroket God op zijn troon';
-      const stemming = getDagelijkseStemming();
-      await respond({ text: '⚜️ _De Kroket God roept een visioen op uit het Grote Vetbad..._', response_type: 'ephemeral' });
-      // Mislukt de generatie (providers op / fout), dan kost het de gebruiker geen uur.
-      let beeldGelukt = false;
-      try {
-        beeldGelukt = await genereerBeeld(client, command.channel_id, command.user_id, beschrijving, stemming);
-      } catch (err) {
-        console.error('Frituur-generatie faalde:', err.message);
-        await postEphemeral(client, command.channel_id, command.user_id,
-          '⚜️ _Het Grote Vetbad is momenteel overbelast. Probeer het later opnieuw._');
-      }
-      if (!beeldGelukt) wisFrituurCooldown(command.user_id);
+      // De uitkomst wordt hier ephemeral teruggegeven; het beeld zelf komt in het kanaal.
+      const uitkomst = await voerVisioen(client, command.user_id, input.replace(/^frituur\s*/, '').trim(), command.channel_id,
+        { tussenmelding: (t) => respond({ text: t, response_type: 'ephemeral' }) });
+      if (uitkomst.tekst) await respond({ text: uitkomst.tekst, response_type: 'ephemeral' });
       return;
     }
 
@@ -8728,6 +8698,58 @@ async function voerOffer(client, userId, inzet, channelId) {
   return { ok: true, tekst: `_Het Vetbad heeft gesproken: ${delta > 0 ? `+${delta}` : delta} kroketpunt${Math.abs(delta) === 1 ? '' : 'en'}. Nieuwe stand: ${nieuweStand}._` };
 }
 
+// Frituur-visioen: de Kroket God fritueert een afbeelding. Gedeeld door `/kroketgod frituur` en de
+// knop in de App Home, zodat die twee niet uiteen kunnen lopen — dezelfde reden als bij voerDuel,
+// voerEer en voerOffer.
+//
+// De cooldown wordt vóór de generatie gezet en bij mislukking gewist: beeldgeneratie duurt tien tot
+// dertig seconden, dus zonder die claim vooraf kan één lid met twee snelle kliks twee visioenen
+// oproepen. Faalt de provider, dan kost het hem geen uur.
+async function voerVisioen(client, userId, beschrijving, channelId, { tussenmelding = null } = {}) {
+  const members = loadMembers();
+  if (!members[userId]) {
+    const afwijzing = await kroketResponseMetVangnet(
+      `Een onbekende vreemdeling waagt het het Grote Vetbad te activeren zonder lid te zijn van de Kroket Illuminati. Wijs hem af in hoogstens 2 zinnen. Geen inleidingszin.`,
+      150, false,
+      '_Het Grote Vetbad kent u niet. Alleen leden van de Kroket Illuminati mogen een visioen oproepen._');
+    return { ok: false, tekst: schoonOutput(afwijzing) };
+  }
+  if (isVerbannen(userId)) {
+    return { ok: false, tekst: '_Een balling krijgt geen visioen. Het vet toont hem enkel zijn eigen spiegelbeeld._' };
+  }
+  const restMs = getFrituurCooldownRest(userId);
+  if (restMs > 0) {
+    const bijnaam = members[userId].bijnaam;
+    const wacht = await kroketResponseMetVangnet(
+      `${bijnaam} probeert het Grote Vetbad opnieuw te activeren, maar het mag pas over ${Math.ceil(restMs / 60_000)} minuut(en). ` +
+      `Stuur hem weg in de huidige stemming van de Kroket God. Noem de resterende tijd. Hoogstens 2 zinnen. Geen inleidingszin.`,
+      150, false,
+      `_Het vet is nog niet op temperatuur. Uw volgende visioen kan over ${resterendeTijd(restMs)}._`);
+    return { ok: false, tekst: schoonOutput(wacht) };
+  }
+
+  zetFrituurCooldown(userId);
+  if (tussenmelding) await tussenmelding('⚜️ _De Kroket God roept een visioen op uit het Grote Vetbad..._');
+  let gelukt = false;
+  try {
+    gelukt = await genereerBeeld(client, channelId, userId,
+      beschrijving || 'de almachtige Kroket God op zijn troon', getDagelijkseStemming());
+  } catch (err) {
+    console.error('Frituur-generatie faalde:', err.message);
+  }
+  if (!gelukt) {
+    wisFrituurCooldown(userId);
+    return { ok: false, tekst: '⚜️ _Het Grote Vetbad is momenteel overbelast. Probeer het later opnieuw — dit kostte u geen uur._' };
+  }
+  // Een visioen oproepen is een DAAD in de frituur, dus een teken van leven voor het tribunaal.
+  // Het weegt bewust niet mee in de seizoenscampagne: 'visioen' staat niet in SEIZOEN_GEWICHT, en
+  // een gratis actie zonder inzet hoort de dreiging niet terug te dringen. Wie alleen plaatjes maakt
+  // en nooit iets zegt loopt nog steeds tegen de zwijgen-grond van het tribunaal aan — precies zoals
+  // die grond bedoeld is.
+  await telActie(client, userId, 'visioen');
+  return { ok: true, tekst: '⚜️ _Het visioen staat in het kanaal._' };
+}
+
 // Koop in de Heilige Aflatenhandel. `doelId` alleen nodig voor de Vloek (anoniem op een ander).
 async function koopWinkelItem(client, userId, itemKey, doelId, channelId) {
   const members = loadMembers();
@@ -11567,6 +11589,11 @@ function bouwAppHomeBlocks(userId, melding = '') {
     if (telEerVandaag(userId) < eerLimiet(userId)) {
       acties.push({ type: 'button', text: { type: 'plain_text', text: '🙏 Eer geven', emoji: true }, action_id: 'open_eer', style: 'primary' });
     }
+    // Visioen: alleen aanbieden als de uurklok vrij is — een knop die gegarandeerd "nog even
+    // wachten" antwoordt is een knop die liegt.
+    if (getFrituurCooldownRest(userId) === 0) {
+      acties.push({ type: 'button', text: { type: 'plain_text', text: '🔮 Visioen', emoji: true }, action_id: 'open_visioen' });
+    }
     // Bingo alleen aanbieden als er een kaart ligt met nog openstaande opdrachten.
     const bingoNu = readJSON('bingo.json', null);
     if (bingoNu?.weekStart === getMondayOfWeek() && bingoNu.opdrachten?.length
@@ -11967,6 +11994,34 @@ app.action('open_offer', async ({ ack, body, client }) => {
   } catch (err) { console.error('Fout bij openen offer-modal:', err.data?.error || err.message); }
 });
 
+app.action('open_visioen', async ({ ack, body, client }) => {
+  await ack();
+  try {
+    await client.views.open({
+      trigger_id: body.trigger_id,
+      view: {
+        type: 'modal', callback_id: 'modal_visioen',
+        title: { type: 'plain_text', text: 'Frituur-visioen' },
+        submit: { type: 'plain_text', text: 'Frituren' },
+        close: { type: 'plain_text', text: 'Sluiten' },
+        blocks: [
+          { type: 'section', text: { type: 'mrkdwn', text:
+            '🔮 *De Kroket God fritueert een visioen.*\nBeschrijf wat u wilt zien — stijl en sfeer kiest de Raad zelf. ' +
+            'Eén visioen per uur. Het beeld komt in het kanaal.' } },
+          {
+            // optional: leeg laten mag, dan kiest voerVisioen het standaardvisioen. Een verplicht
+            // veld zou de knop onnodig zwaar maken voor "verras me".
+            type: 'input', block_id: 'wens', optional: true,
+            label: { type: 'plain_text', text: 'Wat moet de Kroket God tonen?' },
+            element: { type: 'plain_text_input', action_id: 'tekst', multiline: true, max_length: 300,
+                       placeholder: { type: 'plain_text', text: 'de almachtige Kroket God op zijn troon' } },
+          },
+        ],
+      },
+    });
+  } catch (err) { console.error('Fout bij openen visioen-modal:', err.data?.error || err.message); }
+});
+
 // Submissions: ack eerst (sluit de modal), dan de logica en de Home verversen.
 const KANAAL = () => process.env.SLACK_CHANNEL_ID;
 app.view('modal_duel', async ({ ack, body, view, client }) => {
@@ -12004,6 +12059,15 @@ app.view('modal_bingo', async ({ ack, body, view, client }) => {
     const uitkomst = await verwerkBingoClaim(client, body.user.id, nr, bewijs, KANAAL());
     await publiceerAppHome(client, body.user.id, uitkomst.tekst);
   } catch (err) { console.error('Fout bij bingo-modal:', err); }
+});
+app.view('modal_visioen', async ({ ack, body, view, client }) => {
+  await ack();
+  const wens = (view.state.values.wens?.tekst?.value || '').trim();
+  // Beeldgeneratie duurt tien tot dertig seconden. Zonder tussenmelding lijkt de knop niets te doen
+  // en gaat iemand nog een keer klikken — vandaar dat de Home meteen bijgewerkt wordt.
+  await publiceerAppHome(client, body.user.id, '⚜️ _De Kroket God roept een visioen op uit het Grote Vetbad — dit duurt even._');
+  const uitkomst = await voerVisioen(client, body.user.id, wens, KANAAL());
+  await publiceerAppHome(client, body.user.id, uitkomst.tekst);
 });
 app.view('modal_roof', async ({ ack, body, view, client }) => {
   await ack();
