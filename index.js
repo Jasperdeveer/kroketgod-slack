@@ -3491,6 +3491,10 @@ OUTPUT: Only the prompt. No explanation, no quotes.`,
 
   let buffer;
   let mimeType = 'image/png';
+  // Gaven ALLE beeld-sleutels een 429, dan is het dagquota op en helpt "probeer het later" niet:
+  // dan is het morgen. Dat onderscheid maakt het verschil tussen een speler die één keer wacht en
+  // een speler die tien keer op de knop drukt.
+  let quotaOp = false;
 
   // ── Primair: Gemini 2.0 Flash image generation (roteert over álle Gemini-keys) ──
   // Gebruikt dezelfde key-pool als de tekst-keten (geminiKeys()), dus profiteert nu ook van
@@ -3524,6 +3528,7 @@ OUTPUT: Only the prompt. No explanation, no quotes.`,
       } else {
         const errText = await resp.text();
         console.warn(`⚠️ Gemini image ${resp.status}: ${errText.substring(0, 200)}`);
+        if (resp.status === 429) quotaOp = true; // dagquota van deze sleutel is op
         // Alleen bij quota/rate-limit of serverfout de volgende key proberen; anders stoppen.
         if (!(resp.status === 429 || resp.status >= 500)) break;
       }
@@ -3532,10 +3537,18 @@ OUTPUT: Only the prompt. No explanation, no quotes.`,
     }
   }
 
-  // ── Fallback: HuggingFace Inference API (FLUX.1-schnell) ─────────────────────
+  // ── Fallback: HuggingFace Inference API ──────────────────────────────────────
+  // Model en stappen komen uit de omgeving. Dit stond hardgecodeerd op FLUX.1-schnell, en toen
+  // hf-inference dat model liet vallen ("410: deprecated and no longer supported by provider")
+  // was de énige fallback stil en permanent dood — precies op het moment dat hij nodig was, want
+  // Gemini's dagquota voor beelden is doorgaans halverwege de dag op. Een deprecatie hoort geen
+  // deploy te kosten.
+  // 28 stappen is de standaard van SD3-medium (~14s); FLUX-schnell werkte op 4. Vandaar instelbaar.
   if (!buffer && process.env.HF_API_TOKEN) {
-    console.log('🔄 Gemini image niet beschikbaar — fallback naar HuggingFace FLUX...');
-    const hfUrl = 'https://router.huggingface.co/hf-inference/models/black-forest-labs/FLUX.1-schnell';
+    const hfModel = process.env.HF_IMAGE_MODEL || 'stabilityai/stable-diffusion-3-medium-diffusers';
+    const hfStappen = Number(process.env.HF_IMAGE_STEPS) || 28;
+    console.log(`🔄 Gemini image niet beschikbaar — fallback naar HuggingFace (${hfModel})...`);
+    const hfUrl = `https://router.huggingface.co/hf-inference/models/${hfModel}`;
     for (let poging = 1; poging <= 2; poging++) {
       try {
         const response = await fetch(hfUrl, {
@@ -3544,7 +3557,7 @@ OUTPUT: Only the prompt. No explanation, no quotes.`,
             'Authorization': `Bearer ${process.env.HF_API_TOKEN}`,
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({ inputs: beeldPrompt, parameters: { num_inference_steps: 4, width: 1024, height: 1024 } }),
+          body: JSON.stringify({ inputs: beeldPrompt, parameters: { num_inference_steps: hfStappen, width: 1024, height: 1024 } }),
           timeout: 60000,
         });
         const contentType = response.headers.get('content-type') || '';
@@ -3565,11 +3578,10 @@ OUTPUT: Only the prompt. No explanation, no quotes.`,
     }
   }
 
-  if (!buffer) {
-    await postEphemeral(client, channelId, userId,
-      '⚜️ _Het Grote Vetbad is momenteel overbelast. Probeer het later opnieuw._');
-    return false;
-  }
+  // Geen eigen bericht meer: voerVisioen meldt de uitkomst al op de plek waar de speler klikte, en
+  // twee keer hetzelfde zeggen is precies de ruis die we elders hebben weggehaald. Wél de reden
+  // teruggeven, zodat het bericht kan kloppen: "quota op" is iets anders dan "probeer het later".
+  if (!buffer) return { ok: false, reden: quotaOp ? 'quota' : 'fout' };
 
   // MET vangnet: het beeld is op dit punt al gemaakt en de provider-quota al verbruikt. Gooide de
   // toelichting een fout (LLM-keten plat, quota op), dan viel het hele visioen weg en kreeg de
@@ -3591,7 +3603,7 @@ OUTPUT: Only the prompt. No explanation, no quotes.`,
     filename: `kroketgod.${ext}`,
     initial_comment: schoonOutput(toelichting),
   });
-  return true;
+  return { ok: true };
 }
 
 // ── Voice / TTS via Pollinations ──────────────────────────────────────────────
@@ -8730,16 +8742,20 @@ async function voerVisioen(client, userId, beschrijving, channelId, { tussenmeld
 
   zetFrituurCooldown(userId);
   if (tussenmelding) await tussenmelding('⚜️ _De Kroket God roept een visioen op uit het Grote Vetbad..._');
-  let gelukt = false;
+  let beeld = { ok: false, reden: 'fout' };
   try {
-    gelukt = await genereerBeeld(client, channelId, userId,
+    beeld = await genereerBeeld(client, channelId, userId,
       beschrijving || 'de almachtige Kroket God op zijn troon', getDagelijkseStemming());
   } catch (err) {
     console.error('Frituur-generatie faalde:', err.message);
   }
-  if (!gelukt) {
+  if (!beeld?.ok) {
     wisFrituurCooldown(userId);
-    return { ok: false, tekst: '⚜️ _Het Grote Vetbad is momenteel overbelast. Probeer het later opnieuw — dit kostte u geen uur._' };
+    // Eerlijk zijn over wat er aan de hand is: bij een opgebruikt dagquota heeft nog eens proberen
+    // geen zin, en "probeer het later opnieuw" nodigt dan uit tot tien keer klikken.
+    return { ok: false, tekst: beeld?.reden === 'quota'
+      ? '⚜️ _Het vet is voor vandaag opgestookt — de Raad kan geen visioen meer laten verschijnen. Morgen brandt het weer. Dit kostte u geen uur._'
+      : '⚜️ _Het Grote Vetbad is momenteel overbelast. Probeer het later opnieuw — dit kostte u geen uur._' };
   }
   // Een visioen oproepen is een DAAD in de frituur, dus een teken van leven voor het tribunaal.
   // Het weegt bewust niet mee in de seizoenscampagne: 'visioen' staat niet in SEIZOEN_GEWICHT, en
