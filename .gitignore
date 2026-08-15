@@ -58,9 +58,34 @@ opdrachten.json
 
 tellers.json
 
+# Het Grote Archief: elk bericht dat ooit in het kanaal stond. Puur ledengegevens, groeit
+# eeuwig door en de Pi is de enige echte bron — die mag een git reset nooit overschrijven.
+grootarchief.ndjson
+
+# De Voorraadkelder: vooruit gegenereerde kanaalinhoud, per machine en per dag.
+voorraad.json
+
+# De Frituurbeurs: posities per week. Geheim voor de leden onderling.
+beurs.json
+
 # Backups bevatten kopieën van alle ledengegevens
 backups/
 
 # Claude Code: lokale (machine-specifieke) instellingen
 .claude/settings.local.json
 vetbadoverride.json
+
+# Het Verhoor: gebruikte citaten en de lopende ronde.
+verhoor.json
+
+# De Kroketkroniek: afleveringen van het feuilleton.
+kroniek.json
+
+# Het Sociale Weefsel: gerichte relatietellers per ledenpaar.
+weefsel.json
+
+# De Tijdcapsule: verzegelde en beoordeelde voorspellingen.
+tijdcapsule.json
+
+# De Hoge Frituurraad: het register van gewezen zaken.
+jurisprudentie.json
