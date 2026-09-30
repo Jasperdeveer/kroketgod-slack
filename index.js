@@ -44,6 +44,8 @@ const { dashboardAuth, logAudit, leesDashboardHtml } = require('./lib/dashboardk
 const { readJSON, writeJSON } = require('./lib/state.js');
 const { isWeekendAms, getAmsOffsetMs, getMondayOfWeek, secondenTotVrijdagMiddag } = require('./lib/tijd.js');
 const { isHoofdletterSpam, kapAfOpZinsgrens, normaliseerOndertekening, AFKORTING_VOOR_PUNT } = require('./lib/tekst.js');
+const { commandoRegister } = require('./lib/commandoregister.js');
+const { bouwCommandoMenus, bouwMenuBlocks, bouwCommandoModal, bouwCommandoTekst, leesModalWaarden, heeftVelden } = require('./lib/homecommandos.js');
 const { hpBalk, homeTabel, homeBalken, homeVoortgang, homeVoortgangInline, ladingMeter, METER_MAX, homeKaartKop } = require('./lib/blocks.js');
 const { STANDAARD_INSTELLINGEN, loadInstellingen, instelling, saveInstellingen } = require('./lib/instellingen.js');
 const { UIT_KARAKTER_PATRONEN, RIJKSGRENS_PATRONEN, INJECTIE_AFWIJZINGEN, KARAKTER_FALLBACK, RIJKSGRENS_FALLBACK, isUitKarakter, isRijksgrensOvertreding, willekeurigeInjectieAfwijzing } = require('./lib/karakter.js');
@@ -2540,12 +2542,17 @@ function getTijdContext() {
   return { dagdeel, dagNaam: dagNaamNl, seizoen, uur, dag: dagNummer };
 }
 
+// Het register zelf staat in lib/commandoregister.js; hier alleen de gebruikersafhankelijke getallen.
+function geheimeCommandos(userId) {
+  return commandoRegister({ offerPerDag: offerLimiet(userId), vetbadMax: VETBAD_MAX_INZET });
+}
+
 // ── Help & Commando's ──────────────────────────────────────────────────────────
 
 const COMMANDO_LIJST = [
   { gebruik: '/kroketgod [tekst]',    verwacht: 'vrije vraag, oordeel of opdracht' },
   { gebruik: '/kroketgod aanmelden',  verwacht: 'word lid van de Illuminati' },
-  { gebruik: '/kroketgod eer [naam] (voor [reden])', verwacht: '1–2 kroketpunten voor een lid, optionele reden' },
+  { gebruik: '/kroketgod eer [namen] (voor [reden])', verwacht: '1–2 kroketpunten per lid — meerdere namen met "en" of komma, optionele reden' },
   { gebruik: '/kroketgod ranglijst',  verwacht: 'wie staat waar in de hiërarchie' },
   { gebruik: '/kroketgod duel [naam]', verwacht: 'heilig frituurduel — winnaar pakt het punt van de verliezer (1x/dag)' },
   { gebruik: '/kroketgod roof [naam]', verwacht: 'de Grote Kroketroof — 40% kans op een flinke buit (tot 8 punten), anders 2 punten smartengeld (1x/week)' },
@@ -2818,7 +2825,11 @@ const STOPWOORDEN = new Set([
 function vervangNamen(tekst) {
   if (!tekst) return tekst;
   const members = loadMembers();
+  // Bijnamen die al in de tekst staan eerst afschermen: anders wordt de voornaam ín een bijnaam
+  // nog eens vervangen ("Bitterbal Bram" → "Bitterbal Bitterbal Bram") en herkent niemand hem.
+  const bijnamen = Object.values(members).map(m => m.bijnaam).filter(Boolean).sort((a, b) => b.length - a.length);
   let resultaat = tekst;
+  bijnamen.forEach((b, i) => { resultaat = resultaat.split(b).join(`\u0000${i}\u0000`); });
   for (const m of Object.values(members)) {
     const v = m.voornaam;
     // Skip lege, te korte (≤3 chars), of stopwoorden — anders matcht het overal
@@ -2827,7 +2838,7 @@ function vervangNamen(tekst) {
     const veilig = v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     resultaat = resultaat.replace(new RegExp(`\\b${veilig}\\b`, 'gi'), m.bijnaam);
   }
-  return resultaat;
+  return resultaat.replace(/\u0000(\d+)\u0000/g, (_, i) => bijnamen[i]);
 }
 
 
@@ -3862,6 +3873,12 @@ async function voerVerkondiging(client, v, { input, aanvrager, channelId }) {
 
 app.command('/kroketgod', async ({ command, ack, respond, client }) => {
   await ack();
+  await voerKroketCommandoUit({ command, respond, client });
+});
+
+// De eigenlijke commando-afhandeling. Los van app.command zodat de App Home precies dezelfde
+// route kan nemen (zie voerHomeCommandoUit) — één plek voor alle regels en limieten.
+async function voerKroketCommandoUit({ command, respond, client }) {
 
   // Leer testkanaal IDs dynamisch zodat message/mention events ze ook herkennen
   if (TEST_KANALEN.includes(command.channel_name) && command.channel_id) {
@@ -4063,73 +4080,7 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
 
     // Geheime prompts — volledig register van alle commando's
     if (input === 'kroketprompts') {
-      // ── REGISTER VAN GEHEIME COMMANDO'S ──────────────────────────────────────
-      // Voeg nieuwe commando's hier toe — kroketprompts-lijst wordt automatisch opgebouwd
-      const GEHEIME_COMMANDO_S = [
-        { categorie: '📊 De Hoge Frituurraad' },
-        { cmd: 'ranglijst',                    uitleg: 'wie staat waar in de goddelijke hiërarchie' },
-        { cmd: 'status',                       uitleg: 'de staat van het Rijk, plus uw eigen actieve zegeningen met resttijd en al uw cooldowns' },
-        { cmd: 'dossier [naam]',               uitleg: 'het volledige kroket-archief van een volgeling' },
-        { cmd: 'streaks',                      uitleg: 'wie verschijnt trouw op het heilige vrijdagmoment' },
-        { cmd: 'stem [naam]',                  uitleg: 'wijs de Held van de Week aan — één stem, één keer' },
-        { cmd: 'eer [naam] (voor [reden])',     uitleg: 'betuig eer aan een volgeling — de Frituurraad kent de gevolgen' },
-        { cmd: 'zondebok',                     uitleg: 'de Raad wijst iemand aan — wie dat is, weet u van tevoren niet' },
-        { cmd: 'weekoverzicht',                uitleg: 'wat de Hoge Frituurraad deze week heeft bijgehouden' },
-
-        { categorie: '⚖️ Recht & orde' },
-        { cmd: 'gelekaart [naam] [reden]',     uitleg: 'een formele waarschuwing — de Raad onthoudt alles' },
-        { cmd: 'begenade [naam]',              uitleg: 'de Kroket God verleent gratie — zelden, maar het bestaat' },
-        { cmd: 'beroep [smoes]',               uitleg: 'vraag herziening van uw vonnis — de uitkomst is onbekend' },
-        { cmd: 'uitbreken',                    uitleg: 'probeer het ballingschap te verlaten — risico\'s zijn voor eigen rekening' },
-        { cmd: 'klacht [naam] [beschrijving]', uitleg: 'dien anoniem een aanklacht in — anonimiteit is niet gegarandeerd' },
-        { cmd: 'meld [naam]',                  uitleg: 'meld een verdachte bij de Frituurraad' },
-        { cmd: 'rechtbank [naam] vs [naam]',   uitleg: 'breng twee volgelingen voor de rechtbank — de Kroket God oordeelt' },
-
-        { categorie: '⚔️ Allianties' },
-        { cmd: 'alliantie [naam]',             uitleg: 'sluit een heilig verbond met een andere volgeling' },
-        { cmd: 'alliantie verbreek',           uitleg: 'verbreek het verbond — dit wordt niet vergeten' },
-        { cmd: 'alliantie overzicht',          uitleg: 'bekijk alle actieve verbonden in het Rijk' },
-
-        { categorie: '🌍 Goddelijke kennis' },
-        { cmd: 'weer',                         uitleg: 'de Kroket God raadpleegt de elementen' },
-        { cmd: 'feitje',                       uitleg: 'een feit uit de archieven — herkomst varieert' },
-        { cmd: 'mop',                          uitleg: 'de Frituurraad heeft humor. Soms.' },
-        { cmd: 'quiz',                         uitleg: 'vier keuzes, één waarheid — bewijs uw snackwijsheid' },
-        { cmd: 'advies',                       uitleg: 'goddelijk advies voor aardse problemen' },
-        { cmd: 'bs',                           uitleg: 'een heilige openbaring in managementtaal' },
-        { cmd: 'orakel [vraag]',               uitleg: 'stel een vraag — het antwoord is zelden direct' },
-        { cmd: 'frituur [beschrijving]',       uitleg: 'de Kroket God visualiseert uw verzoek (1x/uur) — ook als 🔮-knop in de Home-tab' },
-
-        { categorie: '🎰 Kansspel & macht' },
-        // Aantal per dag uit offerLimiet(): dat hangt van de rang af, dus een vast getal hier zou
-        // voor de helft van de leden gelogen zijn (en verouderen zodra de limiet wijzigt).
-        { cmd: 'offer [aantal]',               uitleg: `offer kroketpunten aan het Grote Vetbad — fortuin of ondergang (max ${VETBAD_MAX_INZET}, ${offerLimiet(command.user_id)}×/dag)` },
-        { cmd: 'troon',                        uitleg: 'aanschouw de huidige Frituurkoning en hoe lang hij heerst' },
-        { cmd: 'troon uitdagen',               uitleg: 'bestrijd de koning om de troon — 3 punten inzet, 1×/dag' },
-
-        { categorie: '🔮 Rituelen & mysteriën' },
-        { cmd: 'hoelang',                      uitleg: 'hoever is het heilige vrijdagmoment nog' },
-        { cmd: 'vrijdag',                      uitleg: 'de toestand van het heiligste moment van de week' },
-        { cmd: 'slachtoffer',                  uitleg: 'de Raad kiest iemand — criteria zijn geheim' },
-        { cmd: 'gebod [1-10]',                 uitleg: 'raadpleeg een van de Tien Geboden' },
-        { cmd: 'biecht [zonde]',               uitleg: 'beken uw overtreding — openbaar of fluisterend' },
-        { cmd: 'horoscoop [naam]',             uitleg: 'de sterren spreken over een volgeling' },
-        { cmd: 'straf [naam]',                 uitleg: 'de Kroket God spreekt iemand aan' },
-        { cmd: 'bekeer [naam]',                uitleg: 'breng een buitenstaander in contact met de snackleer' },
-        { cmd: 'canoniseer [naam]',            uitleg: 'verhef een volgeling tot heilige van de frituur' },
-        { cmd: 'geef [naam] een kroket-therapiesessie', uitleg: 'de Hoge Frituurraad analyseert een ziel' },
-        { cmd: 'onthul de naam van mijn spirit-kroket', uitleg: 'ontdek welke kroket uw innerlijk vertegenwoordigt' },
-        { cmd: 'complot',                      uitleg: 'de Raad heeft de berichten gelezen — conclusies volgen' },
-        { cmd: 'missie',                       uitleg: 'uw lopende opdracht — als u die heeft' },
-        { cmd: 'missie starten',               uitleg: '(admin) de Raad wijst een stille opdracht toe' },
-        { cmd: 'rolwissel [naam] | [nieuwe rol]', uitleg: '(admin) een functie in het Rijk wisselt van hand' },
-        { cmd: 'quiz starten',                 uitleg: '(admin) post een triviavraag — eerste juiste antwoord in de thread wint' },
-        { cmd: 'quiz onthul',                  uitleg: '(admin) onthul het antwoord van de actieve quiz nu' },
-        { cmd: 'kroket-van-de-dag',            uitleg: '(admin) het dagelijkse voorstel en de uitslag van gisteren' },
-        { cmd: 'onthoud [tekst]',              uitleg: '(admin) schrijf iets in de rijksarchieven' },
-        { cmd: 'vergeet [zoekterm]',           uitleg: '(admin) wis een gegeven uit de rijksarchieven' },
-        { cmd: 'kennisbank',                   uitleg: '(admin) raadpleeg de rijksarchieven' },
-      ];
+      const GEHEIME_COMMANDO_S = geheimeCommandos(command.user_id);
 
       const regels = ['🕵️ *ALLE KROKET PROMPTS*', '_Typ achter `/kroketgod`_', ''];
       for (const item of GEHEIME_COMMANDO_S) {
@@ -5733,7 +5684,7 @@ app.command('/kroketgod', async ({ command, ack, respond, client }) => {
       : '⚜️ _De frituurinstallatie is tijdelijk overbelast. Probeer het later opnieuw._';
     await respond({ text: bericht, response_type: 'ephemeral' });
   }
-});
+}
 
 // ── Modal callback: aanmelding ─────────────────────────────────────────────────
 
@@ -11498,7 +11449,7 @@ registreerFeature({
 
 
 
-function bouwAppHomeBlocks(userId, melding = '') {
+function bouwAppHomeBlocks(userId, melding = '', extraBlocks = []) {
   const members = loadMembers();
   const lid = members[userId];
   if (!lid) {
@@ -11545,7 +11496,9 @@ function bouwAppHomeBlocks(userId, melding = '') {
   ];
   // Uitkomst van een zojuist ingedrukte knop — een ephemeral in het kanaal zou de gebruiker
   // die in de Home-tab kijkt niet zien, dus de melding komt bovenaan de ververste view.
-  if (melding) blocks.push({ type: 'section', text: { type: 'mrkdwn', text: `> ${melding}` } });
+  if (melding) blocks.push({ type: 'section', text: { type: 'mrkdwn', text: kapTekst(`> ${melding}`, 3000) } });
+  // Blokken die een commando als antwoord gaf (bv. het tribunaalbord), direct onder de melding.
+  if (extraBlocks.length) blocks.push(...extraBlocks.slice(0, 20), { type: 'divider' });
 
   // ── Kaart: uw staat ──
   // Rang + voortgang naar de volgende rang: dit is de permanente progressie-as van het spel
@@ -11756,6 +11709,11 @@ function bouwAppHomeBlocks(userId, melding = '') {
     }
   }
 
+  // ── Kaart: alle commando's (uit het centrale register, zie geheimeCommandos) ──
+  blocks.push(...homeKaartKop('📜 ALLE COMMANDO\'S'));
+  blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: '_Kies een commando; de Kroket God antwoordt in het kanaal of hier bovenaan._' }] });
+  blocks.push(...bouwMenuBlocks(homeCommandoMenus(userId)));
+
   blocks.push({ type: 'actions', elements: [
     { type: 'button', text: { type: 'plain_text', text: '🔄 Verversen', emoji: true }, action_id: 'home_verversen' },
   ] });
@@ -11764,11 +11722,20 @@ function bouwAppHomeBlocks(userId, melding = '') {
   return blocks;
 }
 
-async function publiceerAppHome(client, userId, melding = '') {
+// Slack weigert een Home-view met meer dan 100 blokken in zijn geheel. Liever het staartje
+// kwijt dan een lege Home-tab.
+function kapHomeBlocks(blocks) {
+  if (blocks.length <= 100) return blocks;
+  console.warn(`⚠️ App Home had ${blocks.length} blokken — afgekapt op 100`);
+  // De laatste twee blokken (verversknop + voetnoot) blijven altijd staan.
+  return [...blocks.slice(0, 97), { type: 'context', elements: [{ type: 'mrkdwn', text: '_(De Home-tab is te vol; een deel is weggelaten.)_' }] }, ...blocks.slice(-2)];
+}
+
+async function publiceerAppHome(client, userId, melding = '', extraBlocks = []) {
   try {
     await slackLimiter.schedule(() => client.views.publish({
       user_id: userId,
-      view: { type: 'home', blocks: bouwAppHomeBlocks(userId, melding) },
+      view: { type: 'home', blocks: kapHomeBlocks(bouwAppHomeBlocks(userId, melding, extraBlocks)) },
     }));
   } catch (err) {
     // Meestal: Home-tab staat uit in de Slack-app-config (error 'not_enabled' / invalid_arguments).
@@ -11940,9 +11907,11 @@ app.action('open_eer', async ({ ack, body, client }) => {
         submit: opties.length ? { type: 'plain_text', text: 'Eren' } : undefined,
         close: { type: 'plain_text', text: 'Sluiten' },
         blocks: opties.length ? [
-          { type: 'section', text: { type: 'mrkdwn', text: `🙏 *Eer een medelid* voor iets verdienstelijks. De Kroket God kent 1 of 2 kroketpunten toe.\n_U heeft vandaag nog ${Math.max(0, eerLimiet(body.user.id) - telEerVandaag(body.user.id))} eerbewijs/-bewijzen over._` } },
+          { type: 'section', text: { type: 'mrkdwn', text: `🙏 *Eer een of meer medeleden* voor iets verdienstelijks. De Kroket God kent ieder 1 of 2 kroketpunten toe.\n_U heeft vandaag nog ${Math.max(0, eerLimiet(body.user.id) - telEerVandaag(body.user.id))} eerbewijs/-bewijzen over._` } },
           { type: 'input', block_id: 'doelwit', label: { type: 'plain_text', text: 'Wie verdient eer?' },
-            element: { type: 'static_select', action_id: 'keuze', options: opties, placeholder: { type: 'plain_text', text: 'Een medelid…' } } },
+            element: { type: 'multi_static_select', action_id: 'keuze', options: opties.slice(0, 100),
+              max_selected_items: Math.max(1, eerLimiet(body.user.id) - telEerVandaag(body.user.id)),
+              placeholder: { type: 'plain_text', text: 'Een of meer medeleden…' } } },
           { type: 'input', block_id: 'reden', optional: true, label: { type: 'plain_text', text: 'Waarvoor? (optioneel)' },
             element: { type: 'plain_text_input', action_id: 'tekst', max_length: 300, placeholder: { type: 'plain_text', text: 'bijv. bracht kroketten mee naar de vrijdagborrel' } } },
         ] : [{ type: 'section', text: { type: 'mrkdwn', text: '_Er is niemand om te eren._' } }],
@@ -12051,10 +12020,12 @@ app.view('modal_duel', async ({ ack, body, view, client }) => {
 app.view('modal_eer', async ({ ack, body, view, client }) => {
   await ack();
   try {
-    const doelId = view.state.values.doelwit?.keuze?.selected_option?.value;
+    const keuze = view.state.values.doelwit?.keuze;
+    const doelIds = keuze?.selected_options?.map(o => o.value) || [keuze?.selected_option?.value].filter(Boolean);
     const reden = (view.state.values.reden?.tekst?.value || '').trim();
-    // Limiet hier, want de aanroeper weet hoeveel eerbewijzen er worden uitgedeeld (hier: 1).
-    if (telEerVandaag(body.user.id) >= eerLimiet(body.user.id)) {
+    // Limiet hier, want de aanroeper weet hoeveel eerbewijzen er worden uitgedeeld.
+    const resterend = eerLimiet(body.user.id) - telEerVandaag(body.user.id);
+    if (resterend <= 0) {
       await publiceerAppHome(client, body.user.id, `_Uw dagelijkse eerlimiet (${eerLimiet(body.user.id)}) is bereikt. Morgen hervat de vrijgevigheid._`);
       return;
     }
@@ -12062,8 +12033,11 @@ app.view('modal_eer', async ({ ack, body, view, client }) => {
       await publiceerAppHome(client, body.user.id, '_Een balling deelt geen eer uit. Toon eerst berouw._');
       return;
     }
-    const uitkomst = await voerEer(client, body.user.id, [doelId], reden, KANAAL());
-    await publiceerAppHome(client, body.user.id, uitkomst.tekst);
+    // De modal kan verouderd zijn (limiet elders verbruikt): kap af, net als het commando.
+    const teVeel = doelIds.length > resterend;
+    const uitkomst = await voerEer(client, body.user.id, doelIds.slice(0, resterend), reden, KANAAL());
+    await publiceerAppHome(client, body.user.id,
+      uitkomst.tekst + (teVeel ? `\n_U had nog ${resterend} eerbewijs/-bewijzen over; de overige namen zijn genegeerd._` : ''));
   } catch (err) { console.error('Fout bij eer-modal:', err); }
 });
 
@@ -12126,6 +12100,78 @@ app.action('home_verversen', async ({ ack, body, client }) => {
     console.log(`🔘 Knop "home_verversen" ingedrukt door ${naam} (App Home)`);
     await publiceerAppHome(client, body.user.id);
   } catch (err) { console.error('Fout bij home-verversen:', err); }
+});
+
+// ── App Home: alle commando's ─────────────────────────────────────────────────
+// De menu's komen uit hetzelfde register als `kroketprompts` en `help`, dus een nieuw commando
+// staat vanzelf in de Home. Uitvoeren gaat via voerKroketCommandoUit — exact dezelfde regels,
+// limieten en ban-checks als het slash-commando.
+const OPPERKROKET_ID = 'U08ALFNQB1V'; // dezelfde ID als de admin-checks in de commando-handler
+
+const kapTekst = (s, n) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
+
+function homeCommandoMenus(userId) {
+  const extra = alleCommandos().map(c => ({ cmd: c.gebruik, uitleg: c.verwacht }));
+  return bouwCommandoMenus(geheimeCommandos(userId), extra, userId === OPPERKROKET_ID);
+}
+
+async function voerHomeCommandoUit(client, userId, tekst, triggerId) {
+  const antwoorden = [];
+  const blokken = [];
+  // Opvang voor respond(): een ephemeral in het kanaal ziet wie in de Home-tab kijkt niet, dus
+  // het antwoord komt bovenaan de ververste Home (net als bij de actieknoppen).
+  const respond = async (r) => {
+    const antwoord = typeof r === 'string' ? { text: r } : (r || {});
+    if (antwoord.blocks) blokken.push(...antwoord.blocks);
+    else if (antwoord.text) antwoorden.push(antwoord.text);
+  };
+  const command = { text: tekst, user_id: userId, channel_id: KANAAL(), channel_name: ALLOWED_CHANNELS[0], trigger_id: triggerId };
+  console.log(`🏠 Home-commando van ${loadMembers()[userId]?.bijnaam || userId}: "${tekst}"`);
+  try {
+    await voerKroketCommandoUit({ command, respond, client });
+  } catch (err) {
+    console.error('Fout bij Home-commando:', err);
+    antwoorden.push('_De frituurinstallatie hapert. Probeer het later opnieuw._');
+  }
+  const melding = antwoorden.length
+    ? antwoorden.join('\n\n')
+    : (blokken.length ? '' : `_\`${tekst}\` is uitgevoerd. Het antwoord van de Kroket God staat in het kanaal._`);
+  await publiceerAppHome(client, userId, melding, blokken);
+}
+
+// Keuze in een categoriemenu: zonder velden meteen uitvoeren, anders het formulier openen.
+app.action(/^home_cmd_kies_\d+$/, async ({ ack, body, client }) => {
+  await ack();
+  try {
+    const userId = body.user.id;
+    const sjabloon = body.actions?.[0]?.selected_option?.value;
+    const optie = homeCommandoMenus(userId).flatMap(m => m.opties).find(o => o.sjabloon === sjabloon);
+    if (!optie) {
+      await publiceerAppHome(client, userId, '_Dit commando bestaat niet meer. De Home-tab is ververst._');
+      return;
+    }
+    if (!heeftVelden(sjabloon)) {
+      await voerHomeCommandoUit(client, userId, sjabloon, body.trigger_id);
+      return;
+    }
+    const maxLeden = /^eer\b/.test(sjabloon) ? Math.max(1, eerLimiet(userId) - telEerVandaag(userId)) : 10;
+    await client.views.open({
+      trigger_id: body.trigger_id,
+      view: bouwCommandoModal(sjabloon, optie.uitleg, medeledenOpties(userId), maxLeden),
+    });
+    // Menu's terugzetten: een menu dat op "dossier" blijft staan, vuurt geen actie meer af als
+    // iemand na het sluiten van het formulier opnieuw "dossier" kiest.
+    await publiceerAppHome(client, userId);
+  } catch (err) { console.error('Fout bij Home-commandomenu:', err.data?.error || err.message); }
+});
+
+app.view('home_cmd_modal', async ({ ack, body, view, client }) => {
+  await ack();
+  try {
+    const members = loadMembers();
+    const waarden = leesModalWaarden(view.private_metadata, view.state.values, id => members[id]?.bijnaam || id);
+    await voerHomeCommandoUit(client, body.user.id, bouwCommandoTekst(view.private_metadata, waarden), body.trigger_id);
+  } catch (err) { console.error('Fout bij Home-commandoformulier:', err); }
 });
 
 // Laat de Bamischijf oprijzen: state + decreet + live bord met knoppen. Aangeroepen door de
