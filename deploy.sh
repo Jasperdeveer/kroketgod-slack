@@ -100,8 +100,18 @@ BESTANDEN=(
   "tone_of_voice.txt"
   "tone_of_voice_satebal.txt"
   "geboden.txt"
+  # Legacy-ledenlijst. members.json is de echte bron, maar index.js leest dit bestand nog met
+  # readFileSync zonder try/catch bij het opbouwen van SYSTEM_PROMPT_BASIS — dus zonder upload
+  # start een verse Pi niet op. Stond er niet in; dat viel niet op omdat hij er al stond.
+  "leden.txt"
+  # Het Vetgeschrift — de Onderste Codex. MOET mee: index.js leest hem met readFileSync
+  # zonder try/catch, dus zonder dit bestand start de bot op de Pi niet op.
+  "vetgeschrift.txt"
   "gepanneerde_rijk.txt"
   "kroketgod.png"
+  # Materiaalstaal dat als bijlage meegaat met elke Gemini-beeldopdracht (zie KROKET_REFERENTIE).
+  # Zonder dit bestand op de Pi valt de referentie stil terug op kroketgod.png.
+  "referentie-kroket.jpg"
 )
 
 # Bestanden waarvan de PI de bron van waarheid is: de bot schrijft ze zelf (aanmelden,
