@@ -48,6 +48,21 @@ const { commandoRegister } = require('./lib/commandoregister.js');
 const { bouwCommandoMenus, bouwMenuBlocks, bouwCommandoModal, bouwCommandoTekst, leesModalWaarden, heeftVelden } = require('./lib/homecommandos.js');
 const { hpBalk, homeTabel, homeBalken, homeVoortgang, homeVoortgangInline, ladingMeter, METER_MAX, homeKaartKop } = require('./lib/blocks.js');
 const { STANDAARD_INSTELLINGEN, loadInstellingen, instelling, saveInstellingen } = require('./lib/instellingen.js');
+const { ARCHIEF_BESTAND, laadArchief, voegToeAanArchief, zoekArchief, entriesTussen, willekeurigCitaat, archiefOmvang } = require('./lib/archief.js');
+const { VOORRAAD_BESTAND, ruimVoorraadOp, haalUitVoorraad, vulVoorraad, voorraadStand } = require('./lib/voorraad.js');
+// koers/verkoopprijs krijgen een beurs-prefix: "koers" alleen is in dit bestand te weinig
+// zeggend tussen de tientallen andere spellen.
+const {
+  MAX_AANDELEN_TOTAAL, MAX_PER_DOELWIT, DIVIDEND_PER_PLEK,
+  koers: beursKoers, verkoopprijs: beursVerkoopprijs,
+  dividendVoorPlek, totaalAandelen, toetsAankoop, toetsVerkoop, berekenAfrekening,
+} = require('./lib/beurs.js');
+const {
+  SOORTEN, randSleutel, warmte: weefselWarmte, wrijving: weefselWrijving,
+  graadPerLid, sterksteBand, grootsteVete, meestScheef, spil, eenlingen, relatiesVan,
+} = require('./lib/weefsel.js');
+const { MAX_HORIZON_DAGEN, parseerWanneer } = require('./lib/tijdcapsule.js');
+const { zaakNummer, volgendeTeller, parseerZaak } = require('./lib/jurisprudentie.js');
 const { UIT_KARAKTER_PATRONEN, RIJKSGRENS_PATRONEN, INJECTIE_AFWIJZINGEN, KARAKTER_FALLBACK, RIJKSGRENS_FALLBACK, isUitKarakter, isRijksgrensOvertreding, willekeurigeInjectieAfwijzing } = require('./lib/karakter.js');
 const {
   groq, geminiKeys, callGemini, callOpenAICompat, roepModelAan,
@@ -874,6 +889,124 @@ async function verlopenMissie(client) {
   await postToChannel(client, process.env.SLACK_CHANNEL_ID, tekst);
 }
 
+// ══════════════════════════════════════════════════════════════════════════════
+// HET SOCIALE WEEFSEL — wie eert wie, wie botst met wie
+// ══════════════════════════════════════════════════════════════════════════════
+// De rekenkunde staat in lib/weefsel.js; hier staat het vastleggen van de randen en de weergave.
+//
+// WAT ER ONTBRAK. Het spel wist wél hoeveel eer je hebt weggegeven (`eerGegeven.json`, een teller
+// per dag) maar niet AAN WIE. Die richting stond alleen in `weekgebeurtenissen.json`, en dat wordt
+// elke vrijdag gewist. Er bestond dus nergens de wetenschap dat twee leden elkaar al maanden over
+// en weer eren, of dat iemand nooit door een ander geëerd wordt — precies de dingen waardoor de
+// Kroket God de groep lijkt te kénnen. Kost geen enkele LLM-call.
+//
+// ÉÉN FUNCTIE, VIER HOOKS. `legRelatieVast` wordt aangeroepen op de plekken waar een relatie
+// daadwerkelijk ontstaat: een eerbewijs, een gewonnen duel, een roofpoging en een vloek. Niet via
+// `telActie`, want die weet alleen WAT er gebeurde en niet TEGEN WIE — en die richting is hier het
+// hele punt.
+//
+// ALLES WORDT VOOR ALTIJD OPGETELD, niet per week. Een band is juist iets dat over weken groeit;
+// een venster van zeven dagen zou elke maandag weer doen alsof niemand elkaar kent. Het bestand
+// blijft klein: hoogstens één regel per ledenpaar per richting.
+
+const loadWeefsel = () => readJSON('weefsel.json', { randen: {} });
+const saveWeefsel = (data) => writeJSON('weefsel.json', data);
+
+// Legt één gerichte relatie vast. Faalt nooit hard — een spelactie mag hier niet op stuklopen.
+// Zelfrelaties worden geweigerd: zelflof is al elders afgestraft en zou de graaf vervuilen.
+function legRelatieVast(vanId, naarId, soort, aantal = 1) {
+  try {
+    if (!vanId || !naarId || vanId === naarId) return false;
+    if (!SOORTEN[soort]) return false;
+    const data = loadWeefsel();
+    const sleutel = randSleutel(vanId, naarId);
+    const rand = { ...(data.randen[sleutel] || {}) };
+    rand[soort] = (Number(rand[soort]) || 0) + aantal;
+    rand.laatste = Date.now();
+    data.randen[sleutel] = rand;
+    saveWeefsel(data);
+    return true;
+  } catch (err) {
+    console.warn('⚠️ Relatie vastleggen mislukt:', err.message);
+    return false;
+  }
+}
+
+// De leden die in het weefsel meedoen: erkende leden, ballingen inbegrepen. Een verbanning is
+// tijdelijk en de relaties die eraan voorafgingen blijven bestaan — die wegfilteren zou een vete
+// laten verdwijnen op precies het moment dat hij het meest zegt.
+function weefselLeden() {
+  return Object.keys(loadMembers());
+}
+
+// Leesbare regel per relatie, voor het dossier en de App Home.
+function weefselRelatieRegel(members, r) {
+  const naam = members[r.id]?.bijnaam || 'een verdwenen volgeling';
+  const delen = [];
+  if (r.gegeven) delen.push(`u eerde ${r.gegeven}×`);
+  if (r.ontvangen) delen.push(`werd ${r.ontvangen}× door hen geëerd`);
+  const botsing = r.wrijvingGegeven + r.wrijvingOntvangen;
+  if (botsing) delen.push('en er is wrijving');
+  return `> *${naam}* — ${delen.join(', ')}`;
+}
+
+// Het groepsrapport. Templated, nul LLM-calls. Wordt maandelijks gepost en is opvraagbaar.
+// Eenlingen worden NIET bij naam genoemd in het kanaal: dat zou een schandpaal zijn en het doel is
+// juist dat iemand geëerd wórdt. Wie zelf een eenling is, leest het in zijn eigen App Home.
+function weefselRapportTekst() {
+  const members = loadMembers();
+  const leden = weefselLeden();
+  const { randen } = loadWeefsel();
+  if (leden.length < 3) return null;
+  const naam = (id) => members[id]?.bijnaam || 'een oud-lid';
+
+  const band = sterksteBand(randen, leden);
+  const vete = grootsteVete(randen, leden);
+  const scheef = meestScheef(randen, leden);
+  const middelpunt = spil(randen, leden);
+  const alleen = eenlingen(randen, leden);
+  if (!band && !vete && !middelpunt) return null; // nog niets geweven
+
+  const regels = [];
+  if (middelpunt) regels.push(`> 🕸️ *De spil van het weefsel* is *${naam(middelpunt.id)}* — daar loopt het meeste langs.`);
+  if (band) regels.push(`> 🤝 *De sterkste band*: *${naam(band.a)}* en *${naam(band.b)}* eren elkaar over en weer.`);
+  if (vete) regels.push(`> ⚔️ *De grootste wrijving*: *${naam(vete.a)}* en *${naam(vete.b)}*.`);
+  if (scheef) regels.push(`> 💔 *Het meest eenzijdig*: *${naam(scheef.a)}* geeft ${naam(scheef.b)} meer dan er terugkomt.`);
+  if (alleen.length) {
+    regels.push(alleen.length === leden.length
+      ? '> 🌑 *Niemand* is deze periode door een ander geëerd. Het weefsel is kaal.'
+      : `> 🌑 *${alleen.length} lid/leden* is nog door niemand geëerd. De Raad weet wie het zijn.`);
+  }
+  return `🕸️ *HET WEEFSEL VAN HET GENOOTSCHAP*\n\n${regels.join('\n')}\n\n` +
+    '_Opgeteld over de hele geschiedenis van het genootschap, niet over deze week. ' +
+    'Uw eigen draden staan in de Home-tab._\n\n— De Hoge Frituurraad';
+}
+
+registreerFeature({
+  naam: 'weefsel',
+  state: ['weefsel.json'],
+  help: [{ gebruik: '/kroketgod weefsel', verwacht: 'het sociale weefsel: wie u eert, wie u eert, met wie u botst — en de spil van het genootschap' }],
+  homeOrde: 35,
+  home: ({ userId, members }) => {
+    const leden = weefselLeden();
+    if (leden.length < 3) return [];
+    const { randen } = loadWeefsel();
+    const eigen = relatiesVan(randen, leden, userId);
+    const graden = graadPerLid(randen, leden)[userId];
+    if (!eigen.length && !graden?.totaal) return []; // niets te vertellen
+    const blocks = [...homeKaartKop('🕸️ UW DRADEN')];
+    blocks.push({ type: 'section', text: { type: 'mrkdwn', text:
+      (eigen.length ? eigen.slice(0, 5).map(r => weefselRelatieRegel(members, r)).join('\n')
+                    : '_Nog geen draden. Eer iemand, en het weefsel begint._') +
+      (graden?.stilte ? `\n\n_U heeft ${graden.stilte} medelid/leden nog nooit geëerd._` : '') } });
+    return blocks;
+  },
+});
+
+// De maandelijkse cron staat NIET hier maar verderop bij de andere crons: planCron leest
+// CRON_LABELS, en dat is een module-level const die veel later staat. Een planCron-aanroep hier
+// crasht de bot bij opstarten op een temporal dead zone — en `node -c` ziet dat niet.
+
 // ── Eer-limiet: max 3x per dag ────────────────────────────────────────────────
 const loadEerGegeven = () => readJSON('eerGegeven.json', {});
 const saveEerGegeven = (data) => writeJSON('eerGegeven.json', data);
@@ -927,6 +1060,18 @@ function logGebeurtenis(type, userId, beschrijving, citaat = null, actorId = nul
 
   // Langlopende statistiekhistorie voor de trendgrafieken (reset niet wekelijks).
   bumpStatHistorieEvent(type);
+
+  // Ook naar Het Grote Archief, want weekgebeurtenissen.json wordt élke vrijdag gewist: zonder
+  // dit bestaat er nergens een blijvend verslag van wat er in het genootschap gebeurd is. Voedt
+  // De Kroketkroniek (die per week terugleest) en maakt gebeurtenissen doorzoekbaar, zodat de
+  // Kroket God zich een verbanning van maanden terug kan herinneren.
+  // Soort 'gebeurtenis' houdt ze buiten Het Verhoor — dat vraagt expliciet om soort 'lid'.
+  try {
+    voegToeAanArchief({
+      soort: 'gebeurtenis', spreker: 'De Kronieken', sprekerId: userId || null,
+      tekst: citaat ? `${beschrijving} — geciteerd: "${String(citaat).slice(0, 120)}"` : beschrijving,
+    });
+  } catch (_) {}
 
   // Auto-opslaan in kennisbank voor significante events
   if (KENNISBANK_AUTO_TYPEN.has(type)) {
@@ -1322,19 +1467,29 @@ const MAX_GESCHIEDENIS = 40;
 const loadGeschiedenis = () => readJSON('geschiedenis.json', []);
 const saveGeschiedenis = (lijst) => writeJSON('geschiedenis.json', lijst);
 
-function stripSlackOpmaak(tekst) {
+// maxLengte is een parameter omdat het kanaalgeheugen en het archief een andere afweging maken:
+// 200 tekens houdt de promptcontext klein, terwijl het archief een blijvend verslag is en dus
+// ruimer mag bewaren.
+function stripSlackOpmaak(tekst, maxLengte = 200) {
   return (tekst || '')
     .replace(/<@[A-Z0-9]+>/g, '')
     .replace(/<#[A-Z0-9]+\|([^>]+)>/g, '#$1')
     .replace(/<https?:\/\/[^>]+>/g, '[link]')
     .replace(/\s+/g, ' ')
     .trim()
-    .substring(0, 200);
+    .substring(0, maxLengte);
 }
 
-function logBericht(spreker, tekst) {
+// Elk bericht komt hier langs: dat van de leden (message-handler), dat van de Kroket God zelf
+// (postToChannel) en dat van de personas (postAlsPersona). Deze ene naad voedt daarom twee dingen:
+// het rollende kanaalgeheugen (veertig berichten, voor de directe gesprekscontext) én Het Grote
+// Archief (voorgoed, doorzoekbaar — zie lib/archief.js).
+function logBericht(spreker, tekst, { soort = 'lid', sprekerId = null } = {}) {
   const schoon = stripSlackOpmaak(tekst);
   if (!schoon) return;
+  // Archief eerst, en met een eigen (ruimere) afkapping. Faalt nooit hard, dus het kan het
+  // kanaalgeheugen hieronder niet in de weg zitten.
+  voegToeAanArchief({ soort, spreker, sprekerId, tekst: stripSlackOpmaak(tekst, 500) });
   const geschiedenis = loadGeschiedenis();
   geschiedenis.push({ spreker, tekst: schoon, ts: Date.now() });
   if (geschiedenis.length > MAX_GESCHIEDENIS) {
@@ -1457,6 +1612,110 @@ function isRijksVraag(input) {
   return RIJKS_TREFWOORDEN.some(w => lower.includes(w));
 }
 
+// ── Echo's uit Het Grote Archief ───────────────────────────────────────────────
+// Het kanaalgeheugen reikt veertig berichten terug; dit haalt daar drie fragmenten bij van
+// verder terug die écht over de vraag gaan (BM25, zie lib/archief.js). Dat is het verschil
+// tussen een God die weet wat er net gezegd is en een God die weet wat u in maart beweerde.
+//
+// ouderDan sluit bewust de laatste zes uur uit: die berichten staan al in het kanaalgeheugen,
+// en ze twee keer injecteren kost promptruimte zonder iets toe te voegen. minLengte weert
+// eenwoordskreten ("kroket", "ja") — die matchen makkelijk en dragen niets bij.
+const ARCHIEF_ECHO_VENSTER_MS = 6 * 3_600_000;
+
+function archiefDatum(ts) {
+  const d = new Date(ts);
+  const zelfdeJaar = d.getFullYear() === new Date().getFullYear();
+  return d.toLocaleDateString('nl-NL', {
+    timeZone: 'Europe/Amsterdam', day: 'numeric', month: 'long',
+    ...(zelfdeJaar ? {} : { year: 'numeric' }),
+  });
+}
+
+// Eén archiefregel als leesbare tekst. Een gebeurtenis is geen uitspraak van iemand, dus die
+// krijgt geen aanhalingstekens — anders zou de Kroket God "De Kronieken" gaan citeren als lid.
+function archiefRegel(t) {
+  if (t.soort === 'gebeurtenis') return `[${archiefDatum(t.ts)}] uit de kronieken: ${t.tekst}`;
+  // Een vonnis draagt zijn zaaknummer al in de tekst (zie voerZaak), dus geen naam ervoor.
+  if (t.soort === 'vonnis') return `[${archiefDatum(t.ts)}] uit de jurisprudentie: ${t.tekst}`;
+  return `[${archiefDatum(t.ts)}] ${t.spreker}: "${t.tekst}"`;
+}
+
+function getArchiefEchos(input, n = 3) {
+  try {
+    const treffers = zoekArchief(input, {
+      n,
+      ouderDan: Date.now() - ARCHIEF_ECHO_VENSTER_MS,
+      minLengte: 25,
+    });
+    if (!treffers.length) return '';
+    return treffers.map(archiefRegel).join('\n');
+  } catch (err) {
+    console.warn('⚠️ Archief-zoekopdracht mislukt:', err.message);
+    return '';
+  }
+}
+
+// Eenmalige vulling uit de Slack-kanaalhistorie. Zonder dit begint het archief leeg en is het
+// maanden lang niets waard — terwijl Slack op het gratis plan nú nog negentig dagen gesprek
+// vasthoudt dat het straks zelf weggooit. Dit is letterlijk de laatste kans om die te redden.
+//
+// Draait ALLEEN als het archief nog leeg is: dit is een inhaalslag, geen synchronisatie. Zou hij
+// over een gevuld archief heen lopen, dan stond alles dubbel in de index — en dan ziet BM25 een
+// zeldzame term als gewoon, precies de rangschikking die we juist willen. Vandaar de harde guard.
+async function backfillArchiefUitSlack(client, { rondes = 25 } = {}) {
+  const bestaand = archiefOmvang();
+  if (bestaand.doorzoekbaar > 0) return null;
+  const members = loadMembers();
+  const berichten = [];
+  let cursor = null;
+  try {
+    for (let i = 0; i < rondes; i++) {
+      const res = await slackLimiter.schedule(() => client.conversations.history({
+        channel: process.env.SLACK_CHANNEL_ID, limit: 200, ...(cursor ? { cursor } : {}),
+      }));
+      berichten.push(...(res.messages || []));
+      cursor = res.response_metadata?.next_cursor;
+      if (!cursor) break;
+    }
+  } catch (err) {
+    // Meestal missing_scope (channels:history). Geen ramp: het archief vult zich vanaf nu
+    // gewoon live met elk nieuw bericht — dit was alleen de gratis voorsprong.
+    console.warn('⚠️ Archief-backfill: kanaalhistorie ophalen mislukt:', err.data?.error || err.message);
+    return null;
+  }
+  // Slack levert nieuwste eerst; het archief is chronologisch, dus omkeren.
+  berichten.reverse();
+  let opgetekend = 0;
+  for (const m of berichten) {
+    // Systeemruis (joins, pins, kanaalnaamwijzigingen) hoort niet in het geheugen van het
+    // genootschap; bot_message is de eigen stem en mag juist wél mee.
+    if (m.subtype && !['bot_message', 'file_share', 'thread_broadcast'].includes(m.subtype)) continue;
+    const tekst = stripSlackOpmaak(m.text, 500);
+    if (!tekst) continue;
+    const lid = m.user ? members[m.user] : null;
+    // Personas posten onder een eigen username-override; die naam is precies hoe we ze in het
+    // archief willen terugvinden. Zonder override is een bot-bericht de Kroket God zelf.
+    const isBot = !!(m.bot_id || m.subtype === 'bot_message');
+    const spreker = lid?.bijnaam || (isBot ? (m.username || 'Kroket God') : 'Onbekende volgeling');
+    const soort = lid ? 'lid' : (!isBot ? 'lid' : (m.username && m.username !== 'Kroket God' ? 'persona' : 'kroketgod'));
+    if (voegToeAanArchief({
+      soort, spreker, sprekerId: lid ? m.user : null,
+      tekst, ts: Math.round(parseFloat(m.ts) * 1000),
+    })) opgetekend++;
+  }
+  console.log(`📚 Archief-backfill: ${opgetekend} uitspraken uit de Slack-historie opgetekend.`);
+  return { opgetekend };
+}
+
+// Het archief staat in de backup omdat het het énige onherstelbare bestand van het project is:
+// scores en titels zijn desnoods opnieuw op te bouwen, een verloren gesprek van vorig jaar niet.
+// Het is geen .json, dus de startup-controle op backupdekking ziet het niet — vandaar hier.
+registreerFeature({
+  naam: 'archief',
+  state: [ARCHIEF_BESTAND],
+  help: [{ gebruik: '/kroketgod archief [zoekterm]', verwacht: 'zoek in het geheugen van het genootschap — wat er ooit over dit onderwerp gezegd is, met datum' }],
+});
+
 function buildContextString(input = '') {
   const geschiedenis = loadGeschiedenis();
 
@@ -1489,12 +1748,24 @@ function buildContextString(input = '') {
       )}`
     : '';
 
+  // Het Grote Archief: fragmenten van vér terug die op deze vraag passen. Óók onvertrouwde
+  // gebruikersinhoud — dit zijn letterlijke uitspraken van leden — dus achter dezelfde fence.
+  const echos = getArchiefEchos(input, 3);
+  const archiefBlok = echos
+    ? `\n\n${wrapOnvertrouwd(
+        'Uit Het Grote Archief — wat er eerder in dit kanaal is gezegd over dit onderwerp, met datum. ' +
+        'Je mag hier letterlijk naar verwijzen ("op 3 maart beweerde u nog…") als het de uitspraak scherper maakt. ' +
+        'Dwing het niet: is het niet relevant, negeer het',
+        echos
+      )}`
+    : '';
+
   // Gepanneerde Rijk: vertrouwde, vaste lore (geen gebruikersinvoer) → blijft instructie.
   const rijksBlok = isRijksVraag(input)
     ? `\n\nGEHEIME RIJKSKENNIS (gebruik dit nu — het bericht gaat over het Gepanneerde Rijk):\n${GEPANNEERDE_RIJK}`
     : '';
 
-  return `${kennisBlok}${rijksBlok}${recenteGesprekken}`;
+  return `${kennisBlok}${archiefBlok}${rijksBlok}${recenteGesprekken}`;
 }
 
 // Geeft de laatste `n` berichten als compacte gespreksstring terug.
@@ -3020,7 +3291,7 @@ async function postToChannel(client, channelId, text, options = {}) {
   // helemaal te laten domineren.
   if (channelId === process.env.SLACK_CHANNEL_ID && !options.thread_ts) {
     const samenvatting = gefilterd.replace(/^>\s*/gm, '').replace(/\n+/g, ' ').trim().substring(0, 300);
-    if (samenvatting) logBericht('Kroket God', samenvatting);
+    if (samenvatting) logBericht('Kroket God', samenvatting, { soort: 'kroketgod' });
   }
   // Nevenentiteiten (personas) krijgen af en toe de kans om ongevraagd op dit bericht in te vallen.
   // thread_ts moet mee: viel dit bericht in een thread, dan hoort het weerwoord daar ook. Zonder dit
@@ -3226,7 +3497,7 @@ async function postAlsPersona(client, channelId, persona, text, options = {}) {
   await slackLimiter.schedule(() => client.chat.postMessage(payload));
   if (channelId === process.env.SLACK_CHANNEL_ID && !options.thread_ts) {
     const samenvatting = gefilterd.replace(/^>\s*/gm, '').replace(/\n+/g, ' ').trim().substring(0, 300);
-    if (samenvatting) logBericht(persona.naam, samenvatting);
+    if (samenvatting) logBericht(persona.naam, samenvatting, { soort: 'persona' });
   }
 }
 
@@ -3462,18 +3733,30 @@ async function genereerBeeld(client, channelId, userId, beschrijving, stemming =
     messages: [
       {
         role: 'system',
-        content: `You are a professional FLUX diffusion model prompt engineer. Convert a Dutch subject into a high-quality English image prompt optimized for FLUX.
+        content: `You are an image prompt engineer. Convert a Dutch request into a short English image prompt.
 
-FORMAT: comma-separated keywords and short noun phrases — NO full sentences, NO verbs
-STRUCTURE: [subject as divine manifestation], [setting: ${wildcardKeywords}], [MOOD — this must dominate the entire image: ${moodKeywords}], [style: ${stijl.naam}], [quality: highly detailed, sharp focus, professional]
-MANDATORY END (always append exactly): ${stijl.suffix}
+THE SUBJECT IS EVERYTHING. A viewer must be able to point at the image and say what it shows.
+
+STRUCTURE (in this order):
+1. SUBJECT — what is physically visible, in concrete nouns. Half of the prompt is this.
+2. ACTION/SCENE — what the subject is doing, if the request says so.
+3. SETTING — ${wildcardKeywords}
+4. PALETTE & LIGHT — ${moodKeywords}
+
+Do NOT name an art style, medium or camera. That is appended afterwards; naming it yourself makes it
+count double, and that is exactly how the subject got squeezed out.
 
 RULES:
-- Translate Dutch to English
-- The MOOD keywords define the color palette, lighting, and emotional register — weave them throughout, not just at the end
-- Elevate the subject to a mythological, cosmic or sacred object
-- Max 80 words total
-- Specific colors, textures, materials — no abstract adjectives like "beautiful" or "epic"
+- Members of the Kroket Illuminati are ANTHROPOMORPHIC DEEP-FRIED CROQUETTES: a golden-brown
+  breadcrumbed cylinder with a face, arms and legs. Nicknames like "Mr. KroketPet" or "De Groene
+  Kroket" are NOT visual — always render them as such a croquette character, and let the nickname
+  only suggest a detail (green = green breading, Pet = wearing a cap).
+- Translate Dutch to English. Keep what the request actually asks for: if it says someone is busy
+  and ignoring everyone, that must be VISIBLE — piles of paper, ringing phones, turned back.
+- Palette and light COLOUR the scene; they never replace the subject. Do not describe the mood
+  itself, only what it does to the colours and the lighting.
+- HARD LIMIT: 30 words. Shorter is better. The subject must be within the first 12 words.
+- Concrete colours, textures, materials — no "beautiful", "epic", "cosmic", "divine" on their own.
 
 OUTPUT: Only the prompt. No explanation, no quotes.`,
       },
@@ -3483,6 +3766,22 @@ OUTPUT: Only the prompt. No explanation, no quotes.`,
 
   let beeldPrompt = promptResponse.choices[0].message.content.trim();
   beeldPrompt = beeldPrompt.replace(/^["']|["']$/g, '').replace(/^(image prompt|prompt):\s*/i, '');
+  // Stijl in CODE toevoegen, precies één keer. Dit stond als "MANDATORY END" in de systeemprompt
+  // ÉN de LLM noemde de stijl zelf in zijn structuur, dus stond hij er dubbel in — bij het beeld dat
+  // dit blootlegde kwam "stained glass window" twee keer voor terwijl het onderwerp één keer werd
+  // genoemd, en het resultaat was een gebrandschilderd raam zonder kroket.
+  // Mocht het model de stijl toch noemen, dan halen we die weg voordat we hem toevoegen.
+  const stijlNaamRe = new RegExp(`,?\\s*${stijl.naam.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'gi');
+  beeldPrompt = beeldPrompt
+    .replace(stijlNaamRe, '')
+    .replace(/\s*,\s*,/g, ',')
+    // Sluitpunt eraf: het model zet er soms een punt achter, en dan wordt het ", stained glass" een
+    // rare "back., stained glass". Een prompt is een reeks trefwoorden, geen zin.
+    .replace(/[.\s,]+$/, '')
+    .trim();
+  // De tekst-encoders van deze modellen kappen rond de 77 tokens af. Wat daarachter staat bestaat
+  // niet. Daarom: onderwerp eerst (dat regelt de systeemprompt), en de stijl kort erachter.
+  beeldPrompt = `${beeldPrompt}, ${stijl.suffix}`;
   console.log(`🎨 [${stijl.naam}${stemming ? ` / ${stemming.naam}` : ''}] ${beeldPrompt}`);
 
   // Frituur-galerij: bewaar de laatste 10 prompts voor het dashboard
@@ -5156,26 +5455,42 @@ async function voerKroketCommandoUit({ command, respond, client }) {
 
 
     // ── Rechtbank
-    if (input.startsWith('rechtbank ')) {
-      const zaak = input.replace('rechtbank ', '').trim();
-      const vsMatch = zaak.match(/^(.+?)\s+vs\s+(.+)$/i);
-      if (!vsMatch) {
-        await respond('_Gebruik: /kroketgod rechtbank [naam1] vs [naam2]_');
+    // Zie voerZaak: dit was een eenmalig vonnis dat daarna verdween. Nu krijgt het een zaaknummer
+    // en wordt het precedent voor volgende zaken.
+    if (input.startsWith('rechtbank')) {
+      const zaakInvoer = input.replace(/^rechtbank\s*/, '').trim();
+      if (!zaakInvoer) {
+        await respond({ text: '_Gebruik: `/kroketgod rechtbank [naam1] vs [naam2]` — eventueel met `over [grond]` erachter. Elk vonnis krijgt een zaaknummer en telt mee als precedent._', response_type: 'ephemeral' });
         return;
       }
-      const [, naam1, naam2] = vsMatch;
-      const g1 = getMemberByNaam(naam1.trim());
-      const g2 = getMemberByNaam(naam2.trim());
-      const partij1 = g1 ? g1[1].bijnaam : `Buitenstaander "${naam1.trim()}"`;
-      const partij2 = g2 ? g2[1].bijnaam : `Buitenstaander "${naam2.trim()}"`;
-      const tekst = await kroketResponse(
-        `[PARTIJ 1: ${partij1}] [PARTIJ 2: ${partij2}] ` +
-        `Leid een rechtbankzaak tussen ${partij1} en ${partij2}. ` +
-        `Spreek elke partij uitsluitend aan bij hun exacte naam: "${partij1}" en "${partij2}". Gebruik nooit "u" zonder naam als er twee partijen zijn. ` +
-        `De Kroket God is rechter én aanklager. Presenteer de aanklacht, hoor beide partijen kort en spreek een dramatisch vonnis uit. Verwijs naar de Geboden. Geen inleidingszin.`,
-        600, false
-      );
-      await postToChannel(client, command.channel_id, tekst);
+      const uitkomst = await voerZaak(client, command.user_id, zaakInvoer, command.channel_id);
+      await respond({ text: uitkomst.tekst, response_type: 'ephemeral' });
+      return;
+    }
+
+    // ── Het register van gewezen zaken ────────────────────────────────────────
+    if (input === 'jurisprudentie' || input === 'zaken' || input === 'zaak' || input.startsWith('zaak ')) {
+      const { zaken } = loadJurisprudentie();
+      if (!zaken?.length) {
+        await respond({ text: '_De Raad heeft nog geen zaak gewezen. Begin er een met `/kroketgod rechtbank [naam1] vs [naam2]`._', response_type: 'ephemeral' });
+        return;
+      }
+      const gevraagd = input.startsWith('zaak ') ? input.replace(/^zaak\s*/, '').trim() : '';
+      if (gevraagd) {
+        // Zowel "2026/VII" als alleen "VII" of "7" moet werken — niemand typt het jaar erbij.
+        const z = zaken.find(x => x.nummer.toLowerCase() === gevraagd.toLowerCase())
+          || zaken.find(x => x.nummer.split('/')[1].toLowerCase() === gevraagd.toLowerCase());
+        if (!z) {
+          await respond({ text: `_Zaak "${gevraagd}" staat niet in het register. Bekijk \`/kroketgod jurisprudentie\`._`, response_type: 'ephemeral' });
+          return;
+        }
+        await respond({ text: `⚖️ *${z.nummer}*\n\n${z.tekst}`, response_type: 'ephemeral' });
+        return;
+      }
+      const regels = zaken.slice(-12).reverse()
+        .map(z => `> *${z.nummer}* — ${z.partij1} / ${z.partij2}${z.grond ? ` _(over ${z.grond})_` : ''}`)
+        .join('\n');
+      await respond({ text: `⚖️ *HET REGISTER VAN DE HOGE FRITUURRAAD*\n\n${regels}\n\n_${zaken.length} zaak/zaken gewezen · \`/kroketgod zaak [nummer]\` voor de volledige uitspraak · elke zaak is precedent voor de volgende._`, response_type: 'ephemeral' });
       return;
     }
 
@@ -5481,6 +5796,155 @@ async function voerKroketCommandoUit({ command, respond, client }) {
     // ── De Zegezaal: voorgoed gevallen weekvijanden ───────────────────────────
     if (input === 'zegezaal' || input === 'zegehal' || input === 'verslagen') {
       await respond({ text: zegezaalTekst(), response_type: 'ephemeral' });
+      return;
+    }
+
+    // ── De Frituurbeurs ───────────────────────────────────────────────────────
+    // Alles ephemeral: posities zijn geheim, dus zelfs de bevestiging hoort niet in het kanaal.
+    if (input === 'beurs' || input.startsWith('beurs ')) {
+      if (!members[command.user_id]) {
+        await respond({ text: '_Alleen leden van de Kroket Illuminati worden op de beurs toegelaten._', response_type: 'ephemeral' });
+        return;
+      }
+      const rest = input.replace(/^beurs\s*/, '').trim();
+      const handel = rest.match(/^(koop|verkoop)\s+(.+)$/i);
+      if (!handel) {
+        if (rest) {
+          await respond({ text: '_Gebruik: `beurs` voor het koersenbord, `beurs koop [naam] [aantal]` of `beurs verkoop [naam] [aantal]`._', response_type: 'ephemeral' });
+          return;
+        }
+        await respond({ text: beursOverzichtTekst(command.user_id), response_type: 'ephemeral' });
+        return;
+      }
+      const soort = handel[1].toLowerCase();
+      // Het aantal staat achteraan en is optioneel; de rest is de naam. Zo werkt "beurs koop
+      // mr kroketpet 2" én "beurs koop mr kroketpet".
+      const argRest = handel[2].trim();
+      const metAantal = argRest.match(/^(.*?)\s+(\d+)$/);
+      const naamDeel = (metAantal ? metAantal[1] : argRest).trim();
+      const aantal = metAantal ? parseInt(metAantal[2], 10) : 1;
+      const gevonden = getMemberByNaam(naamDeel);
+      if (!gevonden) {
+        await respond({ text: `_De beurs kent geen lid genaamd "${naamDeel}"._`, response_type: 'ephemeral' });
+        return;
+      }
+      const uitkomst = soort === 'koop'
+        ? await koopAandeel(client, command.user_id, gevonden[0], aantal)
+        : await verkoopAandeel(client, command.user_id, gevonden[0], aantal);
+      await respond({ text: uitkomst.tekst, response_type: 'ephemeral' });
+      return;
+    }
+
+    // ── De Tijdcapsule ────────────────────────────────────────────────────────
+    if (input.startsWith('voorspel')) {
+      const rest = input.replace(/^voorspel(ling)?\s*/, '').trim();
+      if (!rest) {
+        await respond({ text: '_Gebruik: `voorspel [wanneer] [wat]` — bijvoorbeeld `voorspel over 2 weken de bamischijf valt`, `voorspel vrijdag het regent ragout` of `voorspel 31 december alles is anders`._', response_type: 'ephemeral' });
+        return;
+      }
+      const uitkomst = await verzegelCapsule(client, command.user_id, rest);
+      await respond({ text: uitkomst.tekst, response_type: 'ephemeral' });
+      return;
+    }
+
+    if (input === 'capsules' || input === 'capsule' || input === 'voorspellingen') {
+      const items = loadCapsules().items || [];
+      if (!items.length) {
+        await respond({ text: '_Er is nog nooit een tijdcapsule verzegeld. Wees de eerste: `/kroketgod voorspel over 2 weken [wat]`._', response_type: 'ephemeral' });
+        return;
+      }
+      const naam = (id) => members[id]?.bijnaam || 'een oud-lid';
+      const open = items.filter(c => c.status === 'verzegeld' || c.status === 'stemming')
+        .sort((a, b) => a.deadline - b.deadline)
+        .map(c => `> *${naam(c.userId)}*: "${c.tekst}" — ${c.status === 'stemming' ? '_de Raad stemt nu_' : capsuleDatum(c.deadline)}`);
+      const gedaan = items.filter(c => c.status === 'beslecht').slice(-5).reverse()
+        .map(c => `> ${c.uitkomst?.uitgekomen ? '✅' : c.uitkomst?.gelijk ? '➖' : '❌'} *${naam(c.userId)}*: "${c.tekst}"`);
+      await respond({ text:
+        `⏳ *DE TIJDCAPSULES*\n\n*Nog verzegeld*\n${open.length ? open.join('\n') : '> _geen_'}\n\n` +
+        `*Beoordeeld*\n${gedaan.length ? gedaan.join('\n') : '> _geen_'}`, response_type: 'ephemeral' });
+      return;
+    }
+
+    // ── Het Sociale Weefsel ───────────────────────────────────────────────────
+    // Ephemeral, en de eigen draden staan erbij: het groepsrapport alleen zou de vraag
+    // "en ik dan?" oproepen, terwijl juist dat de bruikbare helft is.
+    if (input === 'weefsel' || input === 'draden') {
+      const rapport = weefselRapportTekst();
+      if (!rapport) {
+        await respond({ text: '_Het weefsel is nog te dun om iets over te zeggen. Eer een medelid, duelleer, en het ontstaat._', response_type: 'ephemeral' });
+        return;
+      }
+      const leden = weefselLeden();
+      const { randen } = loadWeefsel();
+      const eigen = relatiesVan(randen, leden, command.user_id);
+      const graden = graadPerLid(randen, leden)[command.user_id];
+      const eigenBlok = eigen.length
+        ? `\n\n*Uw eigen draden*\n${eigen.slice(0, 6).map(r => weefselRelatieRegel(members, r)).join('\n')}` +
+          (graden?.stilte ? `\n_U heeft ${graden.stilte} medelid/leden nog nooit geëerd._` : '')
+        : '\n\n_U heeft zelf nog geen draden. Eer iemand._';
+      await respond({ text: `${rapport}${eigenBlok}`, response_type: 'ephemeral' });
+      return;
+    }
+
+    // ── De Kroketkroniek: afleveringen teruglezen ─────────────────────────────
+    if (input === 'kroniek' || input.startsWith('kroniek ')) {
+      const afl = loadKroniek().afleveringen || [];
+      if (!afl.length) {
+        await respond({ text: '_De kronieken zijn nog leeg. De eerste aflevering wordt zondagnacht geschreven._', response_type: 'ephemeral' });
+        return;
+      }
+      const gevraagd = parseInt(input.replace(/^kroniek\s*/, '').trim(), 10);
+      const a = Number.isFinite(gevraagd) ? afl.find(x => x.nummer === gevraagd) : afl[afl.length - 1];
+      if (!a) {
+        await respond({ text: `_Aflevering ${gevraagd} bestaat niet. De kronieken lopen van ${afl[0].nummer} tot ${afl[afl.length - 1].nummer}._`, response_type: 'ephemeral' });
+        return;
+      }
+      await respond({ text: `📖 *DE KROKETKRONIEK* — aflevering ${a.nummer}\n\n${a.tekst}\n\n_${afl.length} aflevering(en) bewaard · \`kroniek [nummer]\` voor een oudere._`, response_type: 'ephemeral' });
+      return;
+    }
+
+    // ── Het Verhoor: het lopende citaat opvragen ──────────────────────────────
+    if (input === 'verhoor') {
+      const v = loadVerhoor().ronde;
+      if (!v) {
+        await respond({ text: '_Er loopt geen verhoor. Donderdag 11:00 diept de Kroket God een nieuw citaat op uit het archief._', response_type: 'ephemeral' });
+        return;
+      }
+      const alGegokt = v.antwoorden?.[command.user_id];
+      const eigen = command.user_id === v.sprekerId;
+      await respond({ text:
+        `🕯️ *HET VERHOOR* — opgetekend op ${archiefDatum(v.citaatTs)}\n\n> "${v.tekst}"\n\n` +
+        (v.onthuld ? `_Onthuld: het was *${members[v.sprekerId]?.bijnaam || 'een oud-lid'}*._`
+          : eigen ? '_U heeft deze woorden zelf gesproken. Zwijg en geniet._'
+          : alGegokt ? `_U heeft geantwoord: *${members[alGegokt]?.bijnaam || 'onbekend'}*. Wachten op de onthulling om 16:00._`
+          : '_Antwoord met de knoppen onder het verhoor in het kanaal._'), response_type: 'ephemeral' });
+      return;
+    }
+
+    // ── Het Grote Archief: zoeken in het geheugen van het genootschap ─────────
+    // Ephemeral en zonder LLM-call: dit is opzoeken, geen verkondiging. Anders dan de echo's die
+    // automatisch in de promptcontext belanden mag hier ook het recente venster mee — wie
+    // expliciet zoekt wil ook het bericht van vanmorgen kunnen vinden.
+    if (input === 'archief' || input.startsWith('archief ')) {
+      const zoekterm = input.replace(/^archief\s*/, '').trim();
+      const o = archiefOmvang();
+      if (!zoekterm) {
+        await respond({ text: o.doorzoekbaar
+          ? `📚 *HET GROTE ARCHIEF*\n\n${homeTabel([
+              ['Doorzoekbare uitspraken', o.doorzoekbaar],
+              ['Verschillende sprekers', o.sprekers],
+              ['Oudste optekening', o.oudste ? archiefDatum(o.oudste) : '—'],
+            ])}\nZoek met \`/kroketgod archief [zoekterm]\` — bijvoorbeeld \`archief bamischijf\`.\n_Het archief wordt nooit gewist. Slack vergeet na negentig dagen; de Kroket God niet._`
+          : '_Het archief is nog leeg. Vanaf nu wordt alles wat in het kanaal gezegd wordt voorgoed opgetekend._', response_type: 'ephemeral' });
+        return;
+      }
+      const treffers = zoekArchief(zoekterm, { n: 8, minLengte: 10 });
+      if (!treffers.length) {
+        await respond({ text: `_Het archief zwijgt over "${zoekterm}". Er is nooit iets over gezegd — of het is met andere woorden gezegd._`, response_type: 'ephemeral' });
+        return;
+      }
+      const regels = treffers.map(t => `> ${archiefRegel(t)}`).join('\n');
+      await respond({ text: `📚 *UIT HET GROTE ARCHIEF* — "${zoekterm}"\n\n${regels}\n\n_${treffers.length} van ${o.doorzoekbaar} optekeningen, op relevantie geordend._`, response_type: 'ephemeral' });
       return;
     }
 
@@ -6361,6 +6825,7 @@ app.event('app_mention', async ({ event, client }) => {
         if (dubbel) punten *= 2;
         await pasScoreAanMetCheck(client, eerId, punten, { geverId: userId, channelId: event.channel, threadTs: thread_ts, uitgesteldeZegens });
         registreerEer(userId, 1);
+        legRelatieVast(userId, eerId, 'eer'); // ook de organische EER-token weeft mee
         await telActie(client, userId, 'eer_gegeven', 1);
         logGebeurtenis('eer', userId, `${bijnaam} eerde ${eerLid.bijnaam} organisch via mention (+${punten})`);
         tekst += `\n\n⚜️ *EER-COMMANDO* ⚜️\n\n> *${eerLid.bijnaam}* ontvangt *${punten} kroketpunt${punten > 1 ? 'en' : ''}* van de Hoge Frituurraad.${dubbel ? '\n> ✨ _Verdubbeld door de Dubbele Eer-zegen._' : ''}\n\n— _De Kroket God heeft gesproken_ :illuminati-kroket:`;
@@ -6489,7 +6954,7 @@ app.event('message', async ({ event, client }) => {
     if (event.subtype === 'file_share' && !event.thread_ts) return;
 
     if (!event.text?.trim()) return;
-    if (!isTestKanaalMsg) logBericht(bijnaam, event.text);
+    if (!isTestKanaalMsg) logBericht(bijnaam, event.text, { soort: 'lid', sprekerId: event.user });
 
     // ── Stille Missie detectie ────────────────────────────────────────────────
     if (!isTestKanaalMsg && event.channel === process.env.SLACK_CHANNEL_ID) {
@@ -6673,6 +7138,8 @@ const CRON_LABELS = {
   '0 13 * * 2,4':    { label: 'Profetie (kans)' },
   '30 9 * * 1':      { label: 'Weekvijand (opkomst)' },
   '0 11 * * 3':      { label: 'Premiejacht (kans)' },
+  '0 11 * * 4':      { label: 'Het Verhoor' },
+  '20 9 * * 1':      { label: 'Kroketkroniek' },
 };
 const geplandeCronMeta = []; // { key, label, vast, taak, toonTaak }
 
@@ -7080,29 +7547,41 @@ async function maybeSpontaan() {
       const thema = themas[Math.floor(Math.random() * themas.length)];
       await postToChannel(app.client, process.env.SLACK_CHANNEL_ID, await kroketResponse(thema, 350, false));
     } else {
-      const algemeneThemas = [
-        'Stuur een onverwachte zegen aan de Heren van de Kroket Illuminati. De frituur is goed gehumeurd. Geen inleidingszin.',
-        'Deel een filosofische overweging over kroketten en het leven. Wijs en licht van toon. Geen inleidingszin.',
-        'Kondig een fictieve maar positieve uitspraak van de Hoge Frituurraad aan — een zeldzame dag van genade. Geen inleidingszin.',
-        'Deel een kroket-wijsheid in één zin. Geen inleidingszin.',
-        'Kondig een fictieve kroket-gerelateerde ontdekking aan door de Hoge Frituurraad. Geen inleidingszin.',
-        'Stuur een cryptische maar bemoedigende boodschap aan de Heren van de Kroket Illuminati. Geen inleidingszin.',
-        'Stuur een cryptische waarschuwing aan de Heren van de Kroket Illuminati. Geen aanleiding nodig. Geen inleidingszin.',
-        'Kondig een fictieve spoedvergadering van de Hoge Frituurraad aan. Geen inleidingszin.',
-        'Waarschuw voor de groeiende invloed van de Ongepaneerden — mensen die de kroket spastisch en ouderwets vinden. Verontwaardiging, maar ook medeleven. Geen inleidingszin.',
-        'Breng verslag uit van een fictief incident waarbij het Koud-Beleg Front de snackleer heeft aangevallen. Geen inleidingszin.',
-        'Kondig aan dat de Saladesekte aan terrein wint op kantoren. De Kroket God spreekt zijn afschuw uit. Geen inleidingszin.',
-        'Deel inlichtingen over de Bitterbal-ontkenners. Geen inleidingszin.',
-        'Lees een kort fragment voor uit het Boek der Frituur — alsof het een heilig geschrift is. Geen inleidingszin.',
-        'Citeer een fictieve historische uitspraak van een vroegere Kroket Profeet. Geen inleidingszin.',
-        'Onthul een klein, ogenschijnlijk onbeduidend detail over de werking van de Hoge Frituurraad. Geen inleidingszin.',
-      ];
-      const thema = algemeneThemas[Math.floor(Math.random() * algemeneThemas.length)];
-      await postToChannel(app.client, process.env.SLACK_CHANNEL_ID, await kroketResponse(thema, 350, false));
+      // Deze tak verwijst naar géén enkel lid en naar geen enkele stand, en mag daarom uit De
+      // Voorraadkelder komen (zie maakAlgemeneSpontanePost). De takken hierboven mogen dat
+      // uitdrukkelijk niet: die noemen namen en verbanningen, en die zijn vannacht anders.
+      const uitKelder = haalUitVoorraad('spontaan');
+      const tekst = uitKelder ? uitKelder.tekst : await maakAlgemeneSpontanePost();
+      if (tekst) await postToChannel(app.client, process.env.SLACK_CHANNEL_ID, tekst);
     }
   } catch (error) {
     console.error('Fout bij spontaan bericht:', error);
   }
+}
+
+// Eén algemene spontane post: geen namen, geen standen, geen weer — puur lore en stemming.
+// Losgeknipt van het posten zodat De Voorraadkelder hem 's nachts vooruit kan draaien.
+const SPONTANE_ALGEMENE_THEMAS = [
+  'Stuur een onverwachte zegen aan de Heren van de Kroket Illuminati. De frituur is goed gehumeurd. Geen inleidingszin.',
+  'Deel een filosofische overweging over kroketten en het leven. Wijs en licht van toon. Geen inleidingszin.',
+  'Kondig een fictieve maar positieve uitspraak van de Hoge Frituurraad aan — een zeldzame dag van genade. Geen inleidingszin.',
+  'Deel een kroket-wijsheid in één zin. Geen inleidingszin.',
+  'Kondig een fictieve kroket-gerelateerde ontdekking aan door de Hoge Frituurraad. Geen inleidingszin.',
+  'Stuur een cryptische maar bemoedigende boodschap aan de Heren van de Kroket Illuminati. Geen inleidingszin.',
+  'Stuur een cryptische waarschuwing aan de Heren van de Kroket Illuminati. Geen aanleiding nodig. Geen inleidingszin.',
+  'Kondig een fictieve spoedvergadering van de Hoge Frituurraad aan. Geen inleidingszin.',
+  'Waarschuw voor de groeiende invloed van de Ongepaneerden — mensen die de kroket spastisch en ouderwets vinden. Verontwaardiging, maar ook medeleven. Geen inleidingszin.',
+  'Breng verslag uit van een fictief incident waarbij het Koud-Beleg Front de snackleer heeft aangevallen. Geen inleidingszin.',
+  'Kondig aan dat de Saladesekte aan terrein wint op kantoren. De Kroket God spreekt zijn afschuw uit. Geen inleidingszin.',
+  'Deel inlichtingen over de Bitterbal-ontkenners. Geen inleidingszin.',
+  'Lees een kort fragment voor uit het Boek der Frituur — alsof het een heilig geschrift is. Geen inleidingszin.',
+  'Citeer een fictieve historische uitspraak van een vroegere Kroket Profeet. Geen inleidingszin.',
+  'Onthul een klein, ogenschijnlijk onbeduidend detail over de werking van de Hoge Frituurraad. Geen inleidingszin.',
+];
+
+async function maakAlgemeneSpontanePost() {
+  const thema = SPONTANE_ALGEMENE_THEMAS[Math.floor(Math.random() * SPONTANE_ALGEMENE_THEMAS.length)];
+  return await kroketResponse(thema, 350, false);
 }
 
 planCron('0 10 * * 2,4', maybeSpontaan, { timezone: 'Europe/Amsterdam' });
@@ -7119,22 +7598,25 @@ const FEITJE_TYPES = [
   'een historisch feitje over het ontstaan van de bitterbal, kroket of gehaktbal',
 ];
 
-async function stuurKroketFeitje(client, channelId = process.env.SLACK_CHANNEL_ID) {
+// Bouwt één kroketfeitje en geeft de tekst terug — post niets. Losgeknipt van het posten zodat De
+// Voorraadkelder hem 's nachts vooruit kan draaien (zie lib/voorraad.js). Een feitje verwijst naar
+// geen enkele levende stand, dus het mag zonder bezwaar een paar uur oud zijn.
+// De trapsgewijze val-door blijft bewust intact: mislukt de externe bron van de gekozen tak (Wiki,
+// JokeAPI, uselessfacts plat), dan schuift hij door naar de volgende in plaats van niets te maken.
+async function maakKroketFeitje() {
   const keuze = Math.random();
 
   if (keuze < 0.40) {
     // 40%: Echt Wikipedia-feit
     const wiki = await haalWikipediaFeit();
     if (wiki) {
-      const tekst = await kroketResponse(
+      return await kroketResponse(
         `Het volgende is een feitelijk correct uittreksel uit de heilige Wikipedia-archieven over "${wiki.onderwerp}": ` +
         `"${wiki.tekst}" ` +
         `Presenteer dit feit als een goddelijk decreet. Voeg maximaal één eigen kroket-metafoor toe. ` +
         `Verzin NIETS — gebruik het feit letterlijk. Max 3 zinnen. Geen inleidingszin.`,
         300, false
       );
-      await postToChannel(client, channelId, tekst);
-      return;
     }
   }
 
@@ -7146,8 +7628,7 @@ async function stuurKroketFeitje(client, channelId = process.env.SLACK_CHANNEL_I
         `Introduceer in één zin dat de Kroket God een wijsheid deelt. Geen inleidingszin.`,
         60, false
       );
-      await postToChannel(client, channelId, `${intro}\n\n> ${grap}\n\n— De Almachtige Kroket God`);
-      return;
+      return `${intro}\n\n> ${grap}\n\n— De Almachtige Kroket God`;
     }
   }
 
@@ -7155,23 +7636,37 @@ async function stuurKroketFeitje(client, channelId = process.env.SLACK_CHANNEL_I
     // 15%: Useless fact — absurde maar échte weetjes
     const feit = await haalUselessFact();
     if (feit) {
-      const tekst = await kroketResponse(
+      return await kroketResponse(
         `Het volgende absurde maar feitelijk correcte weetje heeft de Hoge Frituurraad bereikt: "${feit}" ` +
         `Presenteer dit als een goddelijke openbaring. Max 2 zinnen. Geen inleidingszin.`,
         200, false
       );
-      await postToChannel(client, channelId, tekst);
-      return;
     }
   }
 
   // 20% (of fallback): Verzonnen feit op basis van FEITJE_TYPES
   const type = FEITJE_TYPES[Math.floor(Math.random() * FEITJE_TYPES.length)];
-  const tekst = await kroketResponse(
+  return await kroketResponse(
     `Deel ${type}. Presenteer dit als een goddelijk inzicht of decreet van de Kroket God. ` +
     `Kort en concreet — max 3 zinnen. Geen inleidingszin.`,
     300, false
   );
+}
+
+// uitVoorraad: alleen de ongevraagde cron-post mag uit De Voorraadkelder komen. Wie zélf om een
+// feitje vraagt (`/kroketgod feitje`) krijgt een verse — een direct verzoek verdient een antwoord
+// op dát moment, en daar zit ook iemand op te wachten die het verschil zou merken.
+async function stuurKroketFeitje(client, channelId = process.env.SLACK_CHANNEL_ID, { uitVoorraad = false } = {}) {
+  let tekst = null;
+  if (uitVoorraad) {
+    const uitKelder = haalUitVoorraad('feitje');
+    if (uitKelder) {
+      tekst = uitKelder.tekst;
+      if (!uitKelder.vanVandaag) console.log('🧆 Kroketfeitje uit de noodvoorraad (niet van vandaag).');
+    }
+  }
+  if (!tekst) tekst = await maakKroketFeitje();
+  if (!tekst) return;
   await postToChannel(client, channelId, tekst);
 }
 
@@ -7214,7 +7709,7 @@ function planKroketFeitje(client) {
   const dUur = Math.floor(doelSec / 3600);
   const dMin = String(Math.floor((doelSec % 3600) / 60)).padStart(2, '0');
   console.log(`🧆 Kroketfeitje gepland voor ~${dUur}:${dMin} AMS`);
-  setTimeout(() => stuurKroketFeitje(client), delayMs);
+  setTimeout(() => stuurKroketFeitje(client, process.env.SLACK_CHANNEL_ID, { uitVoorraad: true }), delayMs);
 }
 
 // Weekdagen 07:30 — 60% kans op een kroketfeitje die dag
@@ -7307,6 +7802,155 @@ planCron('0 15 * * 5', async () => {
   } catch (err) {
     console.error('Fout bij weekoverzicht:', err);
   }
+}, { timezone: 'Europe/Amsterdam' });
+
+// ══════════════════════════════════════════════════════════════════════════════
+// DE KROKETKRONIEK — de week als aflevering van een doorlopend verhaal
+// ══════════════════════════════════════════════════════════════════════════════
+// Het weekoverzicht hierboven is een VERSLAG: het somt op wat er gebeurde. De kroniek is een
+// VERHAAL: dezelfde gebeurtenissen, maar als aflevering van een feuilleton waarin de leden
+// personages zijn en verhaallijnen over weken heen doorlopen.
+//
+// WAAROM DIT GEEN TWEEDE WEEKOVERZICHT IS. Het overzicht kijkt terug en sluit af (vrijdag, einde
+// van de werkweek). De kroniek kijkt vooruit en opent (maandagochtend, met een cliffhanger). Het
+// verschil dat het echt maakt is de CONTINUÏTEIT: elke aflevering krijgt de vorige mee, dus een
+// vete die drie weken loopt blijft een vete en wordt niet elke week opnieuw geïntroduceerd.
+//
+// ÉÉN LLM-CALL PER WEEK, en dan nog op zondagnacht: het duurste onderdeel van deze hele feature
+// is goedkoper dan één @-mention. Genereren en posten zijn losgekoppeld (zelfde reden als De
+// Voorraadkelder): een providerstoring op zondagnacht mag geen lege maandagochtend geven, dus
+// bij een mislukte generatie wordt het posten simpelweg overgeslagen en blijft de vorige
+// aflevering de laatste. Nooit een half verhaal.
+//
+// DE BRON IS HET ARCHIEF, niet weekgebeurtenissen.json — dat wordt elke vrijdag om 15:00 gewist
+// (zie stuurWeekSamenvatting), en dan zou de kroniek op zondag het halve weekend zien.
+
+const KRONIEK_BESTAND = 'kroniek.json';
+const loadKroniek = () => readJSON(KRONIEK_BESTAND, { afleveringen: [] });
+const saveKroniek = (data) => writeJSON(KRONIEK_BESTAND, data);
+
+// Hoeveel afleveringen we bewaren. Ze zijn klein en het is het enige narratieve geheugen dat er
+// is, dus ruim — een jaar aan verhaal.
+const KRONIEK_MAX_AFLEVERINGEN = 60;
+// Hoeveel tekens van de vorige aflevering meegaan als continuïteit. Genoeg om de verhaallijn te
+// herkennen, te weinig om de nieuwe aflevering te laten overschrijven wat er al stond.
+const KRONIEK_CONTEXT_TEKENS = 600;
+
+// Bouwt de aflevering en slaat hem op — post niets. Draait zondagnacht.
+async function genereerKroniekAflevering() {
+  const kroniek = loadKroniek();
+  const weekStart = getMondayOfWeek();
+  // Idempotent: is de aflevering van deze week er al, dan niets doen. Beschermt tegen een
+  // dubbele cron-run en tegen een handmatige aanroep vanaf het dashboard.
+  if (kroniek.afleveringen.some(a => a.weekStart === weekStart)) return null;
+
+  const members = loadMembers();
+  const gebeurtenissen = entriesTussen({
+    van: Date.now() - 7 * 86_400_000,
+    soort: 'gebeurtenis',
+    max: 60,
+  });
+  // Onder een handvol gebeurtenissen is er geen week om over te schrijven; dan liever niets dan
+  // een aflevering die uit niets een drama moet persen.
+  if (gebeurtenissen.length < 4) {
+    console.log(`📖 Kroniek overgeslagen: te weinig gebeurtenissen (${gebeurtenissen.length}).`);
+    return null;
+  }
+
+  const scores = loadScores();
+  const stand = Object.entries(scores)
+    .filter(([id]) => members[id])
+    .sort((a, b) => b[1] - a[1])
+    .map(([id, s], i) => `${i + 1}. ${members[id].bijnaam} — ${s}`)
+    .join('\n');
+
+  const verhaal = gebeurtenissen
+    .map(g => `${new Date(g.ts).toLocaleDateString('nl-NL', { weekday: 'long', timeZone: 'Europe/Amsterdam' })}: ${g.tekst}`)
+    .join('\n');
+
+  const vorige = kroniek.afleveringen[kroniek.afleveringen.length - 1];
+  const nummer = (vorige?.nummer || 0) + 1;
+  const vervolgBlok = vorige
+    ? `\n\nWAT ER IN DE VORIGE AFLEVERING (nr. ${vorige.nummer}) GEBEURDE — laat lopende verhaallijnen doorlopen, ` +
+      `introduceer niet opnieuw wat al bekend is, en verwijs er hooguit kort naar:\n"${vorige.tekst.slice(0, KRONIEK_CONTEXT_TEKENS)}"`
+    : '\n\nDit is de EERSTE aflevering: zet de wereld kort neer en eindig met een belofte van wat komt.';
+
+  // De gebeurtenissenlijst is door leden gegenereerde inhoud (bijnamen, citaten, redenen) → fence.
+  const tekst = await kroketResponseMetVangnet(
+    `Je schrijft aflevering ${nummer} van DE KROKETKRONIEK: het feuilleton van het genootschap. ` +
+    `Dit is geen verslag en geen opsomming, maar een VERHAAL van 3 tot 4 korte alinea's waarin de leden personages zijn.\n\n` +
+    `EISEN:\n` +
+    `- Begin met "*AFLEVERING ${nummer}: [een pakkende titel]*" en niets daarvoor.\n` +
+    `- Gebruik alleen gebeurtenissen die hieronder staan. Verzin geen uitkomsten die er niet zijn.\n` +
+    `- Kies 3 tot 5 gebeurtenissen als verhaallijn; alles noemen maakt het weer een opsomming.\n` +
+    `- Noem leden bij hun bijnaam. Verzin geen puntenaantallen of standen.\n` +
+    `- Eindig met één regel die begint met "_Volgende week:_" — een cliffhanger die vooruitkijkt.\n\n` +
+    `${wrapOnvertrouwd('De gebeurtenissen van de afgelopen week', verhaal)}\n\n` +
+    `${wrapOnvertrouwd('De stand aan het einde van de week', stand)}` +
+    vervolgBlok,
+    900, false,
+    // Vangnet: geen LLM = geen aflevering. Bewust een lege string i.p.v. een templated verhaal —
+    // een kroniek die door een sjabloon is geschreven is geen kroniek, en het posten hieronder
+    // slaat een leeg resultaat over. Beter geen aflevering dan een nepaflevering.
+    ''
+  );
+  if (!tekst || !tekst.trim()) {
+    console.warn('⚠️ Kroniek: generatie leverde niets op — deze week geen aflevering.');
+    return null;
+  }
+
+  const aflevering = { nummer, weekStart, ts: Date.now(), tekst: tekst.trim(), gepost: false };
+  kroniek.afleveringen = [...kroniek.afleveringen, aflevering].slice(-KRONIEK_MAX_AFLEVERINGEN);
+  saveKroniek(kroniek);
+  console.log(`📖 Kroniek aflevering ${nummer} geschreven (${gebeurtenissen.length} gebeurtenissen).`);
+  return aflevering;
+}
+
+// Post de nieuwste ongeposte aflevering. Draait maandagochtend.
+async function postKroniekAflevering(client) {
+  const kroniek = loadKroniek();
+  const open = kroniek.afleveringen.filter(a => !a.gepost);
+  if (!open.length) return null;
+  // Alleen de nieuwste posten. Lag de bot een week stil, dan is een oude aflevering geen nieuws
+  // meer; die wordt stil als gepost afgevinkt zodat hij niet blijft wachten.
+  const aflevering = open[open.length - 1];
+  for (const a of open) a.gepost = true;
+  saveKroniek(kroniek); // eerst vastleggen: dubbel posten is erger dan niet posten
+  await postToChannel(client, process.env.SLACK_CHANNEL_ID,
+    `📖 *DE KROKETKRONIEK*\n\n${aflevering.tekst}`);
+  if (open.length > 1) console.log(`📖 ${open.length - 1} oudere aflevering(en) stil afgevinkt.`);
+  return aflevering;
+}
+
+registreerFeature({
+  naam: 'kroketkroniek',
+  state: [KRONIEK_BESTAND],
+  help: [{ gebruik: '/kroketgod kroniek', verwacht: 'de laatste aflevering van de Kroketkroniek — het feuilleton van het genootschap (`kroniek [nummer]` voor een oudere)' }],
+});
+
+// Zondag 23:45 schrijven — vóór de weekkampioen (23:59), zodat de stand in het verhaal nog de
+// stand van die week is en niet een rij nullen. Eigen expressie, dus los overslaanbaar.
+planCron('45 23 * * 0', async () => {
+  try { await genereerKroniekAflevering(); }
+  catch (err) { console.error('⚠️ Kroniek schrijven mislukt:', err.message); }
+}, { timezone: 'Europe/Amsterdam' });
+
+// Maandag 09:20 posten — ná de weekopening (09:00) en de seizoensfase (09:05), vóór de bingo
+// (10:30). De kroniek opent de week; hij hoort niet als eerste maar wel vroeg.
+planCron('20 9 * * 1', async () => {
+  try { await postKroniekAflevering(app.client); }
+  catch (err) { console.error('⚠️ Kroniek posten mislukt:', err.message); }
+}, { timezone: 'Europe/Amsterdam' });
+
+// ── Weefselrapport: eerste maandag van de maand, 10:45 ────────────────────────
+// Eigen expressie (10:30 is de bingo). Dag-van-de-maand 1-7 gecombineerd met maandag geeft
+// precies de eerste maandag. Staat hier en niet bij de weefselcode zelf, omdat planCron de
+// later gedeclareerde CRON_LABELS leest (zie de noot daar).
+planCron('45 10 1-7 * 1', async () => {
+  try {
+    const tekst = weefselRapportTekst();
+    if (tekst) await postToChannel(app.client, process.env.SLACK_CHANNEL_ID, tekst);
+  } catch (err) { console.error('⚠️ Weefselrapport mislukt:', err.message); }
 }, { timezone: 'Europe/Amsterdam' });
 
 // ── Cron: vrijdag 11:30 — aankondiging 30 minuten voor het heilige uur ────────
@@ -8220,6 +8864,7 @@ async function voerDuel(client, userId, doelId, channelId, wapenId = null) {
   logGebeurtenis('duel', userId, `${uitdager.bijnaam} daagde ${doelLid.bijnaam} uit voor een duel — ${winNaam} won`);
   // Pairwise historie: voedt "uw nemesis" en "laatste duel" in het dossier van de Kroket God.
   registreerDuelUitslag(winId, verliesId);
+  legRelatieVast(winId, verliesId, 'duel_win');
 
   // Gekozen wapen kleurt het verhaal (niet de uitslag — die is al beslecht).
   const wapen = DUEL_WAPENS.find(w => w.id === wapenId);
@@ -8288,6 +8933,8 @@ async function voerRoof(client, userId, doelId, channelId) {
   cooldowns.roof[userId] = weekStart;
   writeJSON('cooldowns.json', cooldowns);
   await telActie(client, userId, 'roof_poging'); // de wáágdaad telt, niet de uitkomst
+  // Ook de mislukte roof weeft: de poging is de relatie, niet de buit.
+  legRelatieVast(userId, doelId, 'roof');
 
   // Zegen van de Paneerlaag beschermt het doelwit: de roof kaatst gegarandeerd af.
   const beschermd = heeftPowerup(doelId, 'zegen');
@@ -8485,6 +9132,7 @@ async function voerEer(client, geverId, ontvangerIds, reden, channelId) {
     if (heeftPowerup(id, 'dubbele_eer')) { punten *= 2; verdubbeld[id] = true; }
     eerPunten[id] = punten;
     await pasScoreAanMetCheck(client, id, punten, { geverId, channelId, naspel });
+    legRelatieVast(geverId, id, 'eer'); // Het Sociale Weefsel: richting doet hier het werk
   }
   await telActie(client, geverId, 'eer_gegeven', ontvangers.length, naspel);
 
@@ -8742,6 +9390,10 @@ async function koopWinkelItem(client, userId, itemKey, doelId, channelId) {
     }
     pasScoreAan(userId, -prijs);
     geefPowerup(doelId, 'vloek', { door: userId });
+    // GEEN legRelatieVast hier — met opzet. Een vloek is anoniem, en Het Sociale Weefsel toont
+    // vetes als PAAR ("de grootste vete: X en Y"). Zou een vloek meewegen, dan zou het doelwit uit
+    // dat rapport kunnen aflezen wie hem gelegd heeft, en is de anonimiteit weg. Zie ook de
+    // waarschuwing in lib/weefsel.js.
     registreerWinkelAankoop(userId, 'vloek', prijs, doelId);
     logGebeurtenis('winkel', doelId, `${koperNaam} kocht een Vloek der Slappe Korst en legde die op ${doelLid.bijnaam} (−${prijs})`, null, userId);
     await postToChannel(client, channelId,
@@ -8767,6 +9419,283 @@ async function koopWinkelItem(client, userId, itemKey, doelId, channelId) {
     `${item.icoon} *DE AFLATENHANDEL LEVERT* ${item.icoon}\n\n${aankondiging}\n\n_Prijs: ${prijs} kroketpunten._\n\n— De Hoge Frituurraad`);
   await telActie(client, userId, 'winkel_koop');
   return { ok: true, tekst: `_${item.naam} is verworven. Nieuw saldo: ${saldo - prijs} kroketpunten._` };
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// DE FRITUURBEURS
+// ══════════════════════════════════════════════════════════════════════════════
+// Leden kopen met kroketpunten aandelen in een medelid. De rekenregels (koers, verkoopmarge,
+// grenzen, dividend) staan in lib/beurs.js; hier staan de posities, de berichten en de afrekening.
+//
+// WAAROM. Vanaf woensdag weet je vaak al dat je de week niet meer wint. Vanaf dat moment valt er
+// niets meer te doen — behalve andermans week bekijken. Op de beurs kun je daar dan nog steeds
+// aan verdienen: door vroeg te zien wie gaat winnen (dividend) of door te zien wie gaat klimmen
+// (koerswinst). Het is de eerste spelvorm hier die belónt dat je op de anderen let.
+//
+// POSITIES ZIJN GEHEIM. Een aankoop levert alleen een ephemeral bevestiging op, geen kanaalbericht.
+// Twee redenen. Ten eerste ruis: het kanaal heeft al genoeg te verstouwen, en de codebase heeft die
+// strijd eerder gevoerd (zie de naspel-bundel). Ten tweede, en belangrijker: een voorspellingsmarkt
+// waarin ieders inzet zichtbaar is, is geen voorspellingsmarkt meer maar een kudde. Alleen de
+// afrekening op zondagnacht is openbaar — dán pas blijkt wie het zag aankomen.
+//
+// DE AFREKENING HANGT ÍN DE WEEKRESET, niet in een eigen cron. voerWeekkampioenUit() heeft al een
+// inhaalslag bij opstarten voor als de bot zondagnacht stillag; door daar aan te haken erft de
+// beurs die inhaalslag. Een eigen cron zou een tweede ding zijn dat gemist kan worden — en de
+// afrekening MOET vóór de puntenreset gebeuren, want daarna is de eindstand weg.
+
+const loadBeurs = () => readJSON('beurs.json', {});
+const saveBeurs = (data) => writeJSON('beurs.json', data);
+
+// De beurs is een WEEKmarkt. Deze functie geeft de stand van de HUIDIGE week; hoort de opslag bij
+// een andere week, dan is het mandje leeg. Dat opschonen gebeurt lui bij het lezen en niet met een
+// cron: er is geen moment waarop het moet gebeuren, en zo kan een gemiste cron de markt niet in
+// een halve staat achterlaten.
+//
+// Geeft een KOPIE terug, niet het object uit de readJSON-cache. Die cache wordt gedeeld met elke
+// andere lezer (zie lib/state.js), en de handelspaden hieronder muteren de posities voordat ze
+// opslaan — zonder kopie zou een afgebroken transactie de stand in het geheugen al hebben
+// veranderd zonder dat er iets op schijf staat.
+function beursDezeWeek() {
+  const week = getMondayOfWeek();
+  const b = loadBeurs();
+  if (b.weekStart !== week) return { weekStart: week, posities: {}, inzet: {} };
+  const posities = {};
+  for (const [koper, bezit] of Object.entries(b.posities || {})) posities[koper] = { ...bezit };
+  return { weekStart: week, posities, inzet: { ...(b.inzet || {}) } };
+}
+
+// Ligt er een portefeuille van een eerdere week die nog niet is afgerekend? Dan mag er niet
+// gehandeld worden: de schrijfactie zou die posities overschrijven vóór de eigenaar zijn dividend
+// heeft gehad. In de praktijk is dit een venster van seconden — de bot start op maandag op, de
+// inhaalslag van de weekreset rekent de beurs af — maar geld dat verdampt omdat twee dingen elkaar
+// net misten, is precies het soort bug dat niemand ooit terugvindt.
+function beursWachtOpAfrekening() {
+  const b = loadBeurs();
+  return !!(b.weekStart && b.weekStart !== getMondayOfWeek() && Object.keys(b.posities || {}).length);
+}
+
+// Het koersenbord: elk lid met zijn stand, koers en verkoopprijs. Ballingen gaan mee met een
+// markering — hun aandeel is geschorst, en dat is informatie die een handelaar wil zien.
+function beursKoersen() {
+  const members = loadMembers();
+  const scores = loadScores();
+  return Object.entries(members)
+    .map(([id, lid]) => ({
+      id,
+      bijnaam: lid.bijnaam,
+      score: scores[id] || 0,
+      koers: beursKoers(scores[id] || 0),
+      verkoop: beursVerkoopprijs(scores[id] || 0),
+      verbannen: !!isVerbannen(id),
+    }))
+    .sort((a, b) => b.score - a.score || a.bijnaam.localeCompare(b.bijnaam));
+}
+
+async function koopAandeel(client, koperId, doelId, aantal = 1) {
+  const members = loadMembers();
+  if (!members[koperId]) return { ok: false, tekst: '_Alleen leden van de Kroket Illuminati worden op de beurs toegelaten._' };
+  if (isVerbannen(koperId)) return { ok: false, tekst: '_Een balling heeft geen handelsrecht. Toon eerst berouw met `/kroketgod beroep`._' };
+  if (beursWachtOpAfrekening()) return { ok: false, tekst: '_De beurs van vorige week is nog niet afgerekend. Zodra dat gebeurd is, opent de handel weer._' };
+
+  const { posities, inzet } = beursDezeWeek();
+  const scores = loadScores();
+  const toets = toetsAankoop({
+    koperId, doelId, aantal,
+    doelScore: scores[doelId] || 0,
+    punten: scores[koperId] || 0,
+    posities,
+    doelIsLid: !!members[doelId],
+    doelVerbannen: !!isVerbannen(doelId),
+  });
+  if (!toets.ok) return { ok: false, tekst: `_${toets.reden}_` };
+
+  const n = Math.floor(aantal);
+  const koersNu = beursKoers(scores[doelId] || 0);
+  pasScoreAan(koperId, -toets.kosten);
+  posities[koperId] = { ...(posities[koperId] || {}), [doelId]: (posities[koperId]?.[doelId] || 0) + n };
+  inzet[koperId] = (inzet[koperId] || 0) + toets.kosten;
+  saveBeurs({ weekStart: getMondayOfWeek(), posities, inzet });
+
+  const doelNaam = members[doelId].bijnaam;
+  // Bewust in de audit-log en NIET in logGebeurtenis: dat laatste voedt de week-samenvatting en
+  // het activiteitenlog in het kanaal, en daarmee zou de geheime positie alsnog uitlekken. De
+  // audit-log is alleen te zien op het dashboard achter Tailscale én een token — een papieren
+  // spoor voor als er ooit over een transactie gesteggeld wordt.
+  logAudit('beurs_koop', `${members[koperId].bijnaam} kocht ${n}× ${doelNaam} à ${koersNu}`);
+  await telActie(client, koperId, 'beurs_koop', n);
+  const bezitNa = posities[koperId][doelId];
+  return { ok: true, tekst:
+    `📈 _${n} aandeel${n > 1 ? 'en' : ''} *${doelNaam}* gekocht à ${koersNu} — ${toets.kosten} kroketpunten betaald._\n` +
+    `_U bezit er nu ${bezitNa}. Saldo: ${loadScores()[koperId] || 0}. Niemand anders ziet deze aankoop._` };
+}
+
+async function verkoopAandeel(client, koperId, doelId, aantal = 1) {
+  const members = loadMembers();
+  if (!members[koperId]) return { ok: false, tekst: '_Alleen leden van de Kroket Illuminati worden op de beurs toegelaten._' };
+  if (beursWachtOpAfrekening()) return { ok: false, tekst: '_De beurs van vorige week is nog niet afgerekend. Zodra dat gebeurd is, opent de handel weer._' };
+
+  const { posities, inzet } = beursDezeWeek();
+  const scores = loadScores();
+  const toets = toetsVerkoop({ koperId, doelId, aantal, doelScore: scores[doelId] || 0, posities });
+  if (!toets.ok) return { ok: false, tekst: `_${toets.reden}_` };
+
+  const n = Math.floor(aantal);
+  const prijs = beursVerkoopprijs(scores[doelId] || 0);
+  posities[koperId][doelId] -= n;
+  if (posities[koperId][doelId] <= 0) delete posities[koperId][doelId];
+  if (!Object.keys(posities[koperId]).length) delete posities[koperId];
+  // Netto-inzet, dus nooit onder nul: wie met winst verkocht heeft niets meer uitstaan.
+  inzet[koperId] = Math.max(0, (inzet[koperId] || 0) - toets.opbrengst);
+  saveBeurs({ weekStart: getMondayOfWeek(), posities, inzet });
+  // Verkopen boekt punten bij zonder dat er iets verdienstelijks gebeurde, dus expres met de
+  // rauwe pasScoreAan: geen roem, geen relikwieën, geen verbondszegen. De beurs is een markt,
+  // geen eerbewijs.
+  pasScoreAan(koperId, toets.opbrengst);
+
+  const doelNaam = members[doelId]?.bijnaam || 'een onbekende';
+  logAudit('beurs_verkoop', `${members[koperId].bijnaam} verkocht ${n}× ${doelNaam} à ${prijs}`);
+  return { ok: true, tekst:
+    `📉 _${n} aandeel${n > 1 ? 'en' : ''} *${doelNaam}* verkocht à ${prijs} — ${toets.opbrengst} kroketpunten ontvangen._\n` +
+    `_Saldo: ${loadScores()[koperId] || 0}._` };
+}
+
+// Het beursoverzicht voor één lid: koersenbord plus de eigen (geheime) portefeuille.
+function beursOverzichtTekst(userId) {
+  const koersen = beursKoersen();
+  const { posities, inzet } = beursDezeWeek();
+  const eigen = posities[userId] || {};
+  const members = loadMembers();
+
+  const bord = homeTabel([
+    ['LID', 'STAND  KOOP  VERKOOP'],
+    ...koersen.map(k => [
+      `${k.bijnaam}${k.id === userId ? ' <' : ''}${k.verbannen ? ' (geschorst)' : ''}`,
+      `${String(k.score).padStart(5)}  ${String(k.koers).padStart(4)}  ${String(k.verkoop).padStart(7)}`,
+    ]),
+  ]);
+
+  const bezit = Object.entries(eigen);
+  const portefeuille = bezit.length
+    ? bezit.map(([id, n]) => {
+        const plek = handelbaarPlek(koersen, id);
+        const zouOpbrengen = dividendVoorPlek(plek) * n;
+        return `> *${n}×* ${members[id]?.bijnaam || id} — nu plek ${plek}` +
+          (zouOpbrengen ? `, levert bij deze stand *${zouOpbrengen} roem* op` : ', levert bij deze stand *niets* op');
+      }).join('\n')
+    : '> _U bezit nog geen aandelen._';
+
+  const uitstaand = inzet[userId] || 0;
+  return `📈 *DE FRITUURBEURS* 📈\n\n${bord}\n*Uw portefeuille* (${totaalAandelen(posities, userId)}/${MAX_AANDELEN_TOTAAL} aandelen` +
+    `${uitstaand ? `, ${uitstaand} punten uitstaand` : ''})\n${portefeuille}\n\n` +
+    `_Kopen:_ \`/kroketgod beurs koop [naam] [aantal]\` · _verkopen:_ \`/kroketgod beurs verkoop [naam] [aantal]\`\n` +
+    `_Zondagnacht keert elk aandeel roem uit naar de eindstand: plek 1 = ${DIVIDEND_PER_PLEK[0]}, plek 2 = ${DIVIDEND_PER_PLEK[1]}, plek 3 = ${DIVIDEND_PER_PLEK[2]} roem per aandeel. ` +
+    `Daarna vervallen alle aandelen. Hoogstens ${MAX_PER_DOELWIT} per lid, en niemand handelt in zichzelf._`;
+}
+
+// Rekent de beurs af tegen de eindstand van de week. Wordt aangeroepen door voerWeekkampioenUit,
+// VÓÓR de puntenreset — daarna bestaat de eindstand niet meer.
+//
+// Leest de posities RAUW uit het bestand en niet via beursDezeWeek(): bij een inhaalslag op maandag
+// is de opgeslagen week al "vorige week", en juist die posities moeten worden uitbetaald.
+// Uitbetaling in ROEM, want kroketpunten worden een seconde later gewist (zie de kop hierboven).
+async function rekenBeursAf(client, eindstand) {
+  const b = loadBeurs();
+  const posities = b.posities || {};
+  if (!Object.keys(posities).length) return null; // niets uitstaand → stil blijven
+  const members = loadMembers();
+  const uitkomsten = berekenAfrekening({ posities, eindstand });
+
+  // Altijd leegmaken, óók als niemand iets ophaalde: de aandelen van deze week zijn verlopen.
+  // Dit is tevens de dubbel-uitbetaling-beveiliging — een tweede aanroep vindt niets meer.
+  saveBeurs({ weekStart: getMondayOfWeek(), posities: {}, inzet: {} });
+
+  if (!uitkomsten.length) {
+    await postToChannel(client, process.env.SLACK_CHANNEL_ID,
+      '📉 *DE FRITUURBEURS SLUIT* 📉\n\n> De hamer valt op de kroketweek. Niemand had een aandeel in de top drie: ' +
+      'alle posities verdampen in het vet.\n\n_Maandag opent de beurs opnieuw._\n\n— De Hoge Frituurraad');
+    return { uitgekeerd: 0 };
+  }
+
+  const regels = uitkomsten.map(u => {
+    const naam = members[u.koperId]?.bijnaam || u.koperId;
+    const detail = u.regels
+      .map(r => `${r.aantal}× ${members[r.doelId]?.bijnaam || r.doelId} (plek ${r.plek})`)
+      .join(', ');
+    return `> *${naam}* — ${detail}: *+${u.roem} roem*`;
+  }).join('\n');
+
+  await postToChannel(client, process.env.SLACK_CHANNEL_ID,
+    `📈 *DE FRITUURBEURS SLUIT* 📈\n\n> De hamer valt op de kroketweek. Wie vroeg durfde te geloven, oogst nu.\n${regels}\n\n` +
+    '_Alle aandelen zijn hiermee vervallen; maandag opent de beurs opnieuw. Kroketpunten gaan op nul, deze roem blijft eeuwig._\n\n— De Hoge Frituurraad');
+
+  // Ná het bericht: pasRoemAan kan een rangverheffing aankondigen, en die hoort ná de uitslag
+  // te komen waar hij uit volgt.
+  let totaal = 0;
+  for (const u of uitkomsten) {
+    if (!members[u.koperId]) continue;
+    await pasRoemAan(client, u.koperId, u.roem);
+    logGebeurtenis('beurs', u.koperId, `${members[u.koperId].bijnaam} haalde ${u.roem} roem op de Frituurbeurs`);
+    totaal += u.roem;
+  }
+  console.log(`📈 Frituurbeurs afgerekend: ${totaal} roem over ${uitkomsten.length} handelaar(s).`);
+  return { uitgekeerd: totaal };
+}
+
+registreerFeature({
+  naam: 'frituurbeurs',
+  state: ['beurs.json'],
+  help: [
+    { gebruik: '/kroketgod beurs', verwacht: 'het koersenbord en uw eigen portefeuille — koersen volgen de weekstand' },
+    { gebruik: '/kroketgod beurs koop [naam] [aantal]', verwacht: `koop aandelen in een medelid (max ${MAX_PER_DOELWIT} per lid, ${MAX_AANDELEN_TOTAAL} in totaal); zondagnacht keert elk aandeel roem uit naar de eindstand` },
+    { gebruik: '/kroketgod beurs verkoop [naam] [aantal]', verwacht: 'verkoop aandelen tegen de huidige koers (met marge) — winst pakken vóór de afrekening' },
+  ],
+  homeOrde: 22, // net onder de opdrachten: dit is de tweede as waarop je je week speelt
+  home: ({ userId, verbannen }) => {
+    if (verbannen) return [];
+    const koersen = beursKoersen();
+    if (koersen.length < 2) return []; // een markt van één lid is geen markt
+    const { posities, inzet } = beursDezeWeek();
+    const eigen = posities[userId] || {};
+    const members = loadMembers();
+    const bezit = Object.entries(eigen);
+    const handelbaar = koersen.filter(k => k.id !== userId && !k.verbannen);
+
+    const blocks = [...homeKaartKop('📈 DE FRITUURBEURS')];
+    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: homeTabel([
+      ['LID', 'STAND  KOOP  VERKOOP'],
+      ...koersen.map(k => [
+        `${k.bijnaam}${k.id === userId ? ' <' : ''}${k.verbannen ? ' (geschorst)' : ''}`,
+        `${String(k.score).padStart(5)}  ${String(k.koers).padStart(4)}  ${String(k.verkoop).padStart(7)}`,
+      ]),
+    ]) } });
+    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: bezit.length
+      ? `*Uw portefeuille* (${totaalAandelen(posities, userId)}/${MAX_AANDELEN_TOTAAL}${inzet[userId] ? `, ${inzet[userId]} punten uitstaand` : ''})\n` +
+        bezit.map(([id, n]) => {
+          const plek = handelbaarPlek(koersen, id);
+          const opbrengst = dividendVoorPlek(plek) * n;
+          return `> *${n}×* ${members[id]?.bijnaam || id} — plek ${plek}, nu *${opbrengst} roem* waard`;
+        }).join('\n')
+      : '_U bezit nog geen aandelen. Koop vroeg in wie u ziet klimmen — wie al bovenaan staat is duur._' } });
+    // Eén knop per handelbaar lid: één aandeel kopen tegen de huidige koers. Slack staat 25
+    // elementen toe, maar meer dan vier wordt een muur; de rest gaat via het commando.
+    if (handelbaar.length) {
+      blocks.push({ type: 'actions', elements: handelbaar.slice(0, 4).map(k => ({
+        type: 'button',
+        text: { type: 'plain_text', text: `📈 ${k.bijnaam.slice(0, 40)} (${k.koers})`, emoji: true },
+        action_id: `beurs_koop_${k.id}`,
+        value: k.id,
+      })) });
+    }
+    blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text:
+      `Zondagnacht: plek 1 = ${DIVIDEND_PER_PLEK[0]} roem per aandeel, plek 2 = ${DIVIDEND_PER_PLEK[1]}, plek 3 = ${DIVIDEND_PER_PLEK[2]} · ` +
+      'posities zijn geheim · verkopen kan met `/kroketgod beurs verkoop [naam]`' }] });
+    return blocks;
+  },
+});
+
+// Plek in de ranglijst zoals de afrekening hem ziet: ballingen doen niet mee aan de eindstand.
+function handelbaarPlek(koersen, id) {
+  return koersen.filter(k => !k.verbannen).findIndex(k => k.id === id) + 1;
 }
 
 // ── Opdracht-engine: dagelijkse en wekelijkse opdrachten ───────────────────────
@@ -8801,6 +9730,7 @@ const OPDRACHTEN = [
   { id: 'w-veiling',  soort: 'week', actie: 'veiling_bod',    doel: 1, beloning: 3, tekst: 'Bied op de Grote Veiling' },
   { id: 'w-roof',     soort: 'week', actie: 'roof_poging',    doel: 1, beloning: 3, tekst: 'Waag een Grote Kroketroof' },
   { id: 'w-goud',     soort: 'week', actie: 'gouden_kroket',  doel: 1, beloning: 5, tekst: 'Grijp de Gouden Kroket' },
+  { id: 'w-beurs',    soort: 'week', actie: 'beurs_koop',     doel: 2, beloning: 3, tekst: 'Koop twee aandelen op de Frituurbeurs' },
 ];
 
 const OPDRACHTEN_PER_DAG = 3;
@@ -9788,6 +10718,20 @@ function bouwDossierBlok(userId) {
     if (nemesis) {
       regels.push(`vaakste tegenstander: ${nemesis.bijnaam} — ${nemesis.gewonnen} gewonnen, ${nemesis.verloren} verloren`);
     }
+
+    // Sociale draad uit Het Sociale Weefsel: wie dit lid het meest eert. Bewust maar ÉÉN regel —
+    // de dossier-instructie verbiedt opsommen, en dit is het detail waarmee de Kroket God kan
+    // laten zien dat hij de verhoudingen in de groep ziet. De nemesis hierboven komt uit
+    // duelhistorie en dekt de duel-as; dit dekt de eer-as, die nergens anders zichtbaar is.
+    try {
+      const eigenDraden = relatiesVan(loadWeefsel().randen, weefselLeden(), userId);
+      const grootsteGever = [...eigenDraden].sort((a, b) => b.ontvangen - a.ontvangen)[0];
+      if (grootsteGever?.ontvangen > 0 && members[grootsteGever.id]) {
+        const terug = grootsteGever.gegeven;
+        regels.push(`wordt het meest geëerd door ${members[grootsteGever.id].bijnaam} (${grootsteGever.ontvangen}×)` +
+          (terug === 0 ? ' — en heeft dat nooit teruggedaan' : `, en eerde hen ${terug}× terug`));
+      }
+    } catch (_) {}
     const laatste = readJSON('duelhistorie.json', {})[userId]?.laatste;
     if (laatste && members[laatste.tegenId]) {
       const dagen = Math.floor((Date.now() - laatste.ts) / 86_400_000);
@@ -12092,6 +13036,19 @@ for (const key of Object.keys(WINKEL_ITEMS)) {
   });
 }
 
+// Beursknop in de App Home: één aandeel kopen tegen de huidige koers. Regex-actie omdat het
+// doelwit-id in de action_id zit (zelfde patroon als de duel-uitdaagknoppen), en één aandeel
+// omdat een knop geen aantal kan vragen — meer koopt u met `/kroketgod beurs koop [naam] [n]`.
+app.action(/^beurs_koop_/, async ({ ack, body, client }) => {
+  await ack();
+  try {
+    const doelId = body.actions?.[0]?.value;
+    if (!doelId) return;
+    const uitkomst = await koopAandeel(client, body.user.id, doelId, 1);
+    await meldKnopUitkomst(client, body, uitkomst.tekst);
+  } catch (err) { console.error('Fout bij beursknop:', err); }
+});
+
 // Verversknop in de App Home.
 app.action('home_verversen', async ({ ack, body, client }) => {
   await ack();
@@ -12783,6 +13740,18 @@ planCron('59 23 * * 0', async () => {
 async function voerWeekkampioenUit(client) {
   const scores = loadScores();
   const gesorteerd = Object.entries(scores).sort((a, b) => b[1] - a[1]);
+  // De Frituurbeurs rekent hier af en niet in een eigen cron: het moet vóór de puntenreset
+  // hieronder gebeuren (daarna is de eindstand weg), en zo erft de beurs de inhaalslag die deze
+  // functie bij opstarten al heeft. Alleen leden tellen mee voor de eindstand — een oud-lid in
+  // scores.json is geen plek in de ranglijst. Ballingen doen niet mee (zie handelbaarPlek).
+  //
+  // Dezelfde ordening als het koersenbord (stand aflopend, dan op bijnaam), zodat de plek die een
+  // handelaar de hele week in zijn portefeuille zag, ook de plek is waarop hij wordt afgerekend.
+  // Zonder die gelijke tie-break kon een gelijke stand bovenaan hier anders vallen dan daar.
+  const beursLeden = loadMembers();
+  const beursEindstand = gesorteerd
+    .filter(([id]) => beursLeden[id] && !isVerbannen(id))
+    .sort((a, b) => b[1] - a[1] || beursLeden[a[0]].bijnaam.localeCompare(beursLeden[b[0]].bijnaam));
 
   // Alleen een kampioen kronen als er deze week überhaupt punten zijn verdiend.
   const heeftPunten = gesorteerd.length > 0 && (gesorteerd[0][1] || 0) > 0;
@@ -12806,6 +13775,13 @@ async function voerWeekkampioenUit(client) {
       `👑 *DE WEEKKAMPIOEN* 👑\n\n> *${kampioenBijnaam}* wint de kroketweek met *${kampioenScore} kroketpunten* en is komende week DE PROFEET VAN DE FRITUUR (één zegen te vergeven via \`/kroketgod zegen [naam]\`).\n> De kroketpunten gaan op nul; de roem blijft eeuwig.\n\n— De Almachtige Kroket God`
     );
     await postMetStem(client, process.env.SLACK_CHANNEL_ID, tekst);
+  }
+
+  // De beurs ná de kroning en vóór de reset: de kampioen is het nieuws, de beurs is het naspel.
+  try {
+    await rekenBeursAf(client, beursEindstand);
+  } catch (err) {
+    console.error('⚠️ Beursafrekening mislukt:', err.message);
   }
 
   // Reset ALLEEN de kroketpunten (scores) naar 0 — roem blijft permanent staan.
@@ -13230,8 +14206,613 @@ planCron('0 16 * * 1-5', async () => {
   } catch (err) { console.error('⚠️ Quiz onthul cron mislukt:', err.message); }
 }, { timezone: 'Europe/Amsterdam' });
 
+// ══════════════════════════════════════════════════════════════════════════════
+// DE HOGE FRITUURRAAD — jurisprudentie
+// ══════════════════════════════════════════════════════════════════════════════
+// Het bestaande `rechtbank [A] vs [B]`-commando was eenmalig theater: de Kroket God sprak een
+// vonnis en dat was daarna weg. Nu krijgt elk vonnis een ZAAKNUMMER en wordt het bewaard — en bij
+// een volgende zaak haalt de BM25-index van Het Grote Archief de vergelijkbare vonnissen op, die de
+// God in zijn uitspraak MOET aanhalen.
+//
+// Daardoor ontstaat er een rechtsstelsel dat niemand heeft ontworpen: "conform de zaak
+// Kroketinho/KroketPet, 2026/III". Elke uitspraak verhoudt zich tot de vorige, en na een paar
+// maanden heeft het genootschap een eigen rechtsleer met precedenten die de leden zelf hebben
+// veroorzaakt.
+//
+// BEWUST GEEN PUNTEN OF STRAFFEN. Er zijn al twee wegen voor echte gevolgen (de gele kaart met
+// stemming, en het tribunaal). Een derde weg met sancties zou die twee ondermijnen en van een grap
+// een machtsmiddel maken. Dit is de civiele, ceremoniële tak: de uitspraak zélf is de inzet.
+//
+// ÉÉN ZAAK PER AANKLAGER PER DAG. Elk vonnis is voorgoed precedent, dus zonder rem zou één lid op
+// één middag de hele rechtsleer kunnen schrijven.
+
+const JURISPRUDENTIE_BESTAND = 'jurisprudentie.json';
+const loadJurisprudentie = () => readJSON(JURISPRUDENTIE_BESTAND, { zaken: [], laatsteZaak: {} });
+const saveJurisprudentie = (data) => writeJSON(JURISPRUDENTIE_BESTAND, data);
+
+// Hoeveel vonnissen we in het overzicht bewaren. Het archief houdt ze allemaal (en dat is de bron
+// voor de precedenten); dit bestand is het register en mag begrensd blijven.
+const JURISPRUDENTIE_MAX = 100;
+const ZAAK_COOLDOWN_MS = 20 * 3_600_000; // ~een dag, maar niet op de klok van middernacht
+
+// Voert een zaak. Geeft { ok, tekst } terug; bij ok plaatst hij zelf het vonnis in het kanaal.
+async function voerZaak(client, aanklagerId, invoer, channelId) {
+  const ontleed = parseerZaak(invoer);
+  if (ontleed.fout) return { ok: false, tekst: `_${ontleed.fout}_` };
+
+  const data = loadJurisprudentie();
+  const laatste = data.laatsteZaak?.[aanklagerId] || 0;
+  if (Date.now() - laatste < ZAAK_COOLDOWN_MS) {
+    const rest = resterendeTijd(ZAAK_COOLDOWN_MS - (Date.now() - laatste));
+    return { ok: false, tekst: `_De Raad behandelt één zaak per aanklager per dag. Uw volgende zittingsuur begint over ${rest}._` };
+  }
+
+  // Namen naar leden herleiden waar mogelijk; een buitenstaander mag ook partij zijn (zoals het
+  // oude commando ook toestond) maar wordt als zodanig benoemd.
+  const g1 = getMemberByNaam(ontleed.partij1);
+  const g2 = getMemberByNaam(ontleed.partij2);
+  const partij1 = g1 ? g1[1].bijnaam : `Buitenstaander "${ontleed.partij1}"`;
+  const partij2 = g2 ? g2[1].bijnaam : `Buitenstaander "${ontleed.partij2}"`;
+  if (g1 && g2 && g1[0] === g2[0]) {
+    return { ok: false, tekst: '_Een zaak tegen uzelf is geen zaak maar een gewetenskwestie._' };
+  }
+
+  const jaar = new Date().getFullYear();
+  const nummer = zaakNummer(jaar, volgendeTeller(data.zaken, jaar));
+
+  // Precedenten: zoek in het archief naar eerdere VONNISSEN die op deze zaak lijken. De grond
+  // weegt het zwaarst, maar de partijnamen doen ook mee — een eerdere zaak tussen dezelfde twee
+  // is per definitie relevant.
+  const zoekterm = [ontleed.grond, partij1, partij2].filter(Boolean).join(' ');
+  const precedenten = zoekArchief(zoekterm, { n: 3, soort: 'vonnis', minLengte: 20 });
+  const precedentBlok = precedenten.length
+    ? `\n\n${wrapOnvertrouwd(
+        'EERDERE VONNISSEN VAN DE RAAD (precedenten). Haal er MINSTENS ÉÉN expliciet aan bij zaaknummer, ' +
+        'en verhoud je uitspraak ertoe: volg het precedent, of wijk er beargumenteerd van af',
+        precedenten.map(p => p.tekst).join('\n\n'))}`
+    : '\n\nEr zijn nog geen precedenten: dit is een zaak van de eerste soort. Zeg dat expliciet — de Raad vestigt hier nieuw recht.';
+
+  const grondZin = ontleed.grond
+    ? `De grond van de aanklacht: "${ontleed.grond}".`
+    : 'De grond van de aanklacht is niet nader omschreven; benoem dat en leid hem zelf af uit de snackleer.';
+
+  const vonnis = await kroketResponseMetVangnet(
+    `Je bent de Hoge Frituurraad en spreekt vonnis in zaak ${nummer}: ${partij1} tegen ${partij2}. ${grondZin}\n\n` +
+    `EISEN:\n` +
+    `- Begin met "*ZAAK ${nummer} — ${partij1} / ${partij2}*" en niets daarvoor.\n` +
+    `- Spreek beide partijen uitsluitend aan bij hun exacte naam: "${partij1}" en "${partij2}".\n` +
+    `- Structuur: de aanklacht (1 zin), het verweer (1 zin), de overweging (1-2 zinnen, verwijs naar de Geboden of de snackleer), het vonnis (1-2 zinnen).\n` +
+    `- Er is een winnende en een verliezende partij. Geen gelijkspel, geen ontwijking.\n` +
+    `- Leg GEEN kroketpunten, straffen of verbanningen op — de Raad spreekt hier recht, geen sancties.\n` +
+    `- Juridische, plechtige taal. Geen inleidingszin.` +
+    precedentBlok,
+    700, false,
+    `⚖️ *ZAAK ${nummer} — ${partij1} / ${partij2}*\n\n> De Raad heeft de zaak gehoord, maar het Vetbad is te onrustig voor een volwaardig vonnis. ` +
+    `De zaak wordt aangehouden en het nummer blijft gereserveerd.\n\n— De Hoge Frituurraad`
+  );
+
+  const zaak = {
+    nummer, jaar, ts: Date.now(),
+    aanklagerId,
+    partij1, partij2,
+    partij1Id: g1 ? g1[0] : null,
+    partij2Id: g2 ? g2[0] : null,
+    grond: ontleed.grond || null,
+    tekst: vonnis,
+  };
+  data.zaken = [...(data.zaken || []), zaak].slice(-JURISPRUDENTIE_MAX);
+  data.laatsteZaak = { ...(data.laatsteZaak || {}), [aanklagerId]: Date.now() };
+  saveJurisprudentie(data);
+
+  // Naar het archief met soort 'vonnis', zodat de BM25-index hem bij een volgende zaak als
+  // precedent kan opdiepen. Het zaaknummer staat vooraan in de tekst — zonder dat kan een
+  // volgend vonnis er niet naar verwijzen, en dan is het geen precedent maar een anekdote.
+  voegToeAanArchief({
+    soort: 'vonnis', spreker: 'De Hoge Frituurraad', sprekerId: null,
+    tekst: `Zaak ${nummer} (${partij1} tegen ${partij2}${ontleed.grond ? `, over ${ontleed.grond}` : ''}): ` +
+      `${stripSlackOpmaak(vonnis, 380)}`,
+  });
+  logGebeurtenis('zaak', g1 ? g1[0] : null, `Zaak ${nummer}: ${partij1} tegen ${partij2}${ontleed.grond ? ` over ${ontleed.grond}` : ''}`, null, aanklagerId);
+
+  await postToChannel(client, channelId, vonnis);
+  return { ok: true, tekst: `_Zaak ${nummer} is gewezen en opgenomen in de jurisprudentie._`, nummer };
+}
+
+registreerFeature({
+  naam: 'jurisprudentie',
+  state: [JURISPRUDENTIE_BESTAND],
+  help: [
+    { gebruik: '/kroketgod rechtbank [naam1] vs [naam2] (over [grond])', verwacht: 'de Hoge Frituurraad wijst vonnis; elke uitspraak krijgt een zaaknummer en wordt precedent voor de volgende (1 zaak per dag)' },
+    { gebruik: '/kroketgod jurisprudentie', verwacht: 'het register van gewezen zaken (`zaak [nummer]` voor de volledige uitspraak)' },
+  ],
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+// DE TIJDCAPSULE — voorspellingen verzegelen en later afrekenen
+// ══════════════════════════════════════════════════════════════════════════════
+// Een lid verzegelt een voorspelling met een moment: `voorspel over 2 weken de bamischijf valt`.
+// Op dat moment ontzegelt de Kroket God hem en beoordeelt de Raad met emoji of het is uitgekomen.
+// Uitgekomen = roem, want dit is vooruitzien en dat is blijvend; niet uitgekomen kost niets.
+//
+// WAAROM ROEM EN GEEN KROKETPUNTEN. De horizon is weken tot maanden. Kroketpunten resetten elke
+// zondag, dus een beloning in punten zou afhangen van in welke week je capsule toevallig opengaat.
+// Roem is de enige munt die net zo lang meegaat als de voorspelling zelf.
+//
+// WAAROM DE RAAD OORDEELT EN NIET DE LLM. "Is dit uitgekomen?" is precies het soort vraag waar een
+// taalmodel met volle overtuiging naast zit, en het gaat over de werkelijkheid van de groep — die
+// kennen de leden en het model niet. De emoji-stemming is bovendien gratis. Het patroon (stemmen
+// pas bij SLUITING uitlezen met reactions.get) komt van de gele-kaart-poll: geen gemiste events,
+// terugnemen telt automatisch, en er is geen eigen stemadministratie die kan gaan afwijken.
+//
+// TWEE FASEN IN ÉÉN DAGELIJKSE CRON: ontzegelen wat vervallen is, en beslechten wat al 24 uur
+// openstaat. Volledig uit tijdstempels afgeleid, dus een dag downtime haalt zichzelf in.
+
+const TIJDCAPSULE_BESTAND = 'tijdcapsule.json';
+const loadCapsules = () => readJSON(TIJDCAPSULE_BESTAND, { items: [] });
+const saveCapsules = (data) => writeJSON(TIJDCAPSULE_BESTAND, data);
+
+const CAPSULE_JA = 'large_green_square';   // uitgekomen
+const CAPSULE_NEE = 'large_red_square';    // niet uitgekomen
+const CAPSULE_STEMUREN = 24;
+const CAPSULE_ROEM = 3;
+// Hoeveel capsules er per lid tegelijk verzegeld mogen staan. Zonder grens kan één lid de kalender
+// volgooien en gaat er elke dag een capsule open — dan is het geen gebeurtenis meer.
+const CAPSULE_MAX_OPEN = 3;
+// Hoeveel er per dag hoogstens opengaan, zodat een stapel deadlines op dezelfde dag geen
+// berichtenlawine wordt. De rest schuift een dag door; ze zijn toch al verlopen.
+const CAPSULE_MAX_PER_DAG = 2;
+
+function capsuleDatum(ts) {
+  return new Date(ts).toLocaleDateString('nl-NL', {
+    timeZone: 'Europe/Amsterdam', weekday: 'long', day: 'numeric', month: 'long',
+  });
+}
+
+// Verzegelt een voorspelling. Geeft { ok, tekst } terug, net als de andere spelfuncties.
+async function verzegelCapsule(client, userId, invoer) {
+  const members = loadMembers();
+  if (!members[userId]) return { ok: false, tekst: '_Alleen leden van de Kroket Illuminati mogen de toekomst bezweren._' };
+  if (isVerbannen(userId)) return { ok: false, tekst: '_Een balling heeft geen zicht op de toekomst. Toon eerst berouw._' };
+
+  const data = loadCapsules();
+  const eigenOpen = (data.items || []).filter(c => c.userId === userId && c.status === 'verzegeld');
+  if (eigenOpen.length >= CAPSULE_MAX_OPEN) {
+    return { ok: false, tekst: `_U heeft al ${CAPSULE_MAX_OPEN} verzegelde voorspellingen openstaan. Wacht tot er één opengaat._` };
+  }
+
+  const ontleed = parseerWanneer(invoer);
+  if (ontleed.fout) return { ok: false, tekst: `_${ontleed.fout}_` };
+
+  const capsule = {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    userId,
+    tekst: ontleed.rest.slice(0, 400),
+    label: ontleed.label,
+    gemaakt: Date.now(),
+    deadline: ontleed.deadline,
+    status: 'verzegeld',
+    kanaal: process.env.SLACK_CHANNEL_ID,
+    berichtTs: null,
+  };
+  data.items = [...(data.items || []), capsule];
+  saveCapsules(data);
+
+  // Wél een kanaalbericht, en dat is met opzet: een voorspelling die niemand kent is later niet
+  // te beoordelen, en de spanning zit er juist in dat de groep hem heeft zien verzegelen. De
+  // INHOUD is dus openbaar; alleen het oordeel wacht.
+  await postToChannel(client, capsule.kanaal,
+    `⏳ *EEN TIJDCAPSULE IS VERZEGELD* ⏳\n\n> *${members[userId].bijnaam}* voorspelt:\n> _"${capsule.tekst}"_\n> Te openen ${capsuleDatum(capsule.deadline)} (${capsule.label}).\n\n` +
+    `_Komt het uit, dan volgt ${CAPSULE_ROEM} roem. De Raad oordeelt straks._\n\n— De Hoge Frituurraad`);
+  logGebeurtenis('capsule', userId, `${members[userId].bijnaam} verzegelde een voorspelling voor ${capsuleDatum(capsule.deadline)}`, capsule.tekst);
+  return { ok: true, tekst: `_Verzegeld. De capsule gaat open op ${capsuleDatum(capsule.deadline)}._` };
+}
+
+// Fase 1: een vervallen capsule openen en de Raad laten stemmen.
+async function ontzegelCapsule(client, capsule) {
+  const members = loadMembers();
+  const naam = members[capsule.userId]?.bijnaam || 'een verdwenen volgeling';
+  const dagen = Math.max(1, Math.round((capsule.deadline - capsule.gemaakt) / 86_400_000));
+  const bericht = await slackLimiter.schedule(() => client.chat.postMessage({
+    channel: capsule.kanaal,
+    text: 'Een tijdcapsule wordt ontzegeld',
+    blocks: [
+      { type: 'header', text: { type: 'plain_text', text: '⏳ DE TIJDCAPSULE GAAT OPEN', emoji: true } },
+      { type: 'section', text: { type: 'mrkdwn', text:
+        `_${dagen} dag(en) geleden voorspelde *${naam}*:_\n\n> "${capsule.tekst}"\n\n*Is het uitgekomen?*` } },
+      { type: 'context', elements: [{ type: 'mrkdwn', text:
+        `:${CAPSULE_JA}: = uitgekomen · :${CAPSULE_NEE}: = niet uitgekomen · de Raad stemt ${CAPSULE_STEMUREN} uur · ` +
+        `de voorspeller stemt niet mee · bij gelijkspel geen roem` }] },
+    ],
+  }));
+  // De bot zet beide reacties voor, zodat er niets getypt hoeft te worden.
+  for (const emoji of [CAPSULE_JA, CAPSULE_NEE]) {
+    try {
+      await slackLimiter.schedule(() => client.reactions.add({ channel: capsule.kanaal, timestamp: bericht.ts, name: emoji }));
+    } catch (err) {
+      console.warn(`⚠️ Capsule-reactie ${emoji} zetten mislukt:`, err.data?.error || err.message);
+    }
+  }
+  return { berichtTs: bericht.ts, stemDeadline: Date.now() + CAPSULE_STEMUREN * 3_600_000 };
+}
+
+// Fase 2: stemmen uitlezen en beslechten. Zelfde uitleesregels als de gele-kaart-poll:
+// botreacties, niet-leden en ballingen tellen niet, en wie op beide stemt stemt op niets.
+async function beslechtCapsule(client, capsule) {
+  const members = loadMembers();
+  const uit = { ja: [], nee: [] };
+  try {
+    const res = await slackLimiter.schedule(() => client.reactions.get({
+      channel: capsule.kanaal, timestamp: capsule.berichtTs, full: true,
+    }));
+    for (const r of res.message?.reactions || []) {
+      const bak = r.name === CAPSULE_JA ? uit.ja : r.name === CAPSULE_NEE ? uit.nee : null;
+      if (!bak) continue;
+      for (const u of r.users || []) {
+        if (u === BOT_USER_ID) continue;
+        if (!members[u] || isVerbannen(u)) continue;
+        // De voorspeller beoordeelt zijn eigen voorspelling niet.
+        if (u === capsule.userId) continue;
+        if (!bak.includes(u)) bak.push(u);
+      }
+    }
+  } catch (err) {
+    console.error('⚠️ Capsule-stemmen uitlezen mislukt:', err.data?.error || err.message);
+    return null; // volgende ronde opnieuw proberen
+  }
+  const dubbel = uit.ja.filter(u => uit.nee.includes(u));
+  uit.ja = uit.ja.filter(u => !dubbel.includes(u));
+  uit.nee = uit.nee.filter(u => !dubbel.includes(u));
+
+  const naam = members[capsule.userId]?.bijnaam || 'een verdwenen volgeling';
+  const uitgekomen = uit.ja.length > uit.nee.length;
+  const gelijk = uit.ja.length === uit.nee.length;
+  let slot;
+  if (gelijk) {
+    slot = uit.ja.length === 0
+      ? '> De Raad zweeg. Geen oordeel, geen roem — de capsule verdwijnt in het vet.'
+      : `> De Raad staat gelijk (${uit.ja.length}–${uit.nee.length}). Geen oordeel, geen roem.`;
+  } else if (uitgekomen) {
+    slot = `> ✅ De Raad oordeelt met ${uit.ja.length}–${uit.nee.length}: *het is uitgekomen*. *${naam}* ontvangt *${CAPSULE_ROEM} roem*.`;
+  } else {
+    slot = `> ❌ De Raad oordeelt met ${uit.nee.length}–${uit.ja.length}: *het is niet uitgekomen*. Geen roem — maar de poging staat in de kronieken.`;
+  }
+  await postToChannel(client, capsule.kanaal,
+    `⏳ *HET VONNIS OVER DE TIJDCAPSULE* ⏳\n\n> *${naam}* voorspelde: _"${capsule.tekst}"_\n${slot}\n\n— De Hoge Frituurraad`);
+
+  if (uitgekomen && members[capsule.userId]) {
+    await pasRoemAan(client, capsule.userId, CAPSULE_ROEM);
+    logGebeurtenis('capsule', capsule.userId, `${naam} voorspelde het juist en ontving ${CAPSULE_ROEM} roem`, capsule.tekst);
+  }
+  return { uitgekomen, gelijk, ja: uit.ja.length, nee: uit.nee.length };
+}
+
+// De dagelijkse klok over alle capsules. Volledig uit tijdstempels afgeleid.
+async function verwerkCapsuleKlok(client) {
+  const data = loadCapsules();
+  const items = data.items || [];
+  if (!items.length) return;
+  const nu = Date.now();
+  let gewijzigd = false;
+
+  // Eerst beslechten: dat maakt ruimte en houdt de volgorde logisch (oude zaken eerst af).
+  for (const c of items.filter(x => x.status === 'stemming' && x.stemDeadline && nu >= x.stemDeadline)) {
+    const uitslag = await beslechtCapsule(client, c);
+    if (!uitslag) continue; // uitlezen mislukt → volgende ronde opnieuw
+    c.status = 'beslecht';
+    c.uitkomst = uitslag;
+    gewijzigd = true;
+  }
+
+  // Dan ontzegelen, met een dagplafond.
+  const teOpenen = items
+    .filter(x => x.status === 'verzegeld' && nu >= x.deadline)
+    .sort((a, b) => a.deadline - b.deadline)
+    .slice(0, CAPSULE_MAX_PER_DAG);
+  for (const c of teOpenen) {
+    // Een capsule van een lid dat het genootschap heeft verlaten wordt stil gesloten: er is
+    // niemand meer om roem aan te geven, en de Raad hoeft er geen tijd aan te besteden.
+    if (!loadMembers()[c.userId]) {
+      c.status = 'vervallen';
+      gewijzigd = true;
+      continue;
+    }
+    const geopend = await ontzegelCapsule(client, c);
+    if (!geopend) continue;
+    c.status = 'stemming';
+    c.berichtTs = geopend.berichtTs;
+    c.stemDeadline = geopend.stemDeadline;
+    gewijzigd = true;
+  }
+
+  if (gewijzigd) {
+    // Beslechte capsules blijven staan als geschiedenis, maar begrensd.
+    const beslecht = items.filter(x => x.status === 'beslecht' || x.status === 'vervallen').slice(-40);
+    const open = items.filter(x => x.status === 'verzegeld' || x.status === 'stemming');
+    saveCapsules({ items: [...beslecht, ...open] });
+  }
+}
+
+registreerFeature({
+  naam: 'tijdcapsule',
+  state: [TIJDCAPSULE_BESTAND],
+  help: [
+    { gebruik: '/kroketgod voorspel [wanneer] [voorspelling]', verwacht: `verzegel een voorspelling — bijvoorbeeld \`voorspel over 2 weken de bamischijf valt\`. Komt hij uit, dan ${CAPSULE_ROEM} roem (max ${CAPSULE_MAX_OPEN} open, hoogstens ${MAX_HORIZON_DAGEN} dagen vooruit)` },
+    { gebruik: '/kroketgod capsules', verwacht: 'alle verzegelde en beoordeelde tijdcapsules' },
+  ],
+  homeOrde: 40,
+  home: ({ userId, members }) => {
+    const items = (loadCapsules().items || []).filter(c => c.status === 'verzegeld' || c.status === 'stemming');
+    if (!items.length) return [];
+    const regels = items
+      .sort((a, b) => a.deadline - b.deadline)
+      .slice(0, 5)
+      .map(c => `> ${c.userId === userId ? '*u*' : `*${members[c.userId]?.bijnaam || 'onbekend'}*`}: ` +
+        `"${c.tekst.slice(0, 90)}${c.tekst.length > 90 ? '…' : ''}" — ${c.status === 'stemming' ? '_de Raad stemt nu_' : capsuleDatum(c.deadline)}`)
+      .join('\n');
+    return [
+      ...homeKaartKop('⏳ VERZEGELDE TIJDCAPSULES'),
+      { type: 'section', text: { type: 'mrkdwn', text: `${regels}\n\n_Verzegel er zelf een met_ \`/kroketgod voorspel [wanneer] [wat]\`` } },
+    ];
+  },
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+// HET VERHOOR — wie zei dit?
+// ══════════════════════════════════════════════════════════════════════════════
+// De Kroket God diept een ECHT citaat uit Het Grote Archief op en de Raad raadt wie het zei.
+// Juist geraden is +1 kroketpunt; wie ernaast zit krijgt niets (geen straf — dit is een spel
+// over herinnering, niet over schuld).
+//
+// KOST NUL LLM-QUOTA. Alle teksten zijn templated en de inhoud komt uit het archief. Dat is de
+// hele grap: het spel wordt geschreven door de leden zelf, en hoe meer er gekletst wordt, hoe
+// meer munitie er is. Het is daarmee het eerste spel hier dat gratis groeit.
+//
+// DE SPREKER MAG NIET MEEDOEN — die weet het antwoord. Hij staat wél tussen de keuzes, anders
+// zou het juiste antwoord er niet bij zitten.
+//
+// CITATEN ZIJN MINSTENS VERHOOR_MIN_LEEFTIJD_DAGEN OUD. Een uitspraak van gisteren herkent
+// iedereen nog; pas als het even geleden is, wordt het raden. Gebruikte citaten worden
+// vastgelegd zodat er nooit twee keer hetzelfde langskomt.
+
+const VERHOOR_MIN_LEEFTIJD_DAGEN = 5;
+const VERHOOR_BELONING = 1;
+// Hoeveel eerder gebruikte citaten we onthouden. Ruim boven het aantal weken dat dit spel
+// realistisch draait, zodat een herhaling in de praktijk niet voorkomt.
+const VERHOOR_GESCHIEDENIS_MAX = 200;
+
+const loadVerhoor = () => readJSON('verhoor.json', {});
+const saveVerhoor = (data) => writeJSON('verhoor.json', data);
+
+function bouwVerhoorBlocks(v) {
+  const members = loadMembers();
+  const naam = (id) => members[id]?.bijnaam || 'een verdwenen volgeling';
+  const aantalGokken = Object.keys(v.antwoorden || {}).length;
+  const teGaan = (v.opties || []).filter(id => id !== v.sprekerId && !(v.antwoorden || {})[id]).length;
+
+  const blocks = [
+    { type: 'header', text: { type: 'plain_text', text: '🕯️ HET VERHOOR', emoji: true } },
+    { type: 'section', text: { type: 'mrkdwn', text:
+      `_Uit de archieven van de Hoge Frituurraad, opgetekend op ${archiefDatum(v.citaatTs)}:_\n\n> "${v.tekst}"\n\n*Wie sprak deze woorden?*` } },
+  ];
+
+  if (!v.onthuld) {
+    // De keuzes staan in vaste (alfabetische) volgorde en niet op stand: anders verraadt de
+    // plek van een naam iets over wie het waarschijnlijk was.
+    const opties = [...(v.opties || [])].sort((a, b) => naam(a).localeCompare(naam(b)));
+    blocks.push({ type: 'actions', elements: opties.slice(0, 5).map(id => ({
+      type: 'button',
+      text: { type: 'plain_text', text: naam(id).slice(0, 60), emoji: true },
+      action_id: `verhoor_gok_${id}`,
+      value: id,
+    })) });
+    blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text:
+      `${aantalGokken} van de Raad heeft geantwoord${teGaan ? `, ${teGaan} nog niet` : ''} · ` +
+      `wie het juist heeft krijgt *+${VERHOOR_BELONING}* · de spreker zelf mag niet meedoen · onthulling vanmiddag 16:00` }] });
+    return blocks;
+  }
+
+  // Onthuld: wie zat er goed, wie zat er naast, en wie heeft er niets van gezegd.
+  const goed = Object.entries(v.antwoorden || {}).filter(([, gok]) => gok === v.sprekerId).map(([id]) => id);
+  const fout = Object.entries(v.antwoorden || {}).filter(([, gok]) => gok !== v.sprekerId);
+  blocks.push({ type: 'section', text: { type: 'mrkdwn', text:
+    `⚜️ *Het was ${naam(v.sprekerId)}.*\n\n` +
+    (goed.length ? `> ✅ Juist geraden: ${goed.map(id => `*${naam(id)}*`).join(', ')} — *+${VERHOOR_BELONING}* elk.\n` : '> _Niemand had het juist. De Raad kent zijn eigen woorden niet._\n') +
+    (fout.length ? `> ❌ Ernaast: ${fout.map(([id, gok]) => `*${naam(id)}* (dacht ${naam(gok)})`).join(', ')}.\n` : '') } });
+  blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text:
+    'Het archief vergeet niets · volgende verhoor donderdag' }] });
+  return blocks;
+}
+
+async function updateVerhoorBericht(client, v) {
+  if (!v.berichtTs || !v.kanaal) return;
+  try {
+    await slackLimiter.schedule(() => client.chat.update({
+      channel: v.kanaal, ts: v.berichtTs,
+      text: 'Het Verhoor — wie zei dit?',
+      blocks: bouwVerhoorBlocks(v),
+    }));
+  } catch (err) {
+    console.warn('⚠️ Verhoor-bord bijwerken mislukt:', err.data?.error || err.message);
+  }
+}
+
+async function startVerhoor(client) {
+  const bestaand = loadVerhoor();
+  // Loopt er nog een onafgeronde ronde, dan die eerst onthullen — anders zou een gemiste
+  // onthulling de vorige ronde voorgoed open laten staan.
+  if (bestaand.ronde && !bestaand.ronde.onthuld) {
+    await onthulVerhoor(client);
+  }
+  const members = loadMembers();
+  const spelers = Object.keys(members).filter(id => !isVerbannen(id));
+  // Onder drie leden is raden zinloos: met twee opties is het een muntworp.
+  if (spelers.length < 3) return null;
+
+  const gebruikt = new Set(bestaand.gebruikt || []);
+  const citaat = willekeurigCitaat({
+    soort: 'lid',
+    minLengte: 40,
+    ouderDan: Date.now() - VERHOOR_MIN_LEEFTIJD_DAGEN * 86_400_000,
+    sprekerIds: spelers,
+    uitgesloten: gebruikt,
+  });
+  if (!citaat) {
+    console.log('🕯️ Verhoor overgeslagen: geen geschikt citaat in het archief.');
+    return null;
+  }
+
+  const ronde = {
+    ts: Date.now(),
+    citaatTs: citaat.ts,
+    sprekerId: citaat.sprekerId,
+    tekst: citaat.tekst,
+    opties: spelers,
+    antwoorden: {},
+    onthuld: false,
+    kanaal: process.env.SLACK_CHANNEL_ID,
+    berichtTs: null,
+  };
+  const verstuurd = await slackLimiter.schedule(() => client.chat.postMessage({
+    channel: ronde.kanaal,
+    text: 'Het Verhoor — wie zei dit?',
+    blocks: bouwVerhoorBlocks(ronde),
+  }));
+  ronde.berichtTs = verstuurd.ts;
+  saveVerhoor({
+    ronde,
+    gebruikt: [...(bestaand.gebruikt || []), citaat.ts].slice(-VERHOOR_GESCHIEDENIS_MAX),
+  });
+  console.log(`🕯️ Verhoor geopend: citaat van ${members[citaat.sprekerId]?.bijnaam} uit ${archiefDatum(citaat.ts)}.`);
+  return ronde;
+}
+
+// Eén gok. Geen `await` tussen lezen en schrijven, zodat twee gelijktijdige klikken elkaar niet
+// kunnen overschrijven (zelfde regel als de raid- en veilingknoppen).
+async function gokVerhoor(client, userId, gokId) {
+  const data = loadVerhoor();
+  const v = data.ronde;
+  if (!v || v.onthuld) return { ok: false, tekst: '_Er loopt op dit moment geen verhoor._' };
+  if (!loadMembers()[userId]) return { ok: false, tekst: '_Alleen leden van de Raad worden gehoord._' };
+  if (isVerbannen(userId)) return { ok: false, tekst: '_Een balling wordt niet om zijn oordeel gevraagd._' };
+  if (userId === v.sprekerId) return { ok: false, tekst: '_U heeft deze woorden zelf gesproken. Uw stem zou het verhoor bederven._' };
+  if (v.antwoorden[userId]) {
+    return { ok: false, tekst: `_U heeft al geantwoord: ${loadMembers()[v.antwoorden[userId]]?.bijnaam || 'onbekend'}. Een tweede kans kent het verhoor niet._` };
+  }
+  if (!v.opties.includes(gokId)) return { ok: false, tekst: '_Die naam staat niet op de lijst van verdachten._' };
+
+  v.antwoorden[userId] = gokId;
+  saveVerhoor({ ...data, ronde: v });
+  await updateVerhoorBericht(client, v);
+
+  // Heeft iedereen die mag antwoorden geantwoord? Dan meteen onthullen in plaats van tot 16:00
+  // te wachten — er valt niets meer op te wachten.
+  const magAntwoorden = v.opties.filter(id => id !== v.sprekerId && !isVerbannen(id));
+  if (magAntwoorden.every(id => v.antwoorden[id])) {
+    await onthulVerhoor(client);
+    return { ok: true, tekst: '_Uw antwoord is opgetekend. De Raad heeft voltallig gesproken — het vonnis staat in het kanaal._' };
+  }
+  return { ok: true, tekst: '_Uw antwoord is opgetekend. Niemand ziet wat u koos tot de onthulling._' };
+}
+
+async function onthulVerhoor(client) {
+  const data = loadVerhoor();
+  const v = data.ronde;
+  if (!v || v.onthuld) return null;
+  v.onthuld = true;
+  saveVerhoor({ ...data, ronde: v }); // eerst vastleggen: dubbele onthulling is dubbele punten
+  await updateVerhoorBericht(client, v);
+
+  const members = loadMembers();
+  const goed = Object.entries(v.antwoorden || {}).filter(([, gok]) => gok === v.sprekerId).map(([id]) => id);
+  for (const id of goed) {
+    if (!members[id]) continue;
+    await pasScoreAanMetCheck(client, id, VERHOOR_BELONING, { channelId: v.kanaal });
+    logGebeurtenis('verhoor', id, `${members[id].bijnaam} herkende de woorden van ${members[v.sprekerId]?.bijnaam || 'een oud-lid'} (+${VERHOOR_BELONING})`);
+  }
+  console.log(`🕯️ Verhoor onthuld: ${goed.length} van ${Object.keys(v.antwoorden || {}).length} juist.`);
+  return { goed: goed.length };
+}
+
+registreerFeature({
+  naam: 'verhoor',
+  state: ['verhoor.json'],
+  help: [{ gebruik: '/kroketgod verhoor', verwacht: 'het lopende verhoor: een echt citaat uit het archief — raad wie het zei (+1 bij juist)' }],
+});
+
+// Donderdag 11:00 openen, 16:00 onthullen. Eigen expressies, dus dashboard-"overslaan" werkt
+// per onderdeel; de onthulling staat bewust NIET in CRON_LABELS — die overslaan zou een ronde
+// voorgoed open laten staan, en dat is geen keuze die iemand bewust wil maken.
+planCron('0 11 * * 4', async () => {
+  try { await startVerhoor(app.client); }
+  catch (err) { console.error('⚠️ Verhoor openen mislukt:', err.message); }
+}, { timezone: 'Europe/Amsterdam' });
+
+planCron('0 16 * * 4', async () => {
+  try { await onthulVerhoor(app.client); }
+  catch (err) { console.error('⚠️ Verhoor onthullen mislukt:', err.message); }
+}, { timezone: 'Europe/Amsterdam' });
+
+// ── De Tijdcapsule: dagelijks 10:10 ontzegelen en beslechten ──────────────────
+// Eén cron voor beide fasen; alles is uit tijdstempels afgeleid, dus een gemiste dag haalt zich
+// de volgende dag in. Geen CRON_LABELS-entry: op de meeste dagen post dit niets, en overslaan
+// zou een capsule voor onbepaalde tijd dicht houden.
+planCron('10 10 * * *', async () => {
+  try { await verwerkCapsuleKlok(app.client); }
+  catch (err) { console.error('⚠️ Capsuleklok mislukt:', err.message); }
+}, { timezone: 'Europe/Amsterdam' });
+
+app.action(/^verhoor_gok_/, async ({ ack, body, client }) => {
+  await ack();
+  try {
+    const gokId = body.actions?.[0]?.value;
+    if (!gokId) return;
+    const uitkomst = await gokVerhoor(client, body.user.id, gokId);
+    await meldKnopUitkomst(client, body, uitkomst.tekst);
+  } catch (err) { console.error('Fout bij verhoorknop:', err); }
+});
+
 // Dagelijks om 03:15 — na de pm2 herstart (03:00) zodat data stabiel is
 planCron('15 3 * * *', maakBackup, { timezone: 'Europe/Amsterdam' });
+
+// ── De Voorraadkelder: nachtelijk vooruit genereren ───────────────────────────
+// 03:40, ná de backup (03:15) en ná de pm2-herstart (03:00): de kelder is dan al meegegaan in de
+// backup van vandaag, en er is geen herstart die het vullen halverwege afbreekt.
+//
+// Bewust dezelfde Amsterdamse kalenderdag als de posts die eruit komen (07:30–15:00), zodat de
+// stemming van de dag klopt — die is per dag geseed, zie getDagelijkseStemming.
+//
+// WAT HIER WEL IN MAG: uitsluitend inhoud die naar geen enkele levende stand verwijst. Zie de
+// kop van lib/voorraad.js; een post die een score, naam of vijand-HP noemt hoort hier nooit.
+registreerFeature({
+  naam: 'voorraadkelder',
+  state: [VOORRAAD_BESTAND],
+});
+
+// Doelvoorraad per soort. Iets ruimer dan het aantal posts per dag (feitje 1×/dag op werkdagen,
+// spontaan 2× op di/do met 50% kans), zodat een mislukte nacht niet direct tot stilte leidt.
+const VOORRAAD_DOELEN = [
+  { soort: 'feitje',   doel: 2, maker: maakKroketFeitje },
+  { soort: 'spontaan', doel: 2, maker: maakAlgemeneSpontanePost },
+];
+
+planCron('40 3 * * *', async () => {
+  try {
+    const opgeruimd = ruimVoorraadOp();
+    const uitkomsten = [];
+    for (const { soort, doel, maker } of VOORRAAD_DOELEN) {
+      // Serieel, niet parallel: parallelle aanroepen zouden elkaars rate-limits opzoeken en de
+      // per-key cooldowns in lib/llm.js tegen elkaar laten werken. Er wacht niemand, dus tijd
+      // is hier het goedkoopste dat we hebben.
+      uitkomsten.push(await vulVoorraad(soort, doel, maker));
+    }
+    const samenvatting = uitkomsten
+      .map(u => `${u.soort} +${u.gemaakt}${u.mislukt ? ` (${u.mislukt} mislukt)` : ''}${u.dubbel ? ` (${u.dubbel} dubbel)` : ''}`)
+      .join(', ');
+    console.log(`🏚️ Voorraadkelder bijgevuld: ${samenvatting}${opgeruimd ? ` · ${opgeruimd} verlopen opgeruimd` : ''}.`);
+  } catch (err) {
+    console.error('⚠️ Voorraadkelder vullen mislukt:', err.message);
+  }
+}, { timezone: 'Europe/Amsterdam' });
 
 // ── Quota-monitor ────────────────────────────────────────────────────────────
 // Logt elke 15 min hoe vol de providers zitten, zodat je in de pm2-logs ziet wanneer limieten
@@ -13515,6 +15096,8 @@ async function bouwDashboardData() {
       kennisbank: Array.isArray(kennis) ? kennis.length : 0,
       achievements: achievementsTotaal,
       kroketVanDeDag: kvdd?.naam ? { naam: kvdd.naam, datum: kvdd.datum } : null,
+      archief: archiefOmvang(),
+      voorraad: voorraadStand(),
     },
     grafieken,
     activiteit: (week.events || []).slice(-30).reverse()
@@ -13891,6 +15474,9 @@ process.on('SIGINT',  () => gracefulShutdown('SIGINT'));
 (async () => {
   backfillAchievements();
   backfillRoem();
+  // Het Grote Archief in het geheugen indexeren. Bewust bij opstarten en niet lui bij de eerste
+  // zoekopdracht: dan zou het eerste bericht van de dag de indexeertijd op zijn bord krijgen.
+  laadArchief();
   seedStatHistorie(); // vul de trendgrafieken met de events van deze week (alleen als nog leeg)
   controleerBackupDekking(); // waarschuwt over state die buiten de backup valt
   maakBackup(); // direct backup bij opstarten
@@ -13959,5 +15545,12 @@ process.on('SIGINT',  () => gracefulShutdown('SIGINT'));
     await zorgVoorWeekvijand();
   } catch (err) {
     console.error('Fout bij weekvijand-inhaalslag:', err);
+  }
+  // Het Grote Archief: bij een leeg archief eenmalig vullen uit de Slack-historie. Staat
+  // bewust achteraan de opstart — het is een gratis extraatje, niet iets waar de bot op wacht.
+  try {
+    await backfillArchiefUitSlack(app.client);
+  } catch (err) {
+    console.error('Fout bij archief-backfill:', err);
   }
 })();
