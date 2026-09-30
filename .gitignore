@@ -109,3 +109,16 @@ tijdcapsule.json
 
 # De Hoge Frituurraad: het register van gewezen zaken.
 jurisprudentie.json
+
+# Overige feature-state (zie `state:` in registreerFeature). activiteit.json en seizoen.json
+# zijn per ongeluk meegecommit; een pull of reset zou dan de echte stand overschrijven.
+activiteit.json
+archief.json
+gelekaartpoll.json
+seizoen.json
+statusvorig.json
+tribunaal.json
+tribunaalhistorie.json
+verslagen.json
+wereld.json
+wereldbord.json
