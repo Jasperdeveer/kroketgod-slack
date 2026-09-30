@@ -587,6 +587,7 @@ function renderInstellingen(d){
       +chk('i_dm',s.statusMeldingen,'Verborgen statusmelding','Aan = het lid krijgt een bericht dat alleen hij ziet ("only visible to you") als een zegen verloopt, een verbanning eindigt of een titel van eigenaar wisselt. Alleen dingen die WEGvallen; wat je erbij krijgt wordt al in het kanaal omgeroepen. Ephemerals verdwijnen bij een client-herlaad, dus de wijzigingen staan ook in de App Home.')
       +chk('i_test',s.alleenTestkanaal,'Alleen testkanaal','Reageert uitsluitend in het testkanaal (bruin-schaap), om te testen zonder het hoofdkanaal te storen.')
       +chk('i_spaar',s.spaarstand,'Spaarstand (licht)','Forceert het lichte, goedkope model en slaat Gemini en Cerebras over. Bespaart schaarse quota, iets lagere kwaliteit.')
+      +chk('i_allianties',s.alliantiesActief,'Allianties actief','Uit = alle heilige verbonden zijn GEPAUZEERD. De verbonden blijven bestaan en vervallen niet — ze staan nog in het overzicht en in ieders dossier — maar ze geven en kosten voorlopig niets: geen Verbondszegen bij puntenwinst, geen solidariteitsbonus bij een relikwie, geen verbondstrouw bij eer, geen pact-bescherming bij een beroep, en een bondgenoot valt niet mee in een verbanning. Ook de beschermingen liggen stil: tijdens de pauze mag een lid zijn eigen bondgenoot duelleren en beroven. Er kunnen geen verbonden gesloten of verbroken worden zolang dit uit staat. Zet je het weer aan, dan doen alle bestaande verbonden meteen weer mee.')
     +'</div>'
     +'<div><div class="lbl">Providers uit'+tip('Vink een LLM-provider aan om hem tijdelijk uit de antwoord-keten te halen, bv. bij een storing. Er blijft altijd minstens een werkend model over.')+'</div>'+provs+'</div>'
     +'<div><div class="lbl">Kansen</div>'
@@ -597,6 +598,8 @@ function renderInstellingen(d){
     +'</div>'
     +'<div class="lbl" style="margin-top:12px">Decreet van de dag'+tip('Vrije tekst die als extra instructie in de system prompt wordt geinjecteerd. Geef de Kroket God een tijdelijk thema, bv. spreek vandaag uitsluitend in haiku. Werkt direct na opslaan.')+'</div>'
     +'<textarea id="i_decreet" rows="2" placeholder="bv. Vandaag spreekt de Kroket God uitsluitend in haiku.">'+esc(s.decreetVanDeDag)+'</textarea>'
+    +'<div class="lbl" style="margin-top:12px">Eer — huisonderwerpen'+tip('Komma-gescheiden lijst van zaken die binnen dit genootschap sowieso zwaarder wegen bij een eerbewijs. Raakt een ingetypte reden er een, dan gaat het oordeel van de jury een klasse omhoog — zwak wordt degelijk, sterk wordt legendarisch. Bedoeld voor dingen die een taalmodel onmogelijk kan weten: de tavernehoek leest voor een buitenstaander als toewijding zonder resultaat, terwijl het hier juist erkenning verdient. Werkt direct na opslaan, ook op verbogen vormen (tavernehoekje) en ongeacht hoofdletters.')+'</div>'
+    +'<input id="i_huis" type="text" value="'+esc(s.eerHuisonderwerpen||'')+'" placeholder="tavernehoek, de kelder" style="width:100%;background:#16100a;color:var(--txt);border:1px solid var(--line);border-radius:8px;padding:8px;font:inherit;box-sizing:border-box">'
     +'<div class="lbl" style="margin-top:10px">Heftigheid van het decreet'+tip('Hoe sterk de Kroket God het decreet doorvoert: links = subtiele vleug, rechts = absolute obsessie die elke reactie doordrenkt.')+' <span id="i_decreetIntPct" class="muted" style="text-transform:none;font-weight:400">'+Math.round(s.decreetIntensiteit*100)+'%</span></div>'
     +'<input type="range" min="0" max="100" id="i_decreetInt" value="'+Math.round(s.decreetIntensiteit*100)+'" style="width:100%;accent-color:var(--amber)">'
     +'<div style="margin-top:12px"><button class="btn gold" data-save>💾 Opslaan</button>'
@@ -623,6 +626,7 @@ function renderInstellingen(d){
     +'<button class="btn" data-actie="wereldbordVerversen">⚜️ Wereldbord verversen</button>'
     +'<button class="btn" data-actie="wereldOnderwerp">🏷️ Kanaalonderwerp zetten</button></div>'
     +'<div class="lbl" style="margin-top:16px;border-top:1px solid var(--line);padding-top:13px">⚖️ Tribunaal der Vergetelheid'+tip('Een lid dat 7 dagen volledig stil is (geen bericht, geen daad) en geen afwezigheid meldde kan worden voorgedragen. Klok laten lopen verstuurt de por op dag 5, opent de stemming na de genadetermijn en sluit een verlopen stemming. Elk teken van leven van de beschuldigde blaast de zaak af. Herstel zet het laatst gearchiveerde lid terug met roem en relikwieën.')+'</div>'
+    +'<div><button class="btn" data-actie="beursDecreet">\uD83D\uDCC8 Beursdecreet verkondigen</button>'
     +'<div><button class="btn" data-actie="statusMeldingen">📬 Statusmeldingen nu sturen</button>'
     +'<button class="btn" data-actie="activiteitBackfill">👁️ Activiteitsklok herbouwen</button>'
     +'<button class="btn" data-actie="tribunaalKlok">⚖️ Tribunaalklok laten lopen</button>'
@@ -644,6 +648,11 @@ function renderInstellingen(d){
     +'<label class="tog" style="margin:0"><input type="checkbox" id="w_aankondig" checked> aankondigen</label>'
     +'<button class="btn gold" data-winkel="geef">🎁 Geef</button>'
     +'<button class="btn" data-winkel="verwijder">🗑️ Verwijder</button></div>'
+    +'<div class="lbl" style="margin-top:16px;border-top:1px solid var(--line);padding-top:13px">🙏 Eerbewijs'+tip('Laat een lid een ander lid eren, precies zoals in Slack. De reden is verplicht: een onafhankelijke jury weegt hem als schraal, deugdelijk, sterk of legendarisch, en daarbinnen bepaalt een dobbel de uitkomst — 0 tot 5 kroketpunten. Een schrale reden kan op niets uitlopen en kost de gever wel een eerbewijs. Dit is geen achterdeur: de daglimiet van de gever geldt, dezelfde reden hergebruiken weegt automatisch het laagst, en wie zijn eigen bondgenoot eert krijgt precies 1 punt terug. Voor stille correcties gebruik je het scorebeheer op het Beheer-tabblad.')+'</div>'
+    +'<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span class="muted">van</span><select id="e_gever" style="width:auto">'+wLeden+'</select>'
+    +'<span class="muted">eert</span><select id="e_ontvanger" style="width:auto">'+wLeden+'</select></div>'
+    +'<textarea id="e_reden" rows="2" maxlength="300" placeholder="Waarvoor? Beschrijf de daad, niet het gevoel — bv. bleef tot acht uur om mijn deploy te repareren" style="margin-top:6px"></textarea>'
+    +'<div style="margin-top:6px"><button class="btn gold" data-eer>🙏 Eer bewijzen</button></div>'
     +'<div class="lbl" style="margin-top:16px;border-top:1px solid var(--line);padding-top:13px">🧪 Test-console'+tip('Stuur een prompt naar de Kroket God en zie zijn antwoord hier — er wordt NIETS in Slack geplaatst. Handig om de tone of voice, het decreet of een stemming te testen. Kost 1 LLM-call.')+'</div>'
     +'<textarea id="test_prompt" rows="2" placeholder="bv. wat vindt de Kroket God van bitterballen?"></textarea>'
     +'<div style="margin-top:6px"><button class="btn" data-test>🧪 Test</button></div>'
@@ -651,12 +660,12 @@ function renderInstellingen(d){
     +'</div>';
   var host=document.getElementById('instellingen');
   host.innerHTML=html;
-  host.onclick=function(e){var b=e.target.closest('button');if(!b)return;if(b.hasAttribute('data-save'))bewaar();else if(b.hasAttribute('data-test'))testPrompt();else if(b.getAttribute('data-verkondig'))verkondig(b.getAttribute('data-verkondig'));else if(b.getAttribute('data-winkel'))winkelBeheer(b.getAttribute('data-winkel'));else if(b.getAttribute('data-actie'))doeActie(b.getAttribute('data-actie'));};
+  host.onclick=function(e){var b=e.target.closest('button');if(!b)return;if(b.hasAttribute('data-save'))bewaar();else if(b.hasAttribute('data-test'))testPrompt();else if(b.getAttribute('data-verkondig'))verkondig(b.getAttribute('data-verkondig'));else if(b.hasAttribute('data-eer'))eerGeef();else if(b.getAttribute('data-winkel'))winkelBeheer(b.getAttribute('data-winkel'));else if(b.getAttribute('data-actie'))doeActie(b.getAttribute('data-actie'));};
   host.oninput=function(e){if(e.target.id==='i_decreetInt'){var p=document.getElementById('i_decreetIntPct');if(p)p.textContent=e.target.value+'%';}};
 }
 function bewaar(){
   var uit=[];document.querySelectorAll('[data-prov]').forEach(function(c){if(c.checked)uit.push(c.getAttribute('data-prov'));});
-  post('/api/instellingen',{stemmingOverride:document.getElementById('i_stemming').value,stilModus:document.getElementById('i_stil').checked,weekendRust:document.getElementById('i_weekend').checked,statusMeldingen:document.getElementById('i_dm').checked,menties:document.getElementById('i_menties').checked,alleenTestkanaal:document.getElementById('i_test').checked,spaarstand:document.getElementById('i_spaar').checked,providerUit:uit,kortafKans:(+document.getElementById('i_kortaf').value||0)/100,warrigKans:(+document.getElementById('i_warrig').value||0)/100,vrijdagAppendKans:(+document.getElementById('i_vrijdag').value||0)/100,decreetVanDeDag:document.getElementById('i_decreet').value,decreetIntensiteit:(+document.getElementById('i_decreetInt').value||0)/100},'Opgeslagen');
+  post('/api/instellingen',{stemmingOverride:document.getElementById('i_stemming').value,stilModus:document.getElementById('i_stil').checked,weekendRust:document.getElementById('i_weekend').checked,statusMeldingen:document.getElementById('i_dm').checked,menties:document.getElementById('i_menties').checked,alleenTestkanaal:document.getElementById('i_test').checked,spaarstand:document.getElementById('i_spaar').checked,alliantiesActief:document.getElementById('i_allianties').checked,providerUit:uit,kortafKans:(+document.getElementById('i_kortaf').value||0)/100,warrigKans:(+document.getElementById('i_warrig').value||0)/100,vrijdagAppendKans:(+document.getElementById('i_vrijdag').value||0)/100,decreetVanDeDag:document.getElementById('i_decreet').value,decreetIntensiteit:(+document.getElementById('i_decreetInt').value||0)/100,eerHuisonderwerpen:document.getElementById('i_huis').value},'Opgeslagen');
 }
 function doeActie(a){post('/api/actie',{actie:a},'Uitgevoerd','i_actiestatus');}
 function skip(soort,key,ts,id){post('/api/overslaan',{soort:soort,key:key?decodeURIComponent(key):'',ts:ts,id:id},'Overgeslagen');}
@@ -687,6 +696,17 @@ function getToken(){return localStorage.getItem('dashboard_token')||'';}
 function scoreDelta(uid,delta){post('/api/score',{userId:uid,delta:delta},'Score aangepast');setTimeout(tick,800);}
 function banActie(uid,actie){post('/api/ban',{userId:uid,actie:actie,uren:4},actie==='opheffen'?'Ban opgeheven':'Ban verlengd');setTimeout(tick,800);}
 function winkelBeheer(actie){post('/api/winkel',{actie:actie,userId:document.getElementById('w_lid').value,item:document.getElementById('w_item').value,aankondig:document.getElementById('w_aankondig').checked},actie==='geef'?'Gegeven':'Verwijderd');setTimeout(tick,800);}
+function eerGeef(){
+  var g=document.getElementById('e_gever').value,o=document.getElementById('e_ontvanger').value,r=document.getElementById('e_reden').value.trim();
+  var st=document.getElementById('i_status');
+  // Lokaal voorfilteren op de twee fouten die je met een blik ziet, zodat je niet op de server
+  // hoeft te wachten voor "kies twee verschillende leden". De echte toetsing zit in /api/eer.
+  if(g===o){if(st)st.textContent='Fout: kies twee verschillende leden';return;}
+  if(r.length<10){if(st)st.textContent='Fout: reden is verplicht (minimaal 10 tekens)';return;}
+  post('/api/eer',{geverId:g,ontvangerId:o,reden:r},'Geëerd');
+  document.getElementById('e_reden').value='';
+  setTimeout(tick,1200);
+}
 function winkelVerwijder(uid,item){post('/api/winkel',{actie:'verwijder',userId:uid,item:item},'Verwijderd');setTimeout(tick,800);}
 function testPrompt(){
   var inp=document.getElementById('test_prompt');var out=document.getElementById('test_out');

@@ -58,6 +58,20 @@ opdrachten.json
 
 tellers.json
 
+# Ambten en het Vetgeschrift: houderschap, zegels, het openbare ambtsboek en het rollende
+# tellervenster waaruit de aanspraak wordt berekend. Zelfde reden als hierboven — dit is de
+# echte stand op de Pi en een git reset mag hem niet overschrijven.
+ambten.json
+ambtsboek.json
+venstertellers.json
+openbaring.json
+
+# Permanent prestige dat een deploy nooit mag overschrijven. Stond er nog niet in, terwijl
+# roem.json en tellers.json hier wél om precies die reden staan.
+titels.json
+heldentitels.json
+duelhistorie.json
+
 # Het Grote Archief: elk bericht dat ooit in het kanaal stond. Puur ledengegevens, groeit
 # eeuwig door en de Pi is de enige echte bron — die mag een git reset nooit overschrijven.
 grootarchief.ndjson
@@ -74,6 +88,12 @@ backups/
 # Claude Code: lokale (machine-specifieke) instellingen
 .claude/settings.local.json
 vetbadoverride.json
+
+# Het Gefluisterde Voorrecht: openstaande eenmalige tekens. Hoort nergens buiten de Pi.
+fortuin.json
+
+# De galerij der visioenen: genummerde beelden met hun titels en Slack-file-id's.
+visioenen.json
 
 # Het Verhoor: gebruikte citaten en de lopende ronde.
 verhoor.json
