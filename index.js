@@ -1225,7 +1225,46 @@ function logGebeurtenis(type, userId, beschrijving, citaat = null, actorId = nul
 // ── Scores ─────────────────────────────────────────────────────────────────────
 
 const loadScores = () => readJSON('scores.json', {});
-const saveScores = (scores) => writeJSON('scores.json', scores);
+// ── App Home actueel houden ────────────────────────────────────────────────────
+// Een Home-tab ververste alleen als de gebruiker hem opende of zelf een knop indrukte. Wie
+// geëerd, beroofd of verbannen werd, bleef dus naar een verouderde stand kijken. Daarom houden
+// we per statusbestand een momentopname bij (per lid, als JSON-tekst) en verversen we de Home
+// van ieder lid wiens regel bij een save veranderde. Momentopname i.p.v. oud-vs-nieuw: de
+// aanroepers muteren het gecachete object van readJSON, dus "oud" is op het moment van
+// opslaan al het nieuwe object.
+const HOME_VERVERS_VERTRAGING_MS = 4000; // bundelt een reeks wijzigingen (eer + relikwie + roem) tot één publish
+const homeVerversWachtrij = new Map();   // userId → timer
+const homeMomentopnames = new Map();     // bestand → Map(userId → JSON-tekst)
+
+function markeerHomeVerouderd(userId) {
+  if (!userId || !isReady || homeVerversWachtrij.has(userId)) return;
+  homeVerversWachtrij.set(userId, setTimeout(() => {
+    homeVerversWachtrij.delete(userId);
+    if (loadMembers()[userId]) publiceerAppHome(app.client, userId).catch(() => {});
+  }, HOME_VERVERS_VERTRAGING_MS));
+}
+
+function momentopname(data) {
+  return new Map(Object.entries(data || {}).map(([id, v]) => [id, JSON.stringify(v)]));
+}
+
+// Vervangt writeJSON voor de bestanden die de Home-tab toont (zie HOME_BESTANDEN hieronder).
+function schrijfEnMarkeerHomes(bestand, data) {
+  writeJSON(bestand, data);
+  const vorig = homeMomentopnames.get(bestand) || new Map();
+  const nu = momentopname(data);
+  for (const id of new Set([...vorig.keys(), ...nu.keys()])) {
+    if (vorig.get(id) !== nu.get(id)) markeerHomeVerouderd(id);
+  }
+  homeMomentopnames.set(bestand, nu);
+}
+
+// Momentopnames bij het laden van de module, vóórdat iets het gecachete object kan muteren.
+for (const bestand of ['scores.json', 'roem.json', 'verbanning.json', 'powerups.json']) {
+  homeMomentopnames.set(bestand, momentopname(readJSON(bestand, {})));
+}
+
+const saveScores = (scores) => schrijfEnMarkeerHomes('scores.json', scores);
 
 // ── Geplande berichten & overslaan (dashboard) ────────────────────────────────
 // Eenmalige, vooruit geplande verkondigingen + markeringen om de eerstvolgende
@@ -1450,7 +1489,7 @@ async function kenAlliantiePuntenBonus(client, userId, opties = {}) {
 // pasScoreAan (negatief) en raakt de roem dus niet — puur een weekcompetitie-afweging.
 
 const loadPowerups = () => readJSON('powerups.json', {});
-const savePowerups = (data) => writeJSON('powerups.json', data);
+const savePowerups = (data) => schrijfEnMarkeerHomes('powerups.json', data);
 
 // Het prijspeil was gekalibreerd op tientallen punten terwijl de weekstanden op 1-4 staan: er
 // lag 17 punten aan voorraad tegenover 12 punten totaal bezit van het hele genootschap, en de
@@ -1994,7 +2033,7 @@ const saveHeldentitels = (data) => writeJSON('heldentitels.json', data);
 // Roem bepaalt je permanente rang in de Illuminati.
 
 const loadRoem = () => readJSON('roem.json', {});
-const saveRoem  = (data) => writeJSON('roem.json', data);
+const saveRoem  = (data) => schrijfEnMarkeerHomes('roem.json', data);
 
 // Elke rang geeft een CONCREET voorrecht. Zonder dat was klimmen alleen een titel — de
 // klassieke gamification-fout: progressie zonder beloning. Voorrechten zijn cumulatief:
@@ -2600,7 +2639,7 @@ function resetVergrijpen(userId) {
 const GENADE_KOSTEN = 2;
 
 const loadVerbanning = () => readJSON('verbanning.json', {});
-const saveVerbanning = (data) => writeJSON('verbanning.json', data);
+const saveVerbanning = (data) => schrijfEnMarkeerHomes('verbanning.json', data);
 
 // ── Allianties ─────────────────────────────────────────────────────────────────
 // Opgeslagen als { userId1: userId2, userId2: userId1 } — altijd bidirectioneel.
@@ -16739,7 +16778,19 @@ function kapHomeBlocks(blocks) {
 // Een object en geen losse let, zodat bouwAppHomeBlocks hem hierboven al kan uitlezen.
 const GALERIJ_BEELD_UIT = { aan: false };
 
+// Laatste melding per lid. Een automatische verversing (zie markeerHomeVerouderd) mag de
+// uitslag van een knop die iemand net indrukte niet meteen weer wegvegen.
+const HOME_MELDING_BLIJFT_MS = 60_000;
+const laatsteHomeMelding = new Map(); // userId → { melding, extraBlocks, tot }
+
 async function publiceerAppHome(client, userId, melding = '', extraBlocks = []) {
+  if (melding || extraBlocks.length) {
+    laatsteHomeMelding.set(userId, { melding, extraBlocks, tot: Date.now() + HOME_MELDING_BLIJFT_MS });
+  } else {
+    const vorige = laatsteHomeMelding.get(userId);
+    if (vorige && vorige.tot > Date.now()) ({ melding, extraBlocks } = vorige);
+    else laatsteHomeMelding.delete(userId);
+  }
   try {
     await slackLimiter.schedule(() => client.views.publish({
       user_id: userId,
@@ -20144,6 +20195,14 @@ process.on('SIGINT',  () => gracefulShutdown('SIGINT'));
     console.warn('⚠️ Kon bot-user-ID niet ophalen:', err.message);
   }
   laadPersistenteTestKanalen(); // eerder geleerde test-ID's van disk (overleeft herstart)
+  // Na een deploy of herstart iedereen meteen de nieuwe Home geven, niet pas als hij de tab
+  // opent. Even wachten zodat de opstartdrukte (crons, wereldbord) eerst voorbij is; de
+  // slackLimiter spreidt de publishes daarna vanzelf.
+  setTimeout(() => {
+    const leden = Object.keys(loadMembers());
+    console.log(`🏠 App Home verversen voor ${leden.length} leden na opstart`);
+    for (const id of leden) publiceerAppHome(app.client, id).catch(() => {});
+  }, 15_000);
   if (TEST_KANAAL_IDS.size > 0) console.log(`🧪 Testkanaal-ID's bekend: ${[...TEST_KANAAL_IDS].join(', ')}`);
   await laadTestKanaalIds(app.client); // aanvulling via API (kan op missing_scope falen — niet erg)
   await laadNederlandseFeestdagen(); // feestdagen voor Nager.at integratie
