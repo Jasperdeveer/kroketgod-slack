@@ -6840,35 +6840,6 @@ async function voerKroketCommandoUit({ command, respond, client }) {
       return;
     }
 
-    // Portret ophangen voor een vijand die vóór de Zegezaal bestond. Bewust ÉÉN per aanroep:
-    // zeven beelden achter elkaar jaagt het dagquota van de beeldprovider er in één klap doorheen,
-    // en dat quota is ook waar de visioenen uit komen. Zijn ze allemaal opgehangen, dan doet dit
-    // commando niets meer — het is dus zelfbeperkend en hoeft niet achter een rang te zitten.
-    if (input === 'zegezaal portret' || input === 'zegezaal portretten') {
-      const verslagen = loadVerslagen();
-      const zonder = Object.entries(verslagen).filter(([, v]) => !v.avatarFileId);
-      if (!zonder.length) {
-        await respond({ text: '🏛️ _Elke gevallen vijand hangt al aan de muur._', response_type: 'ephemeral' });
-        return;
-      }
-      const [key, v] = zonder[0];
-      await respond({ text: `🎨 _De Raad laat ${v.naam} schilderen. Dit duurt even; nog ${zonder.length - 1} daarna._`, response_type: 'ephemeral' });
-      const def = WEEKVIJANDEN.find(w => w.key === key) || { key, naam: v.naam };
-      const avatarFileId = await maakVijandPortret(client, { ...def, naam: v.naam }, command.channel_id);
-      if (!avatarFileId) {
-        // Bewust GEEN oorzaak noemen. Dit stond er eerst als "de verf is op (beeldquota)", maar
-        // maakVijandPortret geeft bij élke fout null terug — quota, provider plat, upload geweigerd
-        // of een bug. Die melding wees de eerste keer dat hij vuurde naar het verkeerde probleem:
-        // het was een ReferenceError, geen quota. Een foutmelding die een oorzaak verzint is erger
-        // dan een die er geen noemt.
-        await respond({ text: '🎨 _Het doek bleef leeg. De reden staat in het serverlog._', response_type: 'ephemeral' });
-        return;
-      }
-      const verse = loadVerslagen();
-      if (verse[key]) { verse[key].avatarFileId = avatarFileId; saveVerslagen(verse); }
-      await publiceerAppHome(client, command.user_id);
-      return;
-    }
 
     // ── De Frituurbeurs ───────────────────────────────────────────────────────
     // Alles ephemeral: posities zijn geheim, dus zelfs de bevestiging hoort niet in het kanaal.
@@ -10261,19 +10232,6 @@ async function beslechtBamischijfOverwinning(client, channelId, raid, genadeslag
       genadeslag: genadeslagNaam, strijders: strijders.map(([uid]) => members[uid]?.bijnaam || uid),
     };
     saveVerslagen(verslagen);
-    // Het portret ná het wegschrijven: de overwinning staat dan al vast, ook als de beeldprovider
-    // er een minuut over doet of helemaal plat ligt. Opnieuw inlezen vóór het opslaan, want
-    // tussen beide momenten kan er van alles aan verslagen.json geschreven zijn.
-    try {
-      const avatarFileId = await maakVijandPortret(client, raid.vijand, channelId);
-      if (avatarFileId) {
-        const verse = loadVerslagen();
-        if (verse[raid.vijand.key]) {
-          verse[raid.vijand.key].avatarFileId = avatarFileId;
-          saveVerslagen(verse);
-        }
-      }
-    } catch (_) {}
     const raidNu = readJSON('bamischijf.json', {});
     raidNu.verslagen = true;
     writeJSON('bamischijf.json', raidNu);
@@ -17890,46 +17848,6 @@ async function zorgVoorWeekvijand() {
 // `limiet` kapt de lijst af voor de Home-tab: de pool telt 51 snacks, en als die ooit allemaal
 // vallen is dat 51 blokken op een tab die net is teruggebracht tot 27. Het volle verhaal staat
 // achter de Zegezaal-knop.
-// ── Het portret van een gevelde vijand ────────────────────────────────────────
-// Eén afbeelding per voorgoed verslagen snack, bewaard in verslagen.json en getoond als klein
-// vierkant naast zijn regel in de Zegezaal. Dit is de enige plek in het spel waar een beeld
-// BLIJFT: visioenen schuiven uit de galerij, dit hangt er voorgoed.
-//
-// Waarom niet via genereerBeeld: die maakt een visioen — met volgnummer, galerij-entry, een
-// toelichting van de God en "naar een wens van X". Een vijandportret is geen wens van iemand.
-// Sinds maakBeeldBytes is uitgelicht kan dat los.
-//
-// Faalt er iets — quota op, provider plat, upload geweigerd — dan gebeurt er niets bijzonders:
-// de vijand staat gewoon zonder portret in de zaal, met zijn emoji. Een mislukt plaatje mag nooit
-// een overwinning in de weg staan.
-async function maakVijandPortret(client, vijand, channelId) {
-  try {
-    const prompt =
-      `A single ${vijand.naam} — a Dutch deep-fried snack — depicted as a defeated, fallen villain. ` +
-      `Dramatic museum portrait, three-quarter view, dark oil-painting background, heavy chiaroscuro ` +
-      `lighting, cracked golden frame edges, solemn and slightly absurd. The snack is the sole subject, ` +
-      `centered, filling the frame. No text, no letters, no people.`;
-    const { buffer, mimeType } = await maakBeeldBytes(prompt);
-    if (!buffer) return null;
-    const ext = String(mimeType).includes('jpeg') || String(mimeType).includes('jpg') ? 'jpg' : 'png';
-    // Mét channel_id: een bestand dat nergens gedeeld is, is voor de Home-tab van een ánder lid
-    // niet te tonen. Dit is bovendien hooguit één keer per week, op een moment dat het kanaal
-    // tóch al feestviert — dus het past binnen de berichtenbegroting.
-    const upload = await client.files.uploadV2({
-      channel_id: channelId || process.env.SLACK_CHANNEL_ID,
-      file: buffer,
-      filename: `zegezaal-${String(vijand.key || vijand.naam).toLowerCase().replace(/[^a-z0-9]+/g, '-')}.${ext}`,
-      initial_comment: `🏛️ _Het portret van *${vijand.naam}* is opgehangen in de Zegezaal._`,
-    });
-    // Zelfde defensieve uitpakking als bij het visioen: de vorm verschilt per SDK-versie.
-    const bestand = upload?.files?.[0]?.files?.[0] || upload?.files?.[0] || upload?.file || null;
-    return bestand?.id || null;
-  } catch (err) {
-    console.warn('Vijandportret mislukt:', err?.data?.error || err?.message || err);
-    return null;
-  }
-}
-
 function zegezaalBlocks({ limiet = null } = {}) {
   const verslagen = loadVerslagen();
   const gevallen = Object.entries(verslagen).sort((a, b) => (b[1].ts || 0) - (a[1].ts || 0));
@@ -17950,11 +17868,16 @@ function zegezaalBlocks({ limiet = null } = {}) {
         `${def?.emoji || '•'} *${v.naam}*\n_geveld ${datum}${v.genadeslag ? ` · genadeslag: ${v.genadeslag}` : ''}_` +
         (v.strijders?.length ? `\n_door: ${v.strijders.join(', ')}_` : '') },
     };
-    // Het portret als klein vierkant naast de regel. Alleen als het er is: een accessory met een
-    // verdwenen bestand laat Slack de HELE view weigeren, en dan ligt de Home-tab van iedereen
-    // plat door één opgeruimd plaatje. Dezelfde noodrem als bij de galerij dekt dat af.
-    if (v.avatarFileId && !GALERIJ_BEELD_UIT.aan) {
-      regel.accessory = { type: 'image', slack_file: { id: v.avatarFileId }, alt_text: v.naam };
+    // Het gezicht van de vijand als klein vierkant naast de regel — exact hetzelfde portret
+    // waarmee hij die week in het kanaal sprak. weekvijandAvatarUrl() is deterministisch (de seed
+    // komt uit fnvHash van zijn key), dus hier staat de snack die het genootschap kent.
+    //
+    // De eerste versie liet hier een NIEUW portret schilderen en opslaan. Dat leverde zes vreemde
+    // gezichten op van vijanden die er al een hadden, kostte beeldquota, en hing aan een
+    // Slack-bestand dat kan verdwijnen. Deze versie kost niets en kan niet verlopen.
+    const gezicht = def ? weekvijandAvatarUrl(def) : null;
+    if (gezicht && !GALERIJ_BEELD_UIT.aan) {
+      regel.accessory = { type: 'image', image_url: gezicht, alt_text: v.naam };
     }
     return regel;
   });
@@ -17987,7 +17910,6 @@ registreerFeature({
   state: ['verslagen.json'],
   help: [
     { gebruik: '/kroketgod zegezaal', verwacht: 'de voorgoed gevallen weekvijanden — wie is geveld, wanneer, en door wie' },
-    { gebruik: '/kroketgod zegezaal portret', verwacht: 'hangt een portret op voor één gevallen vijand die er nog geen heeft' },
   ],
   homeOrde: 18,
   // Bewust GEEN home-kaart: die toonde de levenspunten van de lopende raid uit bamischijf.json,
@@ -19969,21 +19891,6 @@ async function voerDashboardActie(actie) {
     case 'ververseQuota':
       await logQuotaStatus();
       return 'Quota ververst.';
-    // Hangt één ontbrekend portret op in de Zegezaal. Eén per aanroep, net als het
-    // slash-commando: zes beelden achter elkaar jaagt het dagquota van de beeldprovider er in
-    // één klap doorheen, en dat is hetzelfde quota waar de visioenen uit komen.
-    case 'zegezaalPortret': {
-      const verslagenNu = loadVerslagen();
-      const zonder = Object.entries(verslagenNu).filter(([, v]) => !v.avatarFileId);
-      if (!zonder.length) return 'Elke gevallen vijand hangt al aan de muur.';
-      const [key, v] = zonder[0];
-      const def = WEEKVIJANDEN.find(w => w.key === key) || { key, naam: v.naam };
-      const avatarFileId = await maakVijandPortret(app.client, { ...def, naam: v.naam }, KANAAL());
-      if (!avatarFileId) throw new Error(`Portret van ${v.naam} mislukt — zie het serverlog voor de reden`);
-      const verse = loadVerslagen();
-      if (verse[key]) { verse[key].avatarFileId = avatarFileId; saveVerslagen(verse); }
-      return `${v.naam} hangt in de Zegezaal (${zonder.length - 1} te gaan).`;
-    }
     case 'kroketVanDeDag':
       await voerKroketVanDeDagUit(app.client);
       return 'Kroket van de dag gepost.';
