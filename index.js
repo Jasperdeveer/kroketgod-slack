@@ -4328,6 +4328,193 @@ function bouwPortret(doelId) {
   }
 }
 
+// ── De beeldfabriek ───────────────────────────────────────────────────────────
+// Maakt de BYTES van een afbeelding: Gemini → HuggingFace → Pollinations, in die volgorde, met
+// per provider zijn eigen quota- en foutafhandeling. Stond als blok van honderdzeventig regels
+// middenin genereerBeeld, verweven met de visioen-boekhouding (volgnummer, galerij, toelichting).
+// Daardoor was een beeld maken ZONDER visioen onmogelijk, en dat was precies wat de Zegezaal
+// nodig had: één portret van een gevelde vijand, zonder galerij-entry en zonder wens-framing.
+//
+// Puur uitgelicht, niets aan de logica veranderd — het blok gebruikte maar twee namen uit de
+// omringende scope (beeldPrompt en portret) en die zijn nu parameters.
+// `vangnetPrompt` is de kortere, soberder prompt voor HuggingFace en Pollinations — die modellen
+// verslikken zich in de lange, met stijl en stemming opgetuigde Gemini-prompt. Hij wordt door de
+// aanroeper opgebouwd en MOET meekomen: bij het uitlichten van deze functie bleef de declaratie
+// in genereerBeeld achter terwijl de twee gebruiken hier terechtkwamen, en dat sloopte precies de
+// twee terugvallen die ertoe doen zodra Gemini's dagquota op is — wat het geval was. Standaard
+// terug op de hoofdprompt, zodat een aanroeper zonder eigen vangnet (het Zegezaal-portret) werkt.
+async function maakBeeldBytes(beeldPrompt, { portret = null, vangnetPrompt = beeldPrompt } = {}) {
+  let buffer;
+  let mimeType = 'image/png';
+  // Gaven ALLE beeld-sleutels een 429, dan is het dagquota op en helpt "probeer het later" niet:
+  // dan is het morgen. Dat onderscheid maakt het verschil tussen een speler die één keer wacht en
+  // een speler die tien keer op de knop drukt.
+  let quotaOp = false;
+
+  // ── Primair: Gemini 2.5 Flash Image, alias "Nano Banana" (roteert over álle Gemini-keys) ──
+  // Gebruikt dezelfde key-pool als de tekst-keten (geminiKeys()), dus profiteert nu ook van
+  // rotatie bij 429/quota i.p.v. één vaste key. ~500 beelden per dag gratis per project.
+  //
+  // Het model komt uit de omgeving, om dezelfde reden als bij HuggingFace: een nieuwe generatie of een
+  // deprecatie hoort geen deploy te kosten. Let op bij het omzetten — "Nano Banana Pro"
+  // (gemini-3-pro-image) heeft géén gratis tier (0 requests per dag) en zou de hele keten stil naar
+  // de vangnetten duwen.
+  const geminiBeeldModel = process.env.GEMINI_IMAGE_MODEL || 'gemini-2.5-flash-image';
+
+  // ── De kroket-referentie als bijlage ────────────────────────────────────────
+  // Alleen meesturen als er ook echt een kroket in het beeld hoort: bij een portret altijd, en verder
+  // wanneer de opgebouwde prompt het woord croquette/kroket bevat (de prompt-bouwer zet elk lid om in
+  // een "anthropomorphic croquette", dus dat dekt alle ledenvisioenen). Bij "een bitterbal op de maan"
+  // zou de bijlage het onderwerp juist naar een kroket toe trekken.
+  //
+  // De instructie erbij is streng over wat er WEL en NIET van de referentie mag worden overgenomen:
+  // zonder die grens gaat het model de bijlage bewerken in plaats van hem als materiaalstaal gebruiken,
+  // en dan krijgt elk visioen dezelfde pose, hetzelfde gewaad en dezelfde witte achtergrond.
+  const metReferentie = !!KROKET_REFERENTIE
+    && process.env.KROKET_REFERENTIE_UIT !== '1'
+    && (!!portret || /croquette|kroket/i.test(beeldPrompt));
+  const geminiParts = [
+    ...(metReferentie ? [{ inline_data: { mime_type: KROKET_REFERENTIE.mimeType, data: KROKET_REFERENTIE.data } }] : []),
+    { text:
+      `${beeldPrompt}.`
+      + (metReferentie
+        ? ` The attached image is the canonical reference for what a croquette is: that exact deep-fried golden-brown breadcrumb crust, coarse crumb texture, colour and cylindrical shape. Every croquette in the new image must be made of that same material. Take ONLY the material, colour, texture and shape from it — it is a material sample, not a composition: the reference is a bare croquette on a white background with no face or limbs, while the character you draw does have a face, arms and legs, and its pose, clothing, framing, background and lighting come entirely from the description above. Do not reproduce the reference's plain white backdrop or its isolated product-photo framing.`
+        : '')
+      + ' Render no text, letters, numbers or watermarks anywhere in the image.' },
+  ];
+  if (metReferentie) console.log(`🖼️ Kroket-referentie meegestuurd (${KROKET_REFERENTIE.bestand}, ${KROKET_REFERENTIE.kb} KB).`);
+
+  for (const key of geminiKeys()) {
+    if (buffer) break;
+    try {
+      const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${geminiBeeldModel}:generateContent?key=${key}`;
+      const resp = await fetch(geminiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          // Gemini volgt instructies, dus hier kan het negatieve deel als zin — een losse opsomming
+          // van "text, watermark" zoals bij de diffusiemodellen zou het juist die dingen oproepen.
+          contents: [{ parts: geminiParts }],
+          generationConfig: { responseModalities: ['IMAGE', 'TEXT'] },
+        }),
+        // 45s per key (× keys door de rotatie) — bound de totale wachttijd op beeldgeneratie.
+        timeout: 45000,
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        const parts = data.candidates?.[0]?.content?.parts ?? [];
+        const imgPart = parts.find(p => p.inlineData?.mimeType?.startsWith('image/'));
+        if (imgPart) {
+          mimeType = imgPart.inlineData.mimeType;
+          buffer = Buffer.from(imgPart.inlineData.data, 'base64');
+          console.log(`✅ Gemini beeld gegenereerd (${mimeType}, ${Math.round(buffer.length / 1024)} KB)`);
+        } else {
+          console.warn('⚠️ Gemini image: geen inlineData in antwoord', JSON.stringify(data).substring(0, 300));
+          break; // geldige respons zonder beeld — een andere key helpt niet
+        }
+      } else {
+        const errText = await resp.text();
+        console.warn(`⚠️ Gemini image ${resp.status}: ${errText.substring(0, 200)}`);
+        if (resp.status === 429) quotaOp = true; // dagquota van deze sleutel is op
+        // Alleen bij quota/rate-limit of serverfout de volgende key proberen; anders stoppen.
+        if (!(resp.status === 429 || resp.status >= 500)) break;
+      }
+    } catch (err) {
+      console.warn('⚠️ Gemini image fout:', err.message);
+    }
+  }
+
+  // ── Fallback: HuggingFace Inference API ──────────────────────────────────────
+  // Model en stappen komen uit de omgeving. Dit stond hardgecodeerd op FLUX.1-schnell, en toen
+  // hf-inference dat model liet vallen ("410: deprecated and no longer supported by provider")
+  // was de énige fallback stil en permanent dood — precies op het moment dat hij nodig was, want
+  // Gemini's dagquota voor beelden is doorgaans halverwege de dag op. Een deprecatie hoort geen
+  // deploy te kosten.
+  // 28 stappen is de standaard van SD3-medium (~14s); FLUX-schnell werkte op 4. Vandaar instelbaar.
+  if (!buffer && process.env.HF_API_TOKEN) {
+    const hfModel = process.env.HF_IMAGE_MODEL || 'stabilityai/stable-diffusion-3-medium-diffusers';
+    const hfStappen = Number(process.env.HF_IMAGE_STEPS) || 28;
+    console.log(`🔄 Gemini image niet beschikbaar — fallback naar HuggingFace (${hfModel})...`);
+    const hfUrl = `https://router.huggingface.co/hf-inference/models/${hfModel}`;
+    for (let poging = 1; poging <= 2; poging++) {
+      try {
+        const response = await fetch(hfUrl, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${process.env.HF_API_TOKEN}`,
+            'Content-Type': 'application/json',
+          },
+          // negative_prompt kent alleen deze provider; de diffusiemodellen hier hebben er echt iets
+          // aan, want zij plakken het liefst onleesbare pseudo-letters in een poster of tarotkaart.
+          body: JSON.stringify({ inputs: vangnetPrompt, parameters: { num_inference_steps: hfStappen, width: 1024, height: 1024, negative_prompt: BEELD_NEGATIEF } }),
+          timeout: 60000,
+        });
+        const contentType = response.headers.get('content-type') || '';
+        if (response.ok && contentType.includes('image')) {
+          buffer = await response.buffer();
+          mimeType = contentType.split(';')[0].trim() || 'image/jpeg';
+          console.log(`✅ HuggingFace beeld gegenereerd (${Math.round(buffer.length / 1024)} KB)`);
+          break;
+        } else {
+          const errText = await response.text().catch(() => '');
+          console.warn(`⚠️ HuggingFace image ${response.status}: ${errText.substring(0, 200)}`);
+          if (response.status !== 503) break; // 503 = model loading, retry
+        }
+      } catch (err) {
+        console.warn(`HuggingFace poging ${poging} faalde:`, err.message);
+      }
+      if (poging < 2) await new Promise(r => setTimeout(r, 6000));
+    }
+  }
+
+  // ── Laatste vangnet: Pollinations (flux) ─────────────────────────────────────
+  // Geen sleutel, geen account, gratis en onbeperkt voor de basismodellen — dus dit vangnet kan niet
+  // stilvallen door een opgebruikt quotum of een vergeten token, en dat is precies wat de andere twee
+  // wél overkomt (Gemini's dagquota is vaak halverwege de dag op, HF vereist een token). Dezelfde
+  // dienst die de stem van de Kroket God maakt.
+  //
+  // Twee dingen bewust zo:
+  //   · private=true — anders komt de prompt in de publieke feed van Pollinations te staan, en daar
+  //     staan bijnamen van leden in. Wat in het genootschap gebeurt blijft in het genootschap.
+  //   · anonieme limiet is één verzoek per 15 seconden. Dat is ruim binnen de uurklok per lid, maar
+  //     bij een 429 heeft direct opnieuw proberen geen zin: even wachten, dan één herkansing.
+  // Het beeld draagt een klein Pollinations-logo (weghalen vereist een account). Als laatste redmiddel
+  // is een beeld met logo beter dan geen visioen.
+  if (!buffer && process.env.POLLINATIONS_UIT !== '1') {
+    // Zonder POLLINATIONS_IMAGE_MODEL wordt er GEEN model meegestuurd en kiest de dienst zelf. Bewust:
+    // hun documentatie noemt flux/turbo, maar /models geeft vandaag alleen "sana" terug, en een
+    // hardgecodeerde modelnaam die daar verdwijnt is precies hoe de HuggingFace-fallback een halfjaar
+    // stil dood lag. Verschijnt er weer iets beters, dan is het één env-var en geen deploy.
+    const polModel = process.env.POLLINATIONS_IMAGE_MODEL || null;
+    console.log(`🔄 Geen beeld via Gemini/HuggingFace — vangnet Pollinations (${polModel || 'standaardmodel'})...`);
+    // Seed uit de klok: zonder seed geeft de dienst hetzelfde beeld terug uit zijn cache wanneer twee
+    // leden dezelfde wens intypen, en twee identieke visioenen zien eruit als een bug.
+    const polSeed = Date.now() % 1_000_000;
+    const polUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(vangnetPrompt)}`
+      + `?width=1024&height=1024&seed=${polSeed}&private=true`
+      + (polModel ? `&model=${encodeURIComponent(polModel)}` : '');
+    for (let poging = 1; poging <= 2; poging++) {
+      try {
+        const response = await fetch(polUrl, { timeout: 90000 });
+        const contentType = response.headers.get('content-type') || '';
+        if (response.ok && contentType.includes('image')) {
+          buffer = await response.buffer();
+          mimeType = contentType.split(';')[0].trim() || 'image/jpeg';
+          console.log(`✅ Pollinations beeld gegenereerd (${Math.round(buffer.length / 1024)} KB)`);
+          break;
+        }
+        console.warn(`⚠️ Pollinations image ${response.status} (${contentType})`);
+        if (response.status !== 429 && response.status < 500) break;
+      } catch (err) {
+        console.warn(`Pollinations poging ${poging} faalde:`, err.message);
+      }
+      if (poging < 2) await new Promise(r => setTimeout(r, 16000)); // anonieme limiet: 1 per 15s
+    }
+  }
+
+  return { buffer, mimeType, quotaOp };
+}
+
 // opties:
 //   stijlKeuze    naam (of deel daarvan) van een stijl uit BEELD_STIJLEN; anders willekeurig
 //   stijlUitsluiten  stijl die NIET gekozen mag worden (her-worp: zelfde wens, ander oog)
@@ -4552,174 +4739,8 @@ OUTPUT: Only the prompt. No explanation, no quotes.`,
     writeJSON('frituurlog.json', log);
   } catch (_) {}
 
-  let buffer;
-  let mimeType = 'image/png';
-  // Gaven ALLE beeld-sleutels een 429, dan is het dagquota op en helpt "probeer het later" niet:
-  // dan is het morgen. Dat onderscheid maakt het verschil tussen een speler die één keer wacht en
-  // een speler die tien keer op de knop drukt.
-  let quotaOp = false;
-
-  // ── Primair: Gemini 2.5 Flash Image, alias "Nano Banana" (roteert over álle Gemini-keys) ──
-  // Gebruikt dezelfde key-pool als de tekst-keten (geminiKeys()), dus profiteert nu ook van
-  // rotatie bij 429/quota i.p.v. één vaste key. ~500 beelden per dag gratis per project.
-  //
-  // Het model komt uit de omgeving, om dezelfde reden als bij HuggingFace: een nieuwe generatie of een
-  // deprecatie hoort geen deploy te kosten. Let op bij het omzetten — "Nano Banana Pro"
-  // (gemini-3-pro-image) heeft géén gratis tier (0 requests per dag) en zou de hele keten stil naar
-  // de vangnetten duwen.
-  const geminiBeeldModel = process.env.GEMINI_IMAGE_MODEL || 'gemini-2.5-flash-image';
-
-  // ── De kroket-referentie als bijlage ────────────────────────────────────────
-  // Alleen meesturen als er ook echt een kroket in het beeld hoort: bij een portret altijd, en verder
-  // wanneer de opgebouwde prompt het woord croquette/kroket bevat (de prompt-bouwer zet elk lid om in
-  // een "anthropomorphic croquette", dus dat dekt alle ledenvisioenen). Bij "een bitterbal op de maan"
-  // zou de bijlage het onderwerp juist naar een kroket toe trekken.
-  //
-  // De instructie erbij is streng over wat er WEL en NIET van de referentie mag worden overgenomen:
-  // zonder die grens gaat het model de bijlage bewerken in plaats van hem als materiaalstaal gebruiken,
-  // en dan krijgt elk visioen dezelfde pose, hetzelfde gewaad en dezelfde witte achtergrond.
-  const metReferentie = !!KROKET_REFERENTIE
-    && process.env.KROKET_REFERENTIE_UIT !== '1'
-    && (!!portret || /croquette|kroket/i.test(beeldPrompt));
-  const geminiParts = [
-    ...(metReferentie ? [{ inline_data: { mime_type: KROKET_REFERENTIE.mimeType, data: KROKET_REFERENTIE.data } }] : []),
-    { text:
-      `${beeldPrompt}.`
-      + (metReferentie
-        ? ` The attached image is the canonical reference for what a croquette is: that exact deep-fried golden-brown breadcrumb crust, coarse crumb texture, colour and cylindrical shape. Every croquette in the new image must be made of that same material. Take ONLY the material, colour, texture and shape from it — it is a material sample, not a composition: the reference is a bare croquette on a white background with no face or limbs, while the character you draw does have a face, arms and legs, and its pose, clothing, framing, background and lighting come entirely from the description above. Do not reproduce the reference's plain white backdrop or its isolated product-photo framing.`
-        : '')
-      + ' Render no text, letters, numbers or watermarks anywhere in the image.' },
-  ];
-  if (metReferentie) console.log(`🖼️ Kroket-referentie meegestuurd (${KROKET_REFERENTIE.bestand}, ${KROKET_REFERENTIE.kb} KB).`);
-
-  for (const key of geminiKeys()) {
-    if (buffer) break;
-    try {
-      const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${geminiBeeldModel}:generateContent?key=${key}`;
-      const resp = await fetch(geminiUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          // Gemini volgt instructies, dus hier kan het negatieve deel als zin — een losse opsomming
-          // van "text, watermark" zoals bij de diffusiemodellen zou het juist die dingen oproepen.
-          contents: [{ parts: geminiParts }],
-          generationConfig: { responseModalities: ['IMAGE', 'TEXT'] },
-        }),
-        // 45s per key (× keys door de rotatie) — bound de totale wachttijd op beeldgeneratie.
-        timeout: 45000,
-      });
-      if (resp.ok) {
-        const data = await resp.json();
-        const parts = data.candidates?.[0]?.content?.parts ?? [];
-        const imgPart = parts.find(p => p.inlineData?.mimeType?.startsWith('image/'));
-        if (imgPart) {
-          mimeType = imgPart.inlineData.mimeType;
-          buffer = Buffer.from(imgPart.inlineData.data, 'base64');
-          console.log(`✅ Gemini beeld gegenereerd (${mimeType}, ${Math.round(buffer.length / 1024)} KB)`);
-        } else {
-          console.warn('⚠️ Gemini image: geen inlineData in antwoord', JSON.stringify(data).substring(0, 300));
-          break; // geldige respons zonder beeld — een andere key helpt niet
-        }
-      } else {
-        const errText = await resp.text();
-        console.warn(`⚠️ Gemini image ${resp.status}: ${errText.substring(0, 200)}`);
-        if (resp.status === 429) quotaOp = true; // dagquota van deze sleutel is op
-        // Alleen bij quota/rate-limit of serverfout de volgende key proberen; anders stoppen.
-        if (!(resp.status === 429 || resp.status >= 500)) break;
-      }
-    } catch (err) {
-      console.warn('⚠️ Gemini image fout:', err.message);
-    }
-  }
-
-  // ── Fallback: HuggingFace Inference API ──────────────────────────────────────
-  // Model en stappen komen uit de omgeving. Dit stond hardgecodeerd op FLUX.1-schnell, en toen
-  // hf-inference dat model liet vallen ("410: deprecated and no longer supported by provider")
-  // was de énige fallback stil en permanent dood — precies op het moment dat hij nodig was, want
-  // Gemini's dagquota voor beelden is doorgaans halverwege de dag op. Een deprecatie hoort geen
-  // deploy te kosten.
-  // 28 stappen is de standaard van SD3-medium (~14s); FLUX-schnell werkte op 4. Vandaar instelbaar.
-  if (!buffer && process.env.HF_API_TOKEN) {
-    const hfModel = process.env.HF_IMAGE_MODEL || 'stabilityai/stable-diffusion-3-medium-diffusers';
-    const hfStappen = Number(process.env.HF_IMAGE_STEPS) || 28;
-    console.log(`🔄 Gemini image niet beschikbaar — fallback naar HuggingFace (${hfModel})...`);
-    const hfUrl = `https://router.huggingface.co/hf-inference/models/${hfModel}`;
-    for (let poging = 1; poging <= 2; poging++) {
-      try {
-        const response = await fetch(hfUrl, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${process.env.HF_API_TOKEN}`,
-            'Content-Type': 'application/json',
-          },
-          // negative_prompt kent alleen deze provider; de diffusiemodellen hier hebben er echt iets
-          // aan, want zij plakken het liefst onleesbare pseudo-letters in een poster of tarotkaart.
-          body: JSON.stringify({ inputs: vangnetPrompt, parameters: { num_inference_steps: hfStappen, width: 1024, height: 1024, negative_prompt: BEELD_NEGATIEF } }),
-          timeout: 60000,
-        });
-        const contentType = response.headers.get('content-type') || '';
-        if (response.ok && contentType.includes('image')) {
-          buffer = await response.buffer();
-          mimeType = contentType.split(';')[0].trim() || 'image/jpeg';
-          console.log(`✅ HuggingFace beeld gegenereerd (${Math.round(buffer.length / 1024)} KB)`);
-          break;
-        } else {
-          const errText = await response.text().catch(() => '');
-          console.warn(`⚠️ HuggingFace image ${response.status}: ${errText.substring(0, 200)}`);
-          if (response.status !== 503) break; // 503 = model loading, retry
-        }
-      } catch (err) {
-        console.warn(`HuggingFace poging ${poging} faalde:`, err.message);
-      }
-      if (poging < 2) await new Promise(r => setTimeout(r, 6000));
-    }
-  }
-
-  // ── Laatste vangnet: Pollinations (flux) ─────────────────────────────────────
-  // Geen sleutel, geen account, gratis en onbeperkt voor de basismodellen — dus dit vangnet kan niet
-  // stilvallen door een opgebruikt quotum of een vergeten token, en dat is precies wat de andere twee
-  // wél overkomt (Gemini's dagquota is vaak halverwege de dag op, HF vereist een token). Dezelfde
-  // dienst die de stem van de Kroket God maakt.
-  //
-  // Twee dingen bewust zo:
-  //   · private=true — anders komt de prompt in de publieke feed van Pollinations te staan, en daar
-  //     staan bijnamen van leden in. Wat in het genootschap gebeurt blijft in het genootschap.
-  //   · anonieme limiet is één verzoek per 15 seconden. Dat is ruim binnen de uurklok per lid, maar
-  //     bij een 429 heeft direct opnieuw proberen geen zin: even wachten, dan één herkansing.
-  // Het beeld draagt een klein Pollinations-logo (weghalen vereist een account). Als laatste redmiddel
-  // is een beeld met logo beter dan geen visioen.
-  if (!buffer && process.env.POLLINATIONS_UIT !== '1') {
-    // Zonder POLLINATIONS_IMAGE_MODEL wordt er GEEN model meegestuurd en kiest de dienst zelf. Bewust:
-    // hun documentatie noemt flux/turbo, maar /models geeft vandaag alleen "sana" terug, en een
-    // hardgecodeerde modelnaam die daar verdwijnt is precies hoe de HuggingFace-fallback een halfjaar
-    // stil dood lag. Verschijnt er weer iets beters, dan is het één env-var en geen deploy.
-    const polModel = process.env.POLLINATIONS_IMAGE_MODEL || null;
-    console.log(`🔄 Geen beeld via Gemini/HuggingFace — vangnet Pollinations (${polModel || 'standaardmodel'})...`);
-    // Seed uit de klok: zonder seed geeft de dienst hetzelfde beeld terug uit zijn cache wanneer twee
-    // leden dezelfde wens intypen, en twee identieke visioenen zien eruit als een bug.
-    const polSeed = Date.now() % 1_000_000;
-    const polUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(vangnetPrompt)}`
-      + `?width=1024&height=1024&seed=${polSeed}&private=true`
-      + (polModel ? `&model=${encodeURIComponent(polModel)}` : '');
-    for (let poging = 1; poging <= 2; poging++) {
-      try {
-        const response = await fetch(polUrl, { timeout: 90000 });
-        const contentType = response.headers.get('content-type') || '';
-        if (response.ok && contentType.includes('image')) {
-          buffer = await response.buffer();
-          mimeType = contentType.split(';')[0].trim() || 'image/jpeg';
-          console.log(`✅ Pollinations beeld gegenereerd (${Math.round(buffer.length / 1024)} KB)`);
-          break;
-        }
-        console.warn(`⚠️ Pollinations image ${response.status} (${contentType})`);
-        if (response.status !== 429 && response.status < 500) break;
-      } catch (err) {
-        console.warn(`Pollinations poging ${poging} faalde:`, err.message);
-      }
-      if (poging < 2) await new Promise(r => setTimeout(r, 16000)); // anonieme limiet: 1 per 15s
-    }
-  }
-
+  // De bytes komen uit maakBeeldBytes (zie daar waarom dat een eigen functie is).
+  const { buffer, mimeType, quotaOp } = await maakBeeldBytes(beeldPrompt, { portret, vangnetPrompt });
   // Geen eigen bericht meer: voerVisioen meldt de uitkomst al op de plek waar de speler klikte, en
   // twee keer hetzelfde zeggen is precies de ruis die we elders hebben weggehaald. Wél de reden
   // teruggeven, zodat het bericht kan kloppen: "quota op" is iets anders dan "probeer het later".
@@ -6816,6 +6837,36 @@ async function voerKroketCommandoUit({ command, respond, client }) {
     // ── De Zegezaal: voorgoed gevallen weekvijanden ───────────────────────────
     if (input === 'zegezaal' || input === 'zegehal' || input === 'verslagen') {
       await respond({ text: zegezaalTekst(), response_type: 'ephemeral' });
+      return;
+    }
+
+    // Portret ophangen voor een vijand die vóór de Zegezaal bestond. Bewust ÉÉN per aanroep:
+    // zeven beelden achter elkaar jaagt het dagquota van de beeldprovider er in één klap doorheen,
+    // en dat quota is ook waar de visioenen uit komen. Zijn ze allemaal opgehangen, dan doet dit
+    // commando niets meer — het is dus zelfbeperkend en hoeft niet achter een rang te zitten.
+    if (input === 'zegezaal portret' || input === 'zegezaal portretten') {
+      const verslagen = loadVerslagen();
+      const zonder = Object.entries(verslagen).filter(([, v]) => !v.avatarFileId);
+      if (!zonder.length) {
+        await respond({ text: '🏛️ _Elke gevallen vijand hangt al aan de muur._', response_type: 'ephemeral' });
+        return;
+      }
+      const [key, v] = zonder[0];
+      await respond({ text: `🎨 _De Raad laat ${v.naam} schilderen. Dit duurt even; nog ${zonder.length - 1} daarna._`, response_type: 'ephemeral' });
+      const def = WEEKVIJANDEN.find(w => w.key === key) || { key, naam: v.naam };
+      const avatarFileId = await maakVijandPortret(client, { ...def, naam: v.naam }, command.channel_id);
+      if (!avatarFileId) {
+        // Bewust GEEN oorzaak noemen. Dit stond er eerst als "de verf is op (beeldquota)", maar
+        // maakVijandPortret geeft bij élke fout null terug — quota, provider plat, upload geweigerd
+        // of een bug. Die melding wees de eerste keer dat hij vuurde naar het verkeerde probleem:
+        // het was een ReferenceError, geen quota. Een foutmelding die een oorzaak verzint is erger
+        // dan een die er geen noemt.
+        await respond({ text: '🎨 _Het doek bleef leeg. De reden staat in het serverlog._', response_type: 'ephemeral' });
+        return;
+      }
+      const verse = loadVerslagen();
+      if (verse[key]) { verse[key].avatarFileId = avatarFileId; saveVerslagen(verse); }
+      await publiceerAppHome(client, command.user_id);
       return;
     }
 
@@ -10210,6 +10261,19 @@ async function beslechtBamischijfOverwinning(client, channelId, raid, genadeslag
       genadeslag: genadeslagNaam, strijders: strijders.map(([uid]) => members[uid]?.bijnaam || uid),
     };
     saveVerslagen(verslagen);
+    // Het portret ná het wegschrijven: de overwinning staat dan al vast, ook als de beeldprovider
+    // er een minuut over doet of helemaal plat ligt. Opnieuw inlezen vóór het opslaan, want
+    // tussen beide momenten kan er van alles aan verslagen.json geschreven zijn.
+    try {
+      const avatarFileId = await maakVijandPortret(client, raid.vijand, channelId);
+      if (avatarFileId) {
+        const verse = loadVerslagen();
+        if (verse[raid.vijand.key]) {
+          verse[raid.vijand.key].avatarFileId = avatarFileId;
+          saveVerslagen(verse);
+        }
+      }
+    } catch (_) {}
     const raidNu = readJSON('bamischijf.json', {});
     raidNu.verslagen = true;
     writeJSON('bamischijf.json', raidNu);
@@ -16445,6 +16509,15 @@ const NASLAG = {
     },
   },
 
+  zegezaal: {
+    knop: '🏛️ Zegezaal', titel: 'De Zegezaal',
+    blocks: () => [
+      { type: 'section', text: { type: 'mrkdwn', text: '_Voorgoed gevallen vijanden van het genootschap. Zij komen niet terug._' } },
+      { type: 'divider' },
+      ...zegezaalBlocks(),
+    ],
+  },
+
   bingokaart: {
     knop: '🎲 Bingokaart', titel: 'Bingokaart',   // Slack kapt een modaltitel op 24 tekens af
     blocks: (userId) => {
@@ -16722,6 +16795,15 @@ function bouwAppHomeBlocks(userId, melding = '', extraBlocks = []) {
       : `🎯 *Premiejacht:* op *${members[premie.doelwitId].bijnaam}* staat ${premie.bonus || 3} kroketpunten.` } });
   }
 
+  // ── De Zegezaal ───────────────────────────────────────────────────────────
+  // Een erelijst van gevelde snacks. Staat bewust OP de tab en niet alleen achter een knop: dit
+  // is het enige blijvende bewijs dat het genootschap samen iets heeft afgemaakt, en een trofee
+  // die je moet opzoeken is geen trofee. Afgekapt op de vijf recentste; de rest achter de knop.
+  if (Object.keys(loadVerslagen()).length) {
+    blocks.push(...homeKaartKop('🏛️ DE ZEGEZAAL'));
+    blocks.push(...zegezaalBlocks({ limiet: 5 }));
+  }
+
   // ── Secties die features zelf aanleveren ──
   // Alleen nog features die iets LOPENDS of iets ACTIONABELS melden. Wie naslag is, levert
   // `homeVenster` + `homeKnop` en verschijnt hieronder als knop in plaats van als kaart.
@@ -16865,7 +16947,17 @@ app.action(/^naslag_/, async ({ ack, body, client }) => {
     const sleutel = String(body.actions?.[0]?.action_id || '').replace(/^naslag_/, '');
     const naam = loadMembers()[body.user?.id]?.bijnaam || body.user?.id;
     console.log(`📖 Naslag "${sleutel}" geopend door ${naam}`);
-    await client.views.open({ trigger_id: body.trigger_id, view: bouwNaslagVenster(sleutel, body.user.id) });
+    try {
+      await client.views.open({ trigger_id: body.trigger_id, view: bouwNaslagVenster(sleutel, body.user.id) });
+    } catch (err) {
+      // Zelfde noodrem als bij de Home-tab: één verdwenen afbeelding (een Zegezaal-portret, het
+      // galerijbeeld) laat Slack de héle view weigeren. Zonder deze tak gaat het venster dan
+      // simpelweg niet open en ziet de gebruiker niets gebeuren — een stille storing.
+      if (GALERIJ_BEELD_UIT.aan) throw err;
+      GALERIJ_BEELD_UIT.aan = true;
+      console.warn(`   → venster "${sleutel}" geweigerd (${err.data?.error || err.message}); opnieuw zonder afbeeldingen.`);
+      await client.views.open({ trigger_id: body.trigger_id, view: bouwNaslagVenster(sleutel, body.user.id) });
+    }
   } catch (err) { console.error('Fout bij openen naslag-venster:', err.data?.error || err.message); }
 });
 
@@ -17790,6 +17882,90 @@ async function zorgVoorWeekvijand() {
 }
 
 // ── De Zegezaal: wie is er voorgoed gevallen ──────────────────────────────────
+// ── De Zegezaal in blokken ────────────────────────────────────────────────────
+// Dezelfde gegevens als zegezaalTekst(), maar als Block Kit — met per gevelde vijand een eigen
+// rij, zodat er een kleine afbeelding naast kan staan. Eén bron voor de Home-kaart en het volle
+// naslagvenster; twee lijsten die elk hun eigen rekenwerk doen lopen gegarandeerd uiteen.
+//
+// `limiet` kapt de lijst af voor de Home-tab: de pool telt 51 snacks, en als die ooit allemaal
+// vallen is dat 51 blokken op een tab die net is teruggebracht tot 27. Het volle verhaal staat
+// achter de Zegezaal-knop.
+// ── Het portret van een gevelde vijand ────────────────────────────────────────
+// Eén afbeelding per voorgoed verslagen snack, bewaard in verslagen.json en getoond als klein
+// vierkant naast zijn regel in de Zegezaal. Dit is de enige plek in het spel waar een beeld
+// BLIJFT: visioenen schuiven uit de galerij, dit hangt er voorgoed.
+//
+// Waarom niet via genereerBeeld: die maakt een visioen — met volgnummer, galerij-entry, een
+// toelichting van de God en "naar een wens van X". Een vijandportret is geen wens van iemand.
+// Sinds maakBeeldBytes is uitgelicht kan dat los.
+//
+// Faalt er iets — quota op, provider plat, upload geweigerd — dan gebeurt er niets bijzonders:
+// de vijand staat gewoon zonder portret in de zaal, met zijn emoji. Een mislukt plaatje mag nooit
+// een overwinning in de weg staan.
+async function maakVijandPortret(client, vijand, channelId) {
+  try {
+    const prompt =
+      `A single ${vijand.naam} — a Dutch deep-fried snack — depicted as a defeated, fallen villain. ` +
+      `Dramatic museum portrait, three-quarter view, dark oil-painting background, heavy chiaroscuro ` +
+      `lighting, cracked golden frame edges, solemn and slightly absurd. The snack is the sole subject, ` +
+      `centered, filling the frame. No text, no letters, no people.`;
+    const { buffer, mimeType } = await maakBeeldBytes(prompt);
+    if (!buffer) return null;
+    const ext = String(mimeType).includes('jpeg') || String(mimeType).includes('jpg') ? 'jpg' : 'png';
+    // Mét channel_id: een bestand dat nergens gedeeld is, is voor de Home-tab van een ánder lid
+    // niet te tonen. Dit is bovendien hooguit één keer per week, op een moment dat het kanaal
+    // tóch al feestviert — dus het past binnen de berichtenbegroting.
+    const upload = await client.files.uploadV2({
+      channel_id: channelId || process.env.SLACK_CHANNEL_ID,
+      file: buffer,
+      filename: `zegezaal-${String(vijand.key || vijand.naam).toLowerCase().replace(/[^a-z0-9]+/g, '-')}.${ext}`,
+      initial_comment: `🏛️ _Het portret van *${vijand.naam}* is opgehangen in de Zegezaal._`,
+    });
+    // Zelfde defensieve uitpakking als bij het visioen: de vorm verschilt per SDK-versie.
+    const bestand = upload?.files?.[0]?.files?.[0] || upload?.files?.[0] || upload?.file || null;
+    return bestand?.id || null;
+  } catch (err) {
+    console.warn('Vijandportret mislukt:', err?.data?.error || err?.message || err);
+    return null;
+  }
+}
+
+function zegezaalBlocks({ limiet = null } = {}) {
+  const verslagen = loadVerslagen();
+  const gevallen = Object.entries(verslagen).sort((a, b) => (b[1].ts || 0) - (a[1].ts || 0));
+  const totaal = WEEKVIJANDEN.length;
+  if (!gevallen.length) {
+    return [{ type: 'section', text: { type: 'mrkdwn', text:
+      `_De zaal is leeg. Geen enkele snack is voorgoed gevallen._\n_Er wachten er ${totaal} in de frituur._` } }];
+  }
+  const tonen = limiet ? gevallen.slice(0, limiet) : gevallen;
+  const blocks = tonen.map(([key, v]) => {
+    const def = WEEKVIJANDEN.find(w => w.key === key);
+    const datum = v.ts
+      ? new Date(v.ts).toLocaleDateString('nl-NL', { timeZone: 'Europe/Amsterdam', day: 'numeric', month: 'short', year: 'numeric' })
+      : 'ooit';
+    const regel = {
+      type: 'section',
+      text: { type: 'mrkdwn', text:
+        `${def?.emoji || '•'} *${v.naam}*\n_geveld ${datum}${v.genadeslag ? ` · genadeslag: ${v.genadeslag}` : ''}_` +
+        (v.strijders?.length ? `\n_door: ${v.strijders.join(', ')}_` : '') },
+    };
+    // Het portret als klein vierkant naast de regel. Alleen als het er is: een accessory met een
+    // verdwenen bestand laat Slack de HELE view weigeren, en dan ligt de Home-tab van iedereen
+    // plat door één opgeruimd plaatje. Dezelfde noodrem als bij de galerij dekt dat af.
+    if (v.avatarFileId && !GALERIJ_BEELD_UIT.aan) {
+      regel.accessory = { type: 'image', slack_file: { id: v.avatarFileId }, alt_text: v.naam };
+    }
+    return regel;
+  });
+  const rest = gevallen.length - tonen.length;
+  blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text:
+    `*${gevallen.length}* van de ${totaal} snacks geveld` +
+    (rest > 0 ? ` · ${rest} eerder gevallen ${rest === 1 ? 'vijand' : 'vijanden'} staan in de volle Zegezaal` : '') +
+    ` · zij komen nooit terug` }] });
+  return blocks;
+}
+
 function zegezaalTekst() {
   const verslagen = loadVerslagen();
   const gevallen = Object.entries(verslagen).sort((a, b) => (b[1].ts || 0) - (a[1].ts || 0));
@@ -17809,7 +17985,10 @@ function zegezaalTekst() {
 registreerFeature({
   naam: 'weekvijand',
   state: ['verslagen.json'],
-  help: [{ gebruik: '/kroketgod zegezaal', verwacht: 'de voorgoed gevallen weekvijanden — wie is geveld en wanneer' }],
+  help: [
+    { gebruik: '/kroketgod zegezaal', verwacht: 'de voorgoed gevallen weekvijanden — wie is geveld, wanneer, en door wie' },
+    { gebruik: '/kroketgod zegezaal portret', verwacht: 'hangt een portret op voor één gevallen vijand die er nog geen heeft' },
+  ],
   homeOrde: 18,
   // Bewust GEEN home-kaart: die toonde de levenspunten van de lopende raid uit bamischijf.json,
   // precies wat de raidkaart in bouwAppHomeBlocks al toont — twee kaarten met dezelfde HP onder
@@ -19790,6 +19969,21 @@ async function voerDashboardActie(actie) {
     case 'ververseQuota':
       await logQuotaStatus();
       return 'Quota ververst.';
+    // Hangt één ontbrekend portret op in de Zegezaal. Eén per aanroep, net als het
+    // slash-commando: zes beelden achter elkaar jaagt het dagquota van de beeldprovider er in
+    // één klap doorheen, en dat is hetzelfde quota waar de visioenen uit komen.
+    case 'zegezaalPortret': {
+      const verslagenNu = loadVerslagen();
+      const zonder = Object.entries(verslagenNu).filter(([, v]) => !v.avatarFileId);
+      if (!zonder.length) return 'Elke gevallen vijand hangt al aan de muur.';
+      const [key, v] = zonder[0];
+      const def = WEEKVIJANDEN.find(w => w.key === key) || { key, naam: v.naam };
+      const avatarFileId = await maakVijandPortret(app.client, { ...def, naam: v.naam }, KANAAL());
+      if (!avatarFileId) throw new Error(`Portret van ${v.naam} mislukt — zie het serverlog voor de reden`);
+      const verse = loadVerslagen();
+      if (verse[key]) { verse[key].avatarFileId = avatarFileId; saveVerslagen(verse); }
+      return `${v.naam} hangt in de Zegezaal (${zonder.length - 1} te gaan).`;
+    }
     case 'kroketVanDeDag':
       await voerKroketVanDeDagUit(app.client);
       return 'Kroket van de dag gepost.';
