@@ -5513,7 +5513,8 @@ async function voerKroketCommandoUit({ command, respond, client }) {
 
     // ── Ephemeral bevestiging: alleen voor commando's die even duren (niet voor directe data-opvragen)
     const STILLE_COMMANDO_S = ['ranglijst', 'dossier', 'status', 'help', 'prompts', 'kroketprompts', 'horoscoop',
-      'vetgeschrift', 'ambt', 'ambten', 'zegels', 'ambtsboek', 'boek', 'kerfstok', 'wrok', 'kerven', 'wissel', 'wissels'];
+      'vetgeschrift', 'ambt', 'ambten', 'zegels', 'ambtsboek', 'boek', 'kerfstok', 'wrok', 'kerven', 'wissel', 'wissels',
+      'bladzijde', 'bladzijden', 'bladzijdes'];
     const isStilCommando = STILLE_COMMANDO_S.some(c => eersteWoord === c);
     if (input && !isDM && !isStilCommando) {
       await postEphemeral(client, command.channel_id, command.user_id,
@@ -6091,6 +6092,29 @@ async function voerKroketCommandoUit({ command, respond, client }) {
     }
 
     // ── Eer geven
+    // ── Bladzijde: wat er tussen u en de rest staat ──────────────────────────
+    // Dit commando stond al maanden in de help en als klikbaar item in de Home-menu's, maar
+    // had geen tak. Het viel dus door naar het vrij-bericht-pad: wie erop klikte liet de
+    // Kroket God een PUBLIEKE verkondiging in het kanaal doen. Niets gaf een foutmelding.
+    if (input === 'bladzijde' || input === 'bladzijdes' || input === 'bladzijden') {
+      const nu = Date.now();
+      const members = loadMembers();
+      const rijen = bladzijdenVan(loadPaarboek(), command.user_id, Object.keys(members));
+      const claims = openClaimsVan(loadClaims(), command.user_id, nu);
+      const regels = rijen.length
+        ? rijen.map(r => `${r.toestand.icoon} *${members[r.id]?.bijnaam || r.id}* — ${r.toestand.naam} _(${r.toestand.uitleg})_`).join('\n')
+        : '_Met niemand staat er iets open. Dat is óf vrede, óf u heeft nog niets gedaan._';
+      const open = claims.map(c => {
+        const urenOver = Math.max(1, Math.round((CLAIM_GELDIG_MS - (nu - c.ts)) / 3_600_000));
+        return `• *${members[c.dader]?.bijnaam || 'een volgeling'}* — ${CLAIM_AANLEIDING[c.soort] || c.soort}, nog ${urenOver} uur om te kiezen`;
+      }).join('\n');
+      await respond({ response_type: 'ephemeral', text:
+        `📖 *DE BLADZIJDE*\n${regels}` +
+        (open ? `\n\n*Er staat iets voor u open:*\n${open}\n_De knoppen om te vergeven, vergelden of laten liggen staan op uw Home-tab._` : ''),
+      });
+      return;
+    }
+
     // ── Huisonderwerp voordragen ─────────────────────────────────────────────
     // Een lid draagt voor, de eigenaar keurt goed op het dashboard. Niet vrij: raaktHuisonderwerp
     // vergelijkt op deelwoord, dus één te algemeen woord promoveert élke reden in het spel.
@@ -11301,7 +11325,8 @@ async function leesVetpapierVoor(client) {
     rec.gevers.add(p.geverId);
     perBericht.set(sleutel, rec);
   }
-  const kandidaten = [...perBericht.values()]
+  const ingepakt = [...perBericht.values()];
+  const kandidaten = ingepakt
     // De winnaar van vorige week doet niet mee: anders wint dezelfde grap twee keer.
     .filter(r => r.sprekerId !== data.laatsteWinnaar)
     .sort((a, b) => b.gevers.size - a.gevers.size || a.gelegd - b.gelegd);
@@ -11309,11 +11334,21 @@ async function leesVetpapierVoor(client) {
   // Altijd posten, ook als er niets ligt: een terugvalbericht is precies waarom een nieuwe
   // emoji niet stil doodgaat. Zonder dat weet niemand dat het bestaat.
   if (!kandidaten.length) {
-    writeJSON('vetpapier.json', { week: getMondayOfWeek(), papiertjes: [], laatsteWinnaar: data.laatsteWinnaar });
+    // De uitsluiting duurt ÉÉN week. Hem hier doorschuiven verlengde hem stilletjes: een week
+    // zonder inzendingen hield de titelhouder nog een week buitenspel, en lag er alleen iets
+    // van hém, dan sloot dat precies de lus — hij werd eruit gefilterd, de week eindigde
+    // "leeg", en daarmee werd hij opnieuw uitgesloten. Daarom hier altijd vrijgeven.
+    writeJSON('vetpapier.json', { week: getMondayOfWeek(), papiertjes: [], laatsteWinnaar: null });
+    // En zeg niet dat er niets lag als er wél iets lag. Dat was de tweede helft van dezelfde
+    // fout: de enige inzending van de titelhouder verdween zonder dat iemand het hoorde.
+    const alleenTitelhouder = ingepakt.length > 0;
     await postToChannel(client, process.env.SLACK_CHANNEL_ID,
       `📃 *HET VETPAPIER* 📃\n\n` +
-      `> Er is deze week niets ingepakt. De Raad heeft niets om voor te lezen en dat is\n` +
-      `> op zijn eigen manier ook een uitspraak.\n` +
+      (alleenTitelhouder
+        ? `> Er is deze week alleen de titelhouder ingepakt, en die doet een week niet mee.\n` +
+          `> De Raad leest dus niets voor. Volgende week mag hij weer.\n`
+        : `> Er is deze week niets ingepakt. De Raad heeft niets om voor te lezen en dat is\n` +
+          `> op zijn eigen manier ook een uitspraak.\n`) +
       `> _Wikkel een uitspraak van een medelid in vetpapier met_ :${VETPAPIER_EMOJI}: _— ${VETPAPIER_BUDGET} per week,\n` +
       `> en het werkt ook in het weekend._\n\n— De Hoge Frituurraad`);
     return null;
