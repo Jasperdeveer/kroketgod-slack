@@ -64,6 +64,17 @@ const {
 } = require('./lib/weefsel.js');
 const { MAX_HORIZON_DAGEN, parseerWanneer } = require('./lib/tijdcapsule.js');
 const { zaakNummer, volgendeTeller, parseerZaak } = require('./lib/jurisprudentie.js');
+// Het Paarboek: één bladzijde per paar plus de claim-ladder. Vervangt op termijn de hele
+// wroklaag; draait voorlopig NAAST de kerfstok zodat beide dezelfde feiten zien en de
+// overgang te vergelijken is. De rekenkunde staat in de module, hier staat de bedrading.
+const {
+  toestandVan, bladzijdeVan, boekDaad, strijkGlad, schuifNaarNul, bladzijdenVan,
+  maakClaim, openClaimsVan, sluitClaim, ruimOudeClaims, CLAIM_GELDIG_MS,
+} = require('./lib/paarboek.js');
+const loadPaarboek = () => readJSON('paarboek.json', {});
+const savePaarboek = (d) => writeJSON('paarboek.json', d);
+const loadClaims = () => readJSON('claims.json', {});
+const saveClaims = (d) => writeJSON('claims.json', d);
 // De waarde van een eerbewijs: klasse-oordeel over de reden → kansverdeling → 0-5 punten.
 // De rekenkunde en de redenvalidatie staan in de module; hier staat de jury (één LLM-call) en
 // het uitdelen zelf.
@@ -1029,6 +1040,15 @@ function legRelatieVast(vanId, naarId, soort, aantal = 1) {
   try {
     if (!vanId || !naarId || vanId === naarId) return false;
     if (!SOORTEN[soort]) return false;
+    // Warme daden tillen de bladzijde op. Dit is het enige punt waar ze állemaal langskomen —
+    // eer, een kroketje, uitlenen, een ambtsdaad — dus hier en niet bij elke bron apart.
+    // De dagregel in boekDaad voorkomt dat een vrijgevige middag de schaal laat ontploffen.
+    if (soort === 'eer') {
+      try {
+        const pb = boekDaad(loadPaarboek(), vanId, naarId, 'eerbewijs', dagSleutel());
+        if (pb.gewijzigd) savePaarboek(pb.boek);
+      } catch (_) {}
+    }
     const data = loadWeefsel();
     const sleutel = randSleutel(vanId, naarId);
     const rand = { ...(data.randen[sleutel] || {}) };
@@ -2879,6 +2899,16 @@ function boekVerlies(userId, punten, doorId, soort) {
     if (doorId && KERF_GEWICHT[soort]) {
       const r = kerfBij(readJSON('kerfstok.json', {}), userId, doorId, soort, dagSleutel());
       if (r.gewijzigd) writeJSON('kerfstok.json', r.stok);
+      // Het Paarboek leest hetzelfde feit: de bladzijde zakt, en wie het is aangedaan krijgt
+      // een claim met drie dagen bedenktijd. Bewust hier en niet in een eigen hook — een tweede
+      // aanroeppad betekent dat iemand er vroeg of laat één van de twee vergeet, en dat is
+      // precies waarom de kerf hier óók al staat.
+      try {
+        const pb = boekDaad(loadPaarboek(), userId, doorId, soort, dagSleutel());
+        if (pb.gewijzigd) savePaarboek(pb.boek);
+        const cl = maakClaim(loadClaims(), userId, doorId, soort, Date.now());
+        if (cl.gewijzigd) saveClaims(cl.claims);
+      } catch (err) { console.warn('⚠️ Paarboek bijwerken mislukt:', err.message); }
       return { punten, kerven: r.kerven ?? kerven(r.stok, userId, doorId) };
     }
     return { punten, kerven: kerven(readJSON('kerfstok.json', {}), userId, doorId) };
@@ -8879,8 +8909,26 @@ planCron('0 12 * * *', async () => {
 
 // ── Cron: maandag 09:00 — weekopening ─────────────────────────────────────────
 
+// De wekelijkse slijtage van het Paarboek. Apart van de cron-inhoud hieronder omdat hij ook
+// bij het opstarten draait: valt de bot maandagochtend uit, dan hoort een wrok niet een week
+// langer te blijven staan. schuifNaarNul is idempotent op de weeksleutel, dus tweemaal draaien
+// in dezelfde week doet precies één stap.
+function schuifPaarboek() {
+  try {
+    const week = getMondayOfWeek();
+    const r = schuifNaarNul(loadPaarboek(), week);
+    if (r.gewijzigd) {
+      savePaarboek(r.boek);
+      console.log(`📖 Paarboek geschoven richting nul (week ${week}).`);
+    }
+    const c = ruimOudeClaims(loadClaims(), Date.now());
+    if (c.gewijzigd) saveClaims(c.claims);
+  } catch (err) { console.warn('⚠️ Paarboek schuiven mislukt:', err.message); }
+}
+
 planCron('0 9 * * 1', async () => {
   try {
+    schuifPaarboek();
     // ── Vrijdag-streaks verwerken ─────────────────────────────────────────────
     // Vorige week's maandagsleutel = zeven dagen geleden
     const vorigeWeekSleutel = getMondayOfWeek(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000));
@@ -13377,6 +13425,97 @@ function gekozenVijandVoor(weekStart) {
 }
 
 // ── Registratie van de wroklaag ──────────────────────────────────────────────
+// ── De Bladzijde en de Claim ─────────────────────────────────────────────────
+// De kaart toont geen getallen maar toestanden, en biedt één keuze aan wie iets is aangedaan.
+// Bewust GEEN eigen kanaalberichten: dit hoort bij wat je ziet als je kijkt, niet bij wat er
+// langskomt. Het hele punt van deze feature is dat wrok zichtbaar wordt zonder luider te worden.
+registreerFeature({
+  naam: 'paarboek',
+  state: ['paarboek.json', 'claims.json'],
+  help: [{ gebruik: '/kroketgod bladzijde', verwacht: 'wat er tussen u en elk ander lid staat, en wat er voor u openstaat' }],
+  homeOrde: 7,
+  home: ({ userId, members, verbannen }) => {
+    const nu = Date.now();
+    const rijen = bladzijdenVan(loadPaarboek(), userId, Object.keys(members));
+    const claims = openClaimsVan(loadClaims(), userId, nu);
+    if (!rijen.length && !claims.length) return [];
+
+    const blocks = [...homeKaartKop('📖 DE BLADZIJDE')];
+    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: rijen.length
+      ? rijen.map(r => `> ${r.toestand.icoon} *${members[r.id]?.bijnaam || r.id}* — ${r.toestand.naam}`).join('\n')
+      : '_Met niemand staat er iets open. Dat is óf vrede, óf u heeft nog niets gedaan._' } });
+
+    // Elke open claim krijgt zijn eigen drie knoppen. Niet samengevoegd: je vergeeft een
+    // persoon, geen stapel.
+    for (const c of claims) {
+      const daderNaam = members[c.dader]?.bijnaam || 'een volgeling';
+      const urenOver = Math.max(1, Math.round((CLAIM_GELDIG_MS - (nu - c.ts)) / 3_600_000));
+      blocks.push({ type: 'section', text: { type: 'mrkdwn', text:
+        `*${daderNaam}* deed u iets aan (${CLAIM_AANLEIDING[c.soort] || c.soort}). Nog ${urenOver} uur om te kiezen.` } });
+      if (!verbannen) {
+        blocks.push({ type: 'actions', elements: [
+          { type: 'button', text: { type: 'plain_text', text: '🕊️ Vergeven', emoji: true }, action_id: `claim_vergeven_${c.dader}`, style: 'primary' },
+          { type: 'button', text: { type: 'plain_text', text: '⚔️ Vergelden', emoji: true }, action_id: `claim_vergelden_${c.dader}` },
+          { type: 'button', text: { type: 'plain_text', text: '🤷 Laten liggen', emoji: true }, action_id: `claim_laten_${c.dader}` },
+        ] });
+      }
+    }
+    blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text:
+      'Vergeven strijkt de bladzijde glad en levert +1 roem op · vergelden geeft u 24 uur één gratis tegenzet · laten liggen vervaagt vanzelf' }] });
+    return blocks;
+  },
+});
+
+// Hoe een aanleiding in gewone taal heet. De sleutels komen uit DAAD_GEWICHT.
+const CLAIM_AANLEIDING = {
+  roof_gelukt: 'hij kraakte uw kluis',
+  duel_verloren: 'hij daagde u uit en won',
+  premie_geind: 'hij inde de premie op uw hoofd',
+  troon_verloren: 'hij stootte u van de troon',
+};
+
+// Eén handler voor alle drie de keuzes; de keuze en de dader zitten in de action_id.
+app.action(/^claim_(vergeven|vergelden|laten)_/, async ({ ack, body, client }) => {
+  await ack();
+  try {
+    const m = String(body.actions?.[0]?.action_id || '').match(/^claim_(vergeven|vergelden|laten)_(.+)$/);
+    if (!m) return;
+    const [, keuze, daderId] = m;
+    const userId = body.user.id;
+    const members = loadMembers();
+    const daderNaam = members[daderId]?.bijnaam || 'die volgeling';
+
+    // EERST de claim sluiten, en pas daarna belonen of posten. Twee tabbladen of een dubbelklik
+    // zouden anders tweemaal roem opleveren — exact het patroon dat bij voerEer misging met de
+    // daglimiet, waar de teller ná de Slack-I/O stond.
+    const r = sluitClaim(loadClaims(), userId, daderId, keuze, Date.now());
+    if (!r.gewijzigd) {
+      await publiceerAppHome(client, userId, '_Die keuze is al gemaakt, of de termijn is verstreken._');
+      return;
+    }
+    saveClaims(r.claims);
+
+    let melding;
+    if (keuze === 'vergeven') {
+      const glad = strijkGlad(loadPaarboek(), userId, daderId);
+      if (glad.gewijzigd) savePaarboek(glad.boek);
+      await pasRoemAan(client, userId, 1);
+      melding = `_U vergeeft ${daderNaam}. De bladzijde is glad, en de Raad kent u +1 roem toe._`;
+      // Dit is het enige van de drie dat het kanaal hoort te zien: vergeven is een daad, de
+      // andere twee zijn een keuze om niets te doen of om het zelf af te handelen.
+      await postToChannel(client, KANAAL(),
+        `🕊️ *${members[userId]?.bijnaam || 'Een volgeling'}* vergeeft *${daderNaam}*. De bladzijde tussen hen is glad.`);
+    } else if (keuze === 'vergelden') {
+      geefWeerwoord(userId, daderId, 'claim');
+      melding = `_U houdt 24 uur een weerwoord tegen ${daderNaam}: één duel buiten de daglimiet, met de kans in uw voordeel._`;
+    } else {
+      melding = `_U laat het liggen. De bladzijde slijt vanzelf._`;
+    }
+    logGebeurtenis('claim', userId, `${members[userId]?.bijnaam || userId} koos "${keuze}" tegenover ${daderNaam}`, null, daderId);
+    await publiceerAppHome(client, userId, melding);
+  } catch (err) { console.error('Fout bij claim-knop:', err.data?.error || err.message); }
+});
+
 registreerFeature({
   naam: 'wrok',
   state: ['verlies.json', 'kerfstok.json', 'twisten.json', 'vete.json',
@@ -20436,4 +20575,8 @@ process.on('SIGINT',  () => gracefulShutdown('SIGINT'));
   } catch (err) {
     console.error('Fout bij archief-backfill:', err);
   }
+  // Inhaalslag voor het Paarboek: stond de bot maandagochtend uit, dan hoort een wrok niet een
+  // week langer te blijven staan. Idempotent op de weeksleutel, dus dit is gratis als de cron
+  // gewoon gedraaid heeft.
+  schuifPaarboek();
 })();
