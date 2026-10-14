@@ -1082,7 +1082,7 @@ const saveWeefsel = (data) => writeJSON('weefsel.json', data);
 
 // Legt één gerichte relatie vast. Faalt nooit hard — een spelactie mag hier niet op stuklopen.
 // Zelfrelaties worden geweigerd: zelflof is al elders afgestraft en zou de graaf vervuilen.
-function legRelatieVast(vanId, naarId, soort, aantal = 1) {
+function legRelatieVast(vanId, naarId, soort, aantal = 1, opties = {}) {
   try {
     if (!vanId || !naarId || vanId === naarId) return false;
     if (!SOORTEN[soort]) return false;
@@ -1091,7 +1091,18 @@ function legRelatieVast(vanId, naarId, soort, aantal = 1) {
     // De dagregel in boekDaad voorkomt dat een vrijgevige middag de schaal laat ontploffen.
     if (soort === 'eer') {
       try {
-        const pb = boekDaad(loadPaarboek(), vanId, naarId, 'eerbewijs', dagSleutel());
+        // De claims gaan mee: een eerbewijs van de dader telt niet zolang zijn slachtoffer nog
+        // moet kiezen. Anders rooft hij 's ochtends en koopt hij zich 's middags vrij met een
+        // emoji. `ondanksClaim` is de uitzondering voor herstel — vergeven, een ingewilligde
+        // bede en de Blinde Handdruk zijn geen afkoopsom maar precies wat we willen uitlokken.
+        const pb = boekDaad(loadPaarboek(), vanId, naarId, 'eerbewijs', dagSleutel(),
+          opties.ondanksClaim ? {} : { claims: loadClaims(), nu: Date.now() });
+        // De regel is voor spelers onzichtbaar — er is geen plek waar hij uitgelegd kan worden
+        // zonder het kanaal vol te zetten. In het logboek staat hij wél, zodat een klacht
+        // ("mijn kroketje deed niets") na te trekken is in plaats van een raadsel.
+        if (pb.reden === 'open claim') {
+          console.log(`📖 Warme daad van ${vanId} naar ${naarId} telde niet: er staat nog een claim open.`);
+        }
         if (pb.gewijzigd) savePaarboek(pb.boek);
       } catch (_) {}
     }
@@ -2949,13 +2960,19 @@ function boekVerlies(userId, punten, doorId, soort) {
       // een claim met drie dagen bedenktijd. Bewust hier en niet in een eigen hook — een tweede
       // aanroeppad betekent dat iemand er vroeg of laat één van de twee vergeet, en dat is
       // precies waarom de kerf hier óók al staat.
+      let claimGeopend = false;
       try {
-        const pb = boekDaad(loadPaarboek(), userId, doorId, soort, dagSleutel(), doorId);
+        const pb = boekDaad(loadPaarboek(), userId, doorId, soort, dagSleutel(), { dader: doorId });
         if (pb.gewijzigd) savePaarboek(pb.boek);
         const cl = maakClaim(loadClaims(), userId, doorId, soort, Date.now());
         if (cl.gewijzigd) saveClaims(cl.claims);
+        claimGeopend = cl.gewijzigd;
+        // De Home-tab toont de bladzijde én de drie knoppen; allebei zijn nu verouderd. Op
+        // `pb || cl` en niet alleen op `cl`: een tweede roof binnen 72 uur opent geen nieuwe
+        // claim (die staat al open) maar laat de bladzijde wél zichtbaar zakken.
+        if (pb.gewijzigd || cl.gewijzigd) markeerHomeVerouderd(userId);
       } catch (err) { console.warn('⚠️ Paarboek bijwerken mislukt:', err.message); }
-      return { punten, kerven: r.kerven ?? kerven(r.stok, userId, doorId) };
+      return { punten, kerven: r.kerven ?? kerven(r.stok, userId, doorId), claimGeopend };
     }
     return { punten, kerven: kerven(readJSON('kerfstok.json', {}), userId, doorId) };
   } catch (err) {
@@ -10663,8 +10680,14 @@ async function voerDuel(client, userId, doelId, channelId, wapenId = null) {
   else pasScoreAan(verliesId, -inzet);
   // Een duel dat u NIET zelf begon en verloor is eenzijdig onrecht: dat kerft. Begon u het
   // zelf, dan zocht u het op en kerft het niet — dat is de hele definitie van eenzijdig.
+  // Of er een claim openging, zodat het vonnis de verliezer kan pingen. Zonder dat liep de
+  // 72-uursklok in stilte af: de drie knoppen stonden klaar op de Home-tab maar niets zei hem
+  // dat hij aan zet was, en elke claim kwam dus op "laten liggen" uit. Bij een roof en bij een
+  // geïnde wissel staat die ping er al (`wekroep(doelId)` resp. `wekroep(naarId)`); alleen het
+  // duel pingde zijn verliezer uitsluitend als er toevallig ook een weerwoord ontstond.
+  let claimVoor = null;
   if (!talisman && verliesId === doelId) {
-    boekVerlies(doelId, inzet, userId, 'duel_verloren');
+    if (boekVerlies(doelId, inzet, userId, 'duel_verloren')?.claimGeopend) claimVoor = doelId;
     // …en hij houdt 24 uur het recht op een weerwoord tegen precies deze uitdager.
     geefWeerwoord(doelId, userId, 'een verloren duel dat u niet begon');
   }
@@ -10682,7 +10705,7 @@ async function voerDuel(client, userId, doelId, channelId, wapenId = null) {
     writeJSON('premie.json', premie);
     await pasScoreAanMetCheck(client, winId, premie.bonus || 3, { channelId, naspel });
     logGebeurtenis('premie', winId, `${winNaam} inde de premie op ${verliesNaam} (+${premie.bonus || 3})`);
-    boekVerlies(verliesId, premie.bonus || 3, winId, 'premie_geind');
+    if (boekVerlies(verliesId, premie.bonus || 3, winId, 'premie_geind')?.claimGeopend) claimVoor = verliesId;
     premieBlok = `\n\n🎯 *PREMIE GEÏND* — op het hoofd van ${verliesNaam} stond een premie van de Kroket God. ${winNaam} int *+${premie.bonus || 3} kroketpunten* extra.`;
   }
   logGebeurtenis('duel', userId, `${uitdager.bijnaam} daagde ${doelLid.bijnaam} uit voor een duel — ${winNaam} won`);
@@ -10747,11 +10770,14 @@ async function voerDuel(client, userId, doelId, channelId, wapenId = null) {
     inzetBlok && `🪵 De inzet was *${inzet}* — ${inzetRedenNu.join(' · ')}. Een gewoon duel kost 1.`,
     weerBlok && `🗣️ Dit was een WEERWOORD: ${uitdager.bijnaam} werd eerder eenzijdig aangevallen en vocht met de kans in zijn voordeel. Het recht is verbruikt.`,
     nieuwWeerwoord && `⏳ ${verliesNaam} houdt 24 uur een weerwoord tegen ${winNaam}: één duel buiten de daglimiet, met 60% in zijn voordeel.`,
+    // In het naspel en niet in het vonnis zelf: dat is de thread, en daar mag het uitgelegd
+    // worden zonder dat het kanaal er een regel bij krijgt.
+    claimVoor && `📖 ${verliesNaam} heeft 72 uur om te kiezen: vergeven, vergelden of laten liggen. De knoppen staan op de Home-tab.`,
   ].filter(Boolean);
   for (const regel of voetnoten) naspelRegel(naspel, regel);
   const hoofd = await postToChannel(client, channelId,
     duelTekst + premieBlok + vergeefBlok + standBlok
-    + wekroep(nieuwWeerwoord ? verliesId : null) + naspelMenties(naspel));
+    + wekroep(nieuwWeerwoord ? verliesId : null, claimVoor) + naspelMenties(naspel));
   // Onthoud dit vonnis als hét bericht waarop dit paar kan vergeven.
   bewaarVonnisTs(userId, doelId, hoofd?.ts, channelId);
   // Het houderschap van de Kampioen-titel hangt aan deze uitslag: de verliezer kan hem kwijt
@@ -10899,7 +10925,8 @@ async function vergeefKerven(client, geverId, daderId, kanaal) {
   writeJSON('kerfstok.json', r.stok);
   await pasRoemAan(client, geverId, 1);
   await telActie(client, geverId, 'vergeven');
-  legRelatieVast(geverId, daderId, 'eer');
+  // Vergiffenis is geen afkoopsom maar precies het gebaar dat de afkoopregel wil uitlokken.
+  legRelatieVast(geverId, daderId, 'eer', 1, { ondanksClaim: true });
   logGebeurtenis('genade', daderId,
     `${members[geverId].bijnaam} vergaf ${members[daderId].bijnaam} ${r.gewist} kerf(ven)`, null, geverId);
   await postToChannel(client, kanaal || process.env.SLACK_CHANNEL_ID,
@@ -11072,7 +11099,8 @@ async function verhoorBede(client, doelId, inwilligen) {
     gevolg = 'er bleek niets meer te herstellen';
   }
   await pasRoemAan(client, doelId, 2);
-  legRelatieVast(doelId, z.houderId, 'eer');
+  // Een ingewilligde bede is herstel, geen vrijkoping — zie de afkoopregel in boekDaad.
+  legRelatieVast(doelId, z.houderId, 'eer', 1, { ondanksClaim: true });
   await postToChannel(client, process.env.SLACK_CHANNEL_ID,
     `🕳️ *DE BEDE IS INGEWILLIGD* 🕳️\n\n> *${naam}* willigt de bede van *${drager}* in: ${gevolg}.\n` +
     `> *+2 roem* — wie het onrecht dat hij aanrichtte zelf herstelt, staat hoger dan wie het nooit aanrichtte.\n\n— De Hoge Frituurraad`);
@@ -11452,8 +11480,10 @@ async function onthulHanddrukken(client) {
     await pasScoreAanMetCheck(client, b, 2, { channelId: process.env.SLACK_CHANNEL_ID });
     await pasRoemAan(client, a, 1);
     await pasRoemAan(client, b, 1);
-    legRelatieVast(a, b, 'eer');
-    legRelatieVast(b, a, 'eer');
+    // Je drukt geen hand met een kerf: de handdruk is wederzijds herstel en mag dus ook een
+    // bladzijde met een open claim verwarmen.
+    legRelatieVast(a, b, 'eer', 1, { ondanksClaim: true });
+    legRelatieVast(b, a, 'eer', 1, { ondanksClaim: true });
     // Een wederzijdse handdruk wist de wrok tussen die twee: je drukt geen hand met een kerf.
     let stok = readJSON('kerfstok.json', {});
     for (const [x, y] of [[a, b], [b, a]]) {
