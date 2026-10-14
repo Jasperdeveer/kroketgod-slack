@@ -69,7 +69,7 @@ const { zaakNummer, volgendeTeller, parseerZaak } = require('./lib/jurisprudenti
 // overgang te vergelijken is. De rekenkunde staat in de module, hier staat de bedrading.
 const {
   toestandVan, bladzijdeVan, boekDaad, strijkGlad, schuifNaarNul, bladzijdenVan,
-  maakClaim, openClaimsVan, sluitClaim, ruimOudeClaims, CLAIM_GELDIG_MS,
+  maakClaim, openClaimsVan, sluitClaim, ruimOudeClaims, CLAIM_GELDIG_MS, duelGevolg,
 } = require('./lib/paarboek.js');
 // De Gunst: het enige werkwoord waarmee je een medelid iets geeft dat jou zelf iets kost.
 const {
@@ -2940,6 +2940,30 @@ const loadVerlies = () => readJSON('verlies.json', {});
 // (14 dagen), en houdt het bestand klein.
 const VERLIES_BEWAAR_DAGEN = 30;
 
+// Eén plek die het Paarboek bijwerkt. boekVerlies() roept hem aan voor elk eenzijdig onrecht,
+// en het duel roept hem rechtstreeks aan voor de gevallen die géén regel in het grootboek
+// verdienen: de uitdager die zelf onderuitging, en het verlies dat een talisman opving. Dat
+// zijn precies de gevallen waarin er wél iets tussen twee mensen gebeurde maar niets te boeken
+// viel — en zonder deze ingang bleven ze onzichtbaar. Eén implementatie met twee ingangen dus,
+// niet twee implementaties, want dan vergeet er vroeg of laat iemand de claim.
+function boekPaarbladzijde(gekerkte, dader, soort, { claim = true } = {}) {
+  try {
+    const pb = boekDaad(loadPaarboek(), gekerkte, dader, soort, dagSleutel(), { dader });
+    if (pb.gewijzigd) savePaarboek(pb.boek);
+    let claimGeopend = false;
+    if (claim) {
+      const cl = maakClaim(loadClaims(), gekerkte, dader, soort, Date.now());
+      if (cl.gewijzigd) saveClaims(cl.claims);
+      claimGeopend = cl.gewijzigd;
+    }
+    // De Home-tab toont de bladzijde én de drie knoppen; allebei kunnen nu verouderd zijn. Op
+    // `pb || claim` en niet alleen op de claim: een tweede roof binnen 72 uur opent geen nieuwe
+    // claim (die staat al open) maar laat de bladzijde wél zichtbaar zakken.
+    if (pb.gewijzigd || claimGeopend) markeerHomeVerouderd(gekerkte);
+    return { ...pb, claimGeopend };
+  } catch (err) { console.warn('⚠️ Paarboek bijwerken mislukt:', err.message); return null; }
+}
+
 function boekVerlies(userId, punten, doorId, soort) {
   try {
     if (!userId || !punten || punten <= 0) return null;
@@ -2960,19 +2984,8 @@ function boekVerlies(userId, punten, doorId, soort) {
       // een claim met drie dagen bedenktijd. Bewust hier en niet in een eigen hook — een tweede
       // aanroeppad betekent dat iemand er vroeg of laat één van de twee vergeet, en dat is
       // precies waarom de kerf hier óók al staat.
-      let claimGeopend = false;
-      try {
-        const pb = boekDaad(loadPaarboek(), userId, doorId, soort, dagSleutel(), { dader: doorId });
-        if (pb.gewijzigd) savePaarboek(pb.boek);
-        const cl = maakClaim(loadClaims(), userId, doorId, soort, Date.now());
-        if (cl.gewijzigd) saveClaims(cl.claims);
-        claimGeopend = cl.gewijzigd;
-        // De Home-tab toont de bladzijde én de drie knoppen; allebei zijn nu verouderd. Op
-        // `pb || cl` en niet alleen op `cl`: een tweede roof binnen 72 uur opent geen nieuwe
-        // claim (die staat al open) maar laat de bladzijde wél zichtbaar zakken.
-        if (pb.gewijzigd || cl.gewijzigd) markeerHomeVerouderd(userId);
-      } catch (err) { console.warn('⚠️ Paarboek bijwerken mislukt:', err.message); }
-      return { punten, kerven: r.kerven ?? kerven(r.stok, userId, doorId), claimGeopend };
+      const pbr = boekPaarbladzijde(userId, doorId, soort);
+      return { punten, kerven: r.kerven ?? kerven(r.stok, userId, doorId), claimGeopend: !!pbr?.claimGeopend };
     }
     return { punten, kerven: kerven(readJSON('kerfstok.json', {}), userId, doorId) };
   } catch (err) {
@@ -10686,10 +10699,22 @@ async function voerDuel(client, userId, doelId, channelId, wapenId = null) {
   // geïnde wissel staat die ping er al (`wekroep(doelId)` resp. `wekroep(naarId)`); alleen het
   // duel pingde zijn verliezer uitsluitend als er toevallig ook een weerwoord ontstond.
   let claimVoor = null;
-  if (!talisman && verliesId === doelId) {
+  // Wat dit duel achterlaat, in één oordeel. De regels staan in lib/paarboek.js; hier alleen de
+  // bedrading. Kort: het grootboek en de kerfstok blijven kieskeurig — alleen eenzijdig onrecht,
+  // en een talisman houdt ze leeg — maar de bladzijde telt élk beslecht duel. Ook het duel dat
+  // de uitdager zélf verloor, want precies dáár groeide de wrijving die niemand boekte.
+  const gevolg = duelGevolg({ uitdagerId: userId, doelId, verliesId, beschermd: !!talisman });
+  if (gevolg.kerf) {
+    // Eenzijdig onrecht: grootboek, kerf, bladzijde en claim gaan in één keer door de funnel.
     if (boekVerlies(doelId, inzet, userId, 'duel_verloren')?.claimGeopend) claimVoor = doelId;
     // …en hij houdt 24 uur het recht op een weerwoord tegen precies deze uitdager.
     geefWeerwoord(doelId, userId, 'een verloren duel dat u niet begon');
+  } else if (gevolg.bladzijde) {
+    // Niets voor het grootboek — er ging geen punt verloren, of de verliezer zocht het zelf op —
+    // maar er is wel gevochten en verloren, en dat hoort de bladzijde te voelen.
+    if (boekPaarbladzijde(verliesId, winId, 'duel_verloren', { claim: !!gevolg.claimVoor })?.claimGeopend) {
+      claimVoor = gevolg.claimVoor;
+    }
   }
   // Eén bundel voor het hele duel: alles wat hierna nog iets te melden heeft (verbondszegen,
   // titelwissel, relikwie, weekopdracht) schrijft erin, en het geheel gaat als één thread-antwoord
@@ -11253,10 +11278,25 @@ async function inWissel(client, vanId, naarId) {
   const { open } = loadWissels();
   writeJSON('wissels.json', { open: open.filter(x => x !== w) });
   if (geind > 0) verplaatsPunten(naarId, vanId, geind);
-  // Innen is eenzijdig: het kerft, en het slachtoffer houdt een weerwoord. Zo is wanbetaling
-  // een keuze met gevolgen in twee richtingen, in plaats van een straf zonder tegenzet.
+  // Innen is eenzijdig, maar het is géén inbraak. Dit boekte als `roof_gelukt`, waardoor de
+  // claim "hij kraakte uw kluis" zei over iemand die gewoon zijn eigen geld ophaalde — een
+  // leugen in de tekst en twee punten te zwaar op de bladzijde.
+  //
+  // `wissel_geind` staat niet in KERF_GEWICHT, en daarmee slaat boekVerlies zijn hele paar-blok
+  // over. Dat is precies de bedoeling: geen kerf (die verhoogt de duelinzet, en wel vóór de
+  // wanbetaler tegen zijn schuldeiser), en geen claim (die gaf hem een knop "vergeven" met +1
+  // roem tegenover de man die hij niet terugbetaalde, plus een tweede weerwoord bovenop het
+  // weerwoord dat hij hieronder al krijgt). Het verlies zelf blijft wel geboekt: er zijn echt
+  // punten weg. De bladzijde doen we daarom met de hand, één stap kouder — precies de +1 die
+  // het uitlenen opleverde, zodat de hele boog van de wissel op nul uitkomt.
   if (geind > 0) {
-    boekVerlies(naarId, geind, vanId, 'roof_gelukt');
+    boekVerlies(naarId, geind, vanId, 'wissel_geind');
+    try {
+      const pb = boekDaad(loadPaarboek(), naarId, vanId, 'wissel_geind', dagSleutel(), { dader: vanId });
+      if (pb.gewijzigd) savePaarboek(pb.boek);
+    } catch (err) { console.warn('⚠️ Paarboek bijwerken na wisselinning mislukt:', err.message); }
+    // Het slachtoffer houdt een weerwoord. Zo is wanbetaling een keuze met gevolgen in twee
+    // richtingen, in plaats van een straf zonder tegenzet.
     geefWeerwoord(naarId, vanId, 'een geïnde vetwissel');
   }
   const rest = schuld - geind;
