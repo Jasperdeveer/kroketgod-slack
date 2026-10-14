@@ -2950,7 +2950,7 @@ function boekVerlies(userId, punten, doorId, soort) {
       // aanroeppad betekent dat iemand er vroeg of laat één van de twee vergeet, en dat is
       // precies waarom de kerf hier óók al staat.
       try {
-        const pb = boekDaad(loadPaarboek(), userId, doorId, soort, dagSleutel());
+        const pb = boekDaad(loadPaarboek(), userId, doorId, soort, dagSleutel(), doorId);
         if (pb.gewijzigd) savePaarboek(pb.boek);
         const cl = maakClaim(loadClaims(), userId, doorId, soort, Date.now());
         if (cl.gewijzigd) saveClaims(cl.claims);
@@ -13705,12 +13705,12 @@ registreerFeature({
   },
 });
 
-// Hoe een aanleiding in gewone taal heet. De sleutels komen uit DAAD_GEWICHT.
+// Hoe een aanleiding in gewone taal heet. Alleen de VIJANDIGE sleutels uit DAAD_GEWICHT staan
+// hier: een warme daad opent geen claim, dus een warm label zou nooit op het scherm komen.
 const CLAIM_AANLEIDING = {
   roof_gelukt: 'hij kraakte uw kluis',
   duel_verloren: 'hij daagde u uit en won',
   premie_geind: 'hij inde de premie op uw hoofd',
-  troon_verloren: 'hij stootte u van de troon',
 };
 
 // Eén handler voor alle drie de keuzes; de keuze en de dader zitten in de action_id.
