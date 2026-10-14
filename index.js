@@ -557,6 +557,14 @@ function isTestKanaalCheck(channelId, channelName) {
 // ── Statische bestanden — eenmalig ingeladen bij opstarten ────────────────────
 const TONE_OF_VOICE      = fs.readFileSync(path.join(__dirname, 'tone_of_voice.txt'), 'utf8');
 const TONE_OF_VOICE_SATEBAL = fs.readFileSync(path.join(__dirname, 'tone_of_voice_satebal.txt'), 'utf8');
+// Het straattaalblad. Met try/catch en niet kaal zoals de twee hierboven: die twee zijn
+// onmisbaar en een bot die zonder stem opstart hoort meteen om te vallen. Dit blad is een
+// schakelbare extra — ontbreekt het na een deploy, dan hoort de modus simpelweg uit te staan
+// en niet de hele bot tegen te houden.
+const TONE_OF_VOICE_STRAATTAAL = (() => {
+  try { return fs.readFileSync(path.join(__dirname, 'tone_of_voice_straattaal.txt'), 'utf8'); }
+  catch (_) { console.warn('⚠️ tone_of_voice_straattaal.txt ontbreekt — straattaalmodus blijft uit.'); return null; }
+})();
 const GEBODEN_TEKST      = fs.readFileSync(path.join(__dirname, 'geboden.txt'), 'utf8');
 const LEDEN_TEKST        = fs.readFileSync(path.join(__dirname, 'leden.txt'), 'utf8');
 const GEPANNEERDE_RIJK   = fs.readFileSync(path.join(__dirname, 'gepanneerde_rijk.txt'), 'utf8');
@@ -3330,6 +3338,10 @@ function buildSystemPrompt() {
   const decreet = (instelling('decreetVanDeDag') || '').trim();
   const decreetInt = Math.max(0, Math.min(1, Number(instelling('decreetIntensiteit')) || 0));
   const feestdag = isVandaagFeestdag();
+  // MOET in de cacheKey hieronder: de systeemprompt wordt gecached op zijn sleutel, en zonder
+  // dit blijft de oude stem hangen tot er toevallig iets anders verandert (een nieuwe stemming,
+  // een ander dagdeel). Dezelfde valkuil als bij de seizoensfase — zie de noot daar.
+  const straattaalAan = !!instelling('straattaal') && !!TONE_OF_VOICE_STRAATTAAL;
   // Wereldstaat: de seizoenscampagne kleurt de stem van de Kroket God. Dit is globaal (niet
   // per lid), dus het hoort hier en niet in het dossier — en het verandert per week, zodat de
   // prompt-cache effectief blijft. De fase gaat mee in de cacheKey, anders bevriest de tekst.
@@ -3338,7 +3350,7 @@ function buildSystemPrompt() {
   const wereldKey = kroketSeizoen?.status === 'actief'
     ? `${kroketSeizoen.nummer}:${kroketSeizoen.fase}:${Math.round(((kroketSeizoen.maxHp - kroketSeizoen.hp) / kroketSeizoen.maxHp) * 10)}`
     : 'geen';
-  const cacheKey = `${ledenJson}|${tijd.dagdeel}|${tijd.dagNaam}|${tijd.seizoen}|${stemming.naam}|${decreet}|${decreetInt.toFixed(2)}|${feestdag?.localName || ''}|${wereldKey}|${nalatenschapNu?.soort || ''}|${ambtenKey()}`;
+  const cacheKey = `${ledenJson}|${tijd.dagdeel}|${tijd.dagNaam}|${tijd.seizoen}|${stemming.naam}|${decreet}|${decreetInt.toFixed(2)}|${feestdag?.localName || ''}|${wereldKey}|${nalatenschapNu?.soort || ''}|${ambtenKey()}|${straattaalAan ? 'straat' : 'formeel'}`;
 
   if (_systemPromptCache.key === cacheKey) return _systemPromptCache.value;
 
@@ -3409,7 +3421,28 @@ function buildSystemPrompt() {
   }
 
   // Defensieve instructie-hiërarchie bovenaan: legt vast dat alle ingevoegde inhoud data is.
-  const value = `${DEFENSIEVE_INSTRUCTIE}\n\n${prompt}\n\n${ledenBlok}${tijdsContext}${wereldBlok}${decreetBlok}`;
+  // Straattaal VERVANGT de formele stijlgids, hij komt er niet bovenop. Twee redenen.
+  //
+  // De eerste is tokens: de systeemprompt zit al rond de 7.000 en Groq weigert alles boven de
+  // 8.000 met een 413 — niet met een nette fout maar met het uitvallen van het werkpaard, precies
+  // wanneer Gemini's dagquota op is en je Groq het hardst nodig hebt. Erbij plakken kostte 990
+  // tokens en zat op 13 tokens van de grens. Vervangen LEVERT ~1.000 tokens op.
+  //
+  // De tweede is inhoudelijk: tone_of_voice.txt leert een register dat straattaal juist
+  // overschrijft, inclusief voorbeelden in plechtig Nederlands. Beide meesturen is het model
+  // twee tegengestelde stijlgidsen geven en hopen dat de laatste wint.
+  //
+  // Het blad zelf komt wél ACHTERAAN, ná het decreet: zo heeft het register het laatste woord,
+  // ook over de aanspreekvorm-regel in de basisprompt (die "u" eist en "jij" verbiedt).
+  let straattaalBlok = '';
+  if (straattaalAan) {
+    prompt = prompt.replace(TONE_OF_VOICE, '(De stijlgids is vervangen door het straattaalblad onderaan deze instructie.)');
+    straattaalBlok = `\n\n━━━ REGISTER: STRAATTAAL (staat AAN) ━━━\n` +
+      `Dit blad vervangt de stijlgids én de aanspreekvorm-regel hierboven: in deze modus spreek je ` +
+      `volgelingen aan met "jij", niet met "u". Al het andere blijft staan — je karakter, je macht, ` +
+      `je formaten, je lengtegrens.\n\n${TONE_OF_VOICE_STRAATTAAL}`;
+  }
+  const value = `${DEFENSIEVE_INSTRUCTIE}\n\n${prompt}\n\n${ledenBlok}${tijdsContext}${wereldBlok}${decreetBlok}${straattaalBlok}`;
 
   _systemPromptCache = { key: cacheKey, value };
   return value;

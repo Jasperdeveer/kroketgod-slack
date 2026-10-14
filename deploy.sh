@@ -99,6 +99,7 @@ BESTANDEN=(
   "prompt-safety.js"
   "tone_of_voice.txt"
   "tone_of_voice_satebal.txt"
+  "tone_of_voice_straattaal.txt"
   "geboden.txt"
   # Legacy-ledenlijst. members.json is de echte bron, maar index.js leest dit bestand nog met
   # readFileSync zonder try/catch bij het opbouwen van SYSTEM_PROMPT_BASIS — dus zonder upload
