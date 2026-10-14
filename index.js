@@ -7552,19 +7552,34 @@ app.view('intake_modal', async ({ ack, view, body, client }) => {
 // NB: een eerdere noot hier beweerde dat de keten een kaal "STERK" als uit-karakter zou
 // afserveren. Dat is getoetst en het klopt niet — isUitKarakter laat JA, NEE, STERK en zelfs een
 // quizvraag gewoon door. Die aanname was de reden dat deze calls buiten de keten stonden.
+// Eén gedeelde deadline voor BEIDE pogingen samen. Een classificatie waar een mention-handler
+// op wacht mag de gebruiker niet minutenlang laten staren: met de gewone keten-deadline van 35s
+// per poging liep het slechtste geval op tot ~100 seconden voor een ja/nee-vraag. Twaalf
+// seconden is ruim voor twee snelle schakels en kapt een hangende provider af; wat daarna komt
+// is het vangnet, en dat is bij alle zes de veilige kant op.
+const CLASSIFICATIE_DEADLINE_MS = 12_000;
+
 async function classificeer(systeem, vraag, { klassen, vangnet, maxTokens = 8, temperatuur = 0, deelwoorden = false }) {
   const berichten = [{ role: 'system', content: systeem }, { role: 'user', content: vraag }];
+  const stopNa = Date.now() + CLASSIFICATIE_DEADLINE_MS;
   // Twee pogingen. De tweede op een hogere temperatuur, en dat is de hele reden dat hij bestaat:
   // de eer-jury probeerde vroeger een TWEEDE model als het eerste geen bruikbare klasse gaf, en
   // die herkansing viel weg toen alles door de keten ging — _draaiModellen stapt alleen door bij
   // een EXCEPTIE, niet bij een leesbaar maar onbruikbaar antwoord. Opnieuw vragen op temperatuur 0
   // levert gegarandeerd hetzelfde antwoord op, dus de herkansing moet een andere trekking zijn.
   for (const [poging, temp] of [[1, temperatuur], [2, Math.max(0.4, temperatuur)]]) {
+    const resterend = stopNa - Date.now();
+    if (resterend <= 0) {
+      console.warn(`⚠️ Classificatie: geen tijd meer voor poging ${poging} — vangnet "${vangnet}".`);
+      break;
+    }
     try {
       const rauw = await _draaiModellen(berichten, maxTokens, 'licht', {
         temperatuur: temp,
         // Geen karakterkeuring op een classificatie — zie de noot bij _draaiModellen.
         keurKarakter: false,
+        // Wat er van de gedeelde deadline over is, niet opnieuw de volle keten-deadline.
+        deadlineMs: resterend,
       });
       const keuze = kiesKlasse(rauw, klassen, { deelwoorden });
       if (keuze) return keuze;
@@ -7671,11 +7686,21 @@ async function beoordeelEerReden(reden, geefNaam, ontvangerNamen = []) {
   return klasse === 'sterk' ? await toetsLegendarisch(reden) : klasse;
 }
 
-// ── Sarcasme-verificatie: tweede pass op een SLIM model ──────────────────────
-// De 8b-classifier overschat sarcasme enorm → oprechte vragen, filosofische bespiegelingen en
-// verzoeken werden onterecht als spot afgedaan en weggewuifd. Deze tweede pass draait op een slim
-// model en is bewust conservatief: alleen als hij óók JA zegt behandelen we het als sarcasme.
-// Bij twijfel of fout: NEE → de bot reageert gewoon inhoudelijk i.p.v. wegwuift.
+// ── Sarcasme-verificatie: een tweede, binaire pass ───────────────────────────
+// De eerste pass (analyseerEnGenereer) overschat sarcasme: oprechte vragen, filosofische
+// bespiegelingen en verzoeken werden onterecht als spot afgedaan. Deze tweede pass is bewust
+// conservatief — alleen als hij óók JA zegt behandelen we het als sarcasme. Bij twijfel of fout:
+// NEE, dan reageert de bot gewoon inhoudelijk.
+//
+// Twee dingen die hier eerder stonden en niet meer kloppen, met opzet uitgeschreven zodat ze
+// niet opnieuw als waarheid worden gelezen:
+//   · "de 8b-classifier" sloeg op llama-3.1-8b-instant, een model dat niet meer bestaat.
+//   · "draait op een SLIM model" was waar toen deze call op GROQ_SLIM gepind stond. Sinds beide
+//     passes door classificeer() gaan, kiest de keten het model, en bij een cooldown op de
+//     eerste schakel kan dat hetzelfde model zijn als de eerste pass.
+// Dat de tweede pass desondanks werkt, zit in de PROMPT en niet in het model: binair, met
+// "bij twijfel ALTIJD NEE". Nagemeten op hetzelfde model draait hij nog altijd een deel van de
+// SARCASME-labels van de eerste pass terug.
 async function isSarcasme(tekst, context = '') {
   const contextBlok = context
     ? `\n\nGesprekcontext (oud → nieuw):\n${context}\n\nHet te beoordelen bericht is het LAATSTE.`
