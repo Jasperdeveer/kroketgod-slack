@@ -71,6 +71,14 @@ const {
   toestandVan, bladzijdeVan, boekDaad, strijkGlad, schuifNaarNul, bladzijdenVan,
   maakClaim, openClaimsVan, sluitClaim, ruimOudeClaims, CLAIM_GELDIG_MS,
 } = require('./lib/paarboek.js');
+// De Gunst: het enige werkwoord waarmee je een medelid iets geeft dat jou zelf iets kost.
+const {
+  GUNST_PER_WEEK, GUNST_BODEM,
+  gegevenDezeWeek, mag: magGunst, boekGunst, nettoGulheid, uitkering: gunstUitkering, ruimOudeWeken,
+} = require('./lib/gunst.js');
+const loadGunsten = () => readJSON('gunsten.json', {});
+const saveGunsten = (d) => writeJSON('gunsten.json', d);
+
 const loadPaarboek = () => readJSON('paarboek.json', {});
 const savePaarboek = (d) => writeJSON('paarboek.json', d);
 const loadClaims = () => readJSON('claims.json', {});
@@ -6045,6 +6053,19 @@ async function voerKroketCommandoUit({ command, respond, client }) {
     }
 
     // ── Eer geven
+    // ── Gunst: één punt uit uw eigen beurs naar een ander ────────────────────
+    if (input.startsWith('gun ') || input.startsWith('gunst ')) {
+      const naam = input.replace(/^(gun|gunst)\s+/i, '').trim();
+      const gevonden = getMemberByNaam(naam);
+      if (!gevonden) {
+        await respond({ text: `De Kroket God kent geen volgeling genaamd "${naam}".`, response_type: 'ephemeral' });
+        return;
+      }
+      const uitkomst = await voerGunst(client, command.user_id, gevonden[0], command.channel_id);
+      await respond({ text: uitkomst.tekst, response_type: 'ephemeral' });
+      return;
+    }
+
     if (input.startsWith('eer ')) {
       const invoer = input.replace('eer ', '').trim();
 
@@ -13425,10 +13446,115 @@ function gekozenVijandVoor(weekStart) {
 }
 
 // ── Registratie van de wroklaag ──────────────────────────────────────────────
+// ── De Gunst ─────────────────────────────────────────────────────────────────
+// Gedeeld door het commando en de knop in de App Home. Álle grenzen staan in lib/gunst.js:
+// verspreid over twee aanroepers raakt er altijd één vergeten, en dan is het verschil tussen
+// het commando en de knop een bug die niemand ziet.
+async function voerGunst(client, vanId, naarId, channelId) {
+  const members = loadMembers();
+  if (!members[vanId]) return { ok: false, tekst: '_Alleen leden kunnen iets gunnen._' };
+  if (!members[naarId]) return { ok: false, tekst: '_De Kroket God kent die volgeling niet._' };
+  if (isVerbannen(vanId)) return { ok: false, tekst: '_Een balling gunt niemand iets. Toon eerst berouw._' };
+
+  const week = getMondayOfWeek();
+  const stand = loadScores()[vanId] || 0;
+  const toets = magGunst(loadGunsten(), vanId, naarId, stand, week);
+  if (!toets.ok) return { ok: false, tekst: `_${toets.reden}_` };
+
+  // EERST wegschrijven, dan pas de punten en het bericht. Twee tabbladen zouden anders beide
+  // door de limiet glippen — hetzelfde patroon als bij de eer-daglimiet en de claim-knop.
+  const g = boekGunst(loadGunsten(), vanId, naarId, week, Date.now());
+  saveGunsten(g.boek);
+
+  // KALE boeking aan beide kanten, net als bij de Kroketroof: een geschonken punt is geen
+  // verdienste van de ontvanger, dus het levert hem geen roem, geen relikwie en geen zegen op.
+  // De gulheid van de GEVER wordt wél beloond, maar pas zondagnacht en op netto — zie
+  // keerGulheidUit. Zo levert heen-en-weer schuiven per constructie niets op.
+  pasScoreAan(vanId, -1);
+  pasScoreAan(naarId, 1);
+  legRelatieVast(vanId, naarId, 'eer');   // een gunst is een warme draad in het weefsel én het paarboek
+
+  const vanNaam = members[vanId].bijnaam;
+  const naarNaam = members[naarId].bijnaam;
+  logGebeurtenis('gunst', naarId, `${vanNaam} gunde ${naarNaam} een kroketpunt uit eigen beurs`, null, vanId);
+  await telActie(client, vanId, 'gunst');
+
+  // Eén regel in het kanaal, geen LLM. Dit is een klein gebaar en hoort klein te klinken; de
+  // waarde zit erin dat het zichtbaar is, niet dat het luid is.
+  await postToChannel(client, channelId || KANAAL(),
+    `🎁 *${vanNaam}* gunt *${naarNaam}* een kroketpunt uit eigen beurs.`);
+  const over = GUNST_PER_WEEK - gegevenDezeWeek(g.boek, vanId, week).length;
+  return { ok: true, tekst: `_U gunt ${naarNaam} een kroketpunt. Nog ${over} gunst${over === 1 ? '' : 'en'} deze week._` };
+}
+
+// Zondagnacht: roem voor wie netto gulheid overhield. Één regel in het kanaal, geen LLM —
+// en alleen als er werkelijk iemand iets weggaf. Een vaste wekelijkse post die meestal "niemand
+// gaf iets" zegt, is precies het soort ruis dat het kanaal net is uit gehaald.
+async function keerGulheidUit(client) {
+  try {
+    const week = getMondayOfWeek();
+    const members = loadMembers();
+    const rijen = gunstUitkering(loadGunsten(), Object.keys(members), week);
+    if (!rijen.length) return;
+    for (const r of rijen) {
+      await pasRoemAan(client, r.id, r.roem);
+      logGebeurtenis('gunst', r.id, `${members[r.id]?.bijnaam || r.id} kreeg ${r.roem} roem voor netto gulheid (${r.netto} punten weggegeven)`);
+    }
+    const regels = rijen.map(r => `> *${members[r.id]?.bijnaam || r.id}* — ${r.netto} punten weggegeven, +${r.roem} roem`).join('\n');
+    await postToChannel(client, KANAAL(),
+      `🎁 *DE GULHEID VAN DEZE WEEK*\n\n${regels}\n\n_Wat je weggeeft, blijft van je._`);
+    const op = ruimOudeWeken(loadGunsten());
+    if (op.gewijzigd) saveGunsten(op.boek);
+  } catch (err) { console.warn('⚠️ Gulheid uitkeren mislukt:', err.message); }
+}
+
 // ── De Bladzijde en de Claim ─────────────────────────────────────────────────
 // De kaart toont geen getallen maar toestanden, en biedt één keuze aan wie iets is aangedaan.
 // Bewust GEEN eigen kanaalberichten: dit hoort bij wat je ziet als je kijkt, niet bij wat er
 // langskomt. Het hele punt van deze feature is dat wrok zichtbaar wordt zonder luider te worden.
+registreerFeature({
+  naam: 'gunst',
+  state: ['gunsten.json'],
+  help: [{ gebruik: '/kroketgod gun [naam]', verwacht: 'geef een medelid één kroketpunt uit uw eigen beurs (max 2 per week)' }],
+  homeOrde: 9,
+});
+
+// Modal: aan wie gunt u iets. Eén klik is niet genoeg — je moet kiezen wie, en dat is precies
+// het moment waarop het een gebaar wordt in plaats van een knop.
+app.action('open_gunst', async ({ ack, body, client }) => {
+  await ack();
+  try {
+    const opties = medeledenOpties(body.user.id);
+    const week = getMondayOfWeek();
+    const over = GUNST_PER_WEEK - gegevenDezeWeek(loadGunsten(), body.user.id, week).length;
+    await client.views.open({
+      trigger_id: body.trigger_id,
+      view: {
+        type: 'modal', callback_id: 'modal_gunst',
+        title: { type: 'plain_text', text: 'Een gunst' },
+        submit: opties.length ? { type: 'plain_text', text: 'Gunnen' } : undefined,
+        close: { type: 'plain_text', text: 'Sluiten' },
+        blocks: opties.length ? [
+          { type: 'section', text: { type: 'mrkdwn', text:
+            `🎁 *Gun een medelid één kroketpunt uit uw eigen beurs.* Het kost u er écht een — dit is het enige in het spel dat dat doet.\n` +
+            `_Nog ${over} van de ${GUNST_PER_WEEK} deze week. U moet er zelf ${GUNST_BODEM} overhouden. Zondagnacht levert netto gulheid roem op; heen en weer schuiven levert niets op._` } },
+          { type: 'input', block_id: 'doelwit', label: { type: 'plain_text', text: 'Aan wie?' },
+            element: { type: 'static_select', action_id: 'keuze', options: opties, placeholder: { type: 'plain_text', text: 'Een medelid…' } } },
+        ] : [{ type: 'section', text: { type: 'mrkdwn', text: '_Er is niemand om iets te gunnen._' } }],
+      },
+    });
+  } catch (err) { console.error('Fout bij openen gunst-modal:', err.data?.error || err.message); }
+});
+
+app.view('modal_gunst', async ({ ack, body, view, client }) => {
+  await ack();
+  try {
+    const doelId = view.state.values.doelwit?.keuze?.selected_option?.value;
+    const uitkomst = await voerGunst(client, body.user.id, doelId, KANAAL());
+    await publiceerAppHome(client, body.user.id, uitkomst.tekst);
+  } catch (err) { console.error('Fout bij gunst-modal:', err); }
+});
+
 registreerFeature({
   naam: 'paarboek',
   state: ['paarboek.json', 'claims.json'],
@@ -16861,6 +16987,12 @@ function bouwAppHomeBlocks(userId, melding = '', extraBlocks = []) {
     if (telEerVandaag(userId) < eerLimiet(userId)) {
       acties.push({ type: 'button', text: { type: 'plain_text', text: '🙏 Eer geven', emoji: true }, action_id: 'open_eer', style: 'primary' });
     }
+    // De Gunst alleen tonen als hij werkelijk kan: een knop die gegarandeerd "u heeft er geen
+    // meer" antwoordt is een knop die liegt — dezelfde regel als bij het visioen en de ambten.
+    if (gegevenDezeWeek(loadGunsten(), userId, getMondayOfWeek()).length < GUNST_PER_WEEK
+        && eigenScore - 1 >= GUNST_BODEM) {
+      acties.push({ type: 'button', text: { type: 'plain_text', text: '🎁 Gunnen', emoji: true }, action_id: 'open_gunst' });
+    }
     if (getFrituurCooldownRest(userId) === 0) {
       acties.push({ type: 'button', text: { type: 'plain_text', text: '🔮 Visioen', emoji: true }, action_id: 'open_visioen' });
     }
@@ -18549,6 +18681,11 @@ async function voerWeekkampioenUit(client) {
       weekStart: getMondayOfWeek(new Date(Date.now() + 26 * 3_600_000)), // de nieuwe week (ma)
       zegenGebruikt: false,
     });
+    // De Gunst beloont pas hier, en op NETTO: wie deze week meer weggaf dan hij kreeg, krijgt
+    // roem. Vóór de reset, want de punten gaan zo op nul — maar de roem blijft eeuwig, en dat
+    // is precies het verschil dat de Gunst de moeite waard maakt.
+    await keerGulheidUit(client);
+
     const tekst = await kroketResponseMetVangnet(
       `Het is zondagnacht — het einde van de kroketweek. Kondig ${kampioenBijnaam} aan als WEEKKAMPIOEN met ${kampioenScore} kroketpunten. ` +
       `Dramatisch en plechtig, met kroning. Maak duidelijk dat de kroketpunten nu voor iedereen op nul gaan voor een frisse nieuwe week, ` +
