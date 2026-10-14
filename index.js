@@ -76,6 +76,21 @@ const {
   GUNST_PER_WEEK, GUNST_BODEM,
   gegevenDezeWeek, mag: magGunst, boekGunst, nettoGulheid, uitkering: gunstUitkering, ruimOudeWeken,
 } = require('./lib/gunst.js');
+const loadVoorstellen = () => readJSON('huisonderwerpen.json', { voorstellen: [] });
+const saveVoorstellen = (d) => writeJSON('huisonderwerpen.json', d);
+
+// De werkende lijst huisonderwerpen: die van de eigenaar uit de instellingen, plus wat leden
+// hebben voorgedragen én goedgekeurd gekregen. Eén functie, zodat voerEer niet hoeft te weten
+// dat er twee bronnen zijn.
+function actieveHuisonderwerpen() {
+  const eigen = huisonderwerpenUit(instelling('eerHuisonderwerpen'));
+  const goedgekeurd = (loadVoorstellen().voorstellen || [])
+    .filter(v => v && v.status === 'goedgekeurd')
+    .map(v => schoonOnderwerp(v.woord))
+    .filter(o => o.length >= 3);
+  return [...new Set([...eigen, ...goedgekeurd])];
+}
+
 const loadGunsten = () => readJSON('gunsten.json', {});
 const saveGunsten = (d) => writeJSON('gunsten.json', d);
 
@@ -90,6 +105,8 @@ const {
   EER_KLASSEN, EER_KLASSE_LABEL, EER_REDEN_MIN, EER_REDEN_MAX, ALLIANTIE_TERUGSLAG,
   redenProbleem, parseerKlasse, worpVoorKlasse, promoveerKlasse,
   isHerhaaldeReden, onthoudReden, huisonderwerpenUit, raaktHuisonderwerp, EER_HERHAALD,
+  schoonOnderwerp, ONDERWERP_UITLEG,
+  onderwerpProbleem,
 } = require('./lib/eerwaarde.js');
 const {
   inStilVenster, weegDaad, KORST_PUNTEN, KORST_MAX_PER_WEEK, korstenDezeWeek,
@@ -314,6 +331,27 @@ const app = new App({
           const { geverId, ontvangerId, reden } = await leesBody(req);
           const bericht = await voerDashboardEer(geverId, ontvangerId, reden);
           logAudit('eer', bericht);
+          res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+          res.end(JSON.stringify({ ok: true, bericht }));
+        } catch (err) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, error: err.message }));
+        }
+      },
+    },
+    {
+      // Huisonderwerpen: de voordrachten van de leden goed- of afkeuren. Dit moet langs de
+      // eigenaar en kan niet vanzelf: raaktHuisonderwerp vergelijkt op deelwoord, dus één te
+      // ruim woord promoveert elke reden in het spel een klasse. Dat is geen smaakkwestie
+      // maar een inflatieknop.
+      path: '/api/huisonderwerp',
+      method: ['POST'],
+      handler: async (req, res) => {
+        if (!dashboardAuth(req, res)) return;
+        try {
+          const { woord, actie } = await leesBody(req);
+          const bericht = await voerHuisonderwerpBeheer(woord, actie);
+          logAudit('huisonderwerp', bericht);
           res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
           res.end(JSON.stringify({ ok: true, bericht }));
         } catch (err) {
@@ -6053,6 +6091,40 @@ async function voerKroketCommandoUit({ command, respond, client }) {
     }
 
     // ── Eer geven
+    // ── Huisonderwerp voordragen ─────────────────────────────────────────────
+    // Een lid draagt voor, de eigenaar keurt goed op het dashboard. Niet vrij: raaktHuisonderwerp
+    // vergelijkt op deelwoord, dus één te algemeen woord promoveert élke reden in het spel.
+    if (input.startsWith('huisonderwerp')) {
+      const woord = input.replace(/^huisonderwerp\s*/i, '').trim();
+      const data = loadVoorstellen();
+      const eigen = (data.voorstellen || []).filter(v => v.door === command.user_id && v.status !== 'afgewezen');
+      if (!woord) {
+        const lijst = actieveHuisonderwerpen();
+        await respond({ text:
+          `📖 _Huisonderwerpen wegen bij een eerbewijs een klasse zwaarder._\n` +
+          `Nu actief: ${lijst.length ? lijst.map(o => `\`${o}\``).join(' · ') : '(geen)'}\n` +
+          (eigen.length ? `Uw voorstellen: ${eigen.map(v => `\`${v.woord}\` (${v.status})`).join(' · ')}\n` : '') +
+          `Voordragen met \`/kroketgod huisonderwerp [woord]\` — maximaal 2 per lid, de Raad keurt goed.`,
+          response_type: 'ephemeral' });
+        return;
+      }
+      if (eigen.length >= 2) {
+        await respond({ text: '_U heeft al twee onderwerpen voorgedragen. Wacht tot de Raad erover oordeelt._', response_type: 'ephemeral' });
+        return;
+      }
+      const probleem = onderwerpProbleem(woord, [...actieveHuisonderwerpen(), ...(data.voorstellen || []).map(v => v.woord)]);
+      if (probleem) {
+        const uitleg = ONDERWERP_UITLEG[probleem] || 'Dat kan niet.';
+        await respond({ text: `_${uitleg}_`, response_type: 'ephemeral' });
+        return;
+      }
+      data.voorstellen = [...(data.voorstellen || []), { door: command.user_id, woord: schoonOnderwerp(woord), ts: Date.now(), status: 'voorgedragen' }];
+      saveVoorstellen(data);
+      logAudit('huisonderwerp', `${aanvrager} draagt "${schoonOnderwerp(woord)}" voor`);
+      await respond({ text: `_"${schoonOnderwerp(woord)}" is voorgedragen. De Hoge Frituurraad beslist._`, response_type: 'ephemeral' });
+      return;
+    }
+
     // ── Gunst: één punt uit uw eigen beurs naar een ander ────────────────────
     if (input.startsWith('gun ') || input.startsWith('gunst ')) {
       const naam = input.replace(/^(gun|gunst)\s+/i, '').trim();
@@ -11784,7 +11856,7 @@ async function voerEer(client, geverId, ontvangerIds, reden, channelId, opties =
   // Werkt ook bovenop een herhaalde reden — "sowieso extra" is sowieso extra — maar de
   // herhaalstraf blijft staan, dus een hergebruikt huisonderwerp komt één klasse lager uit dan
   // een verse. Dat is precies de juiste rangorde.
-  const huisGeraakt = raaktHuisonderwerp(schoneReden, huisonderwerpenUit(instelling('eerHuisonderwerpen')));
+  const huisGeraakt = raaktHuisonderwerp(schoneReden, actieveHuisonderwerpen());
   const basisKlasse = huisGeraakt ? promoveerKlasse(juryKlasse) : juryKlasse;
   onthoudEerReden(geverId, schoneReden);
 
@@ -13512,6 +13584,12 @@ async function keerGulheidUit(client) {
 // De kaart toont geen getallen maar toestanden, en biedt één keuze aan wie iets is aangedaan.
 // Bewust GEEN eigen kanaalberichten: dit hoort bij wat je ziet als je kijkt, niet bij wat er
 // langskomt. Het hele punt van deze feature is dat wrok zichtbaar wordt zonder luider te worden.
+registreerFeature({
+  naam: 'huisonderwerpen',
+  state: ['huisonderwerpen.json'],
+  help: [{ gebruik: '/kroketgod huisonderwerp [woord]', verwacht: 'draag een eigen onderwerp voor dat bij eer een klasse zwaarder weegt' }],
+});
+
 registreerFeature({
   naam: 'gunst',
   state: ['gunsten.json'],
@@ -17210,7 +17288,15 @@ async function meldKnopUitkomst(client, body, tekst) {
     try {
       await client.views.update({ view_id: body.view.id, view: bouwNaslagVenster(sleutel, body.user.id, tekst) });
     } catch (err) {
-      console.error('Fout bij verversen naslag-venster:', err.data?.error || err.message);
+      // `not_found` is de gewone gang van zaken, geen storing: wie het venster wegklikt vlak
+      // nadat hij op een knop drukte, laat ons een view-id achter dat Slack al heeft opgeruimd.
+      // Dat als fout loggen maakte het logboek onbetrouwbaar — je gaat de echte fouten missen.
+      const code = err.data?.error || err.message;
+      if (code === 'not_found' || code === 'expired_trigger_id') {
+        console.log(`↩️ Naslag-venster al gesloten (${code}) — alleen de Home-tab bijgewerkt.`);
+      } else {
+        console.error('Fout bij verversen naslag-venster:', code);
+      }
     }
     // De Home-tab eronder ook bijwerken: het saldo en de knoppenrij zijn nu verouderd.
     await publiceerAppHome(client, body.user.id);
@@ -20058,6 +20144,10 @@ async function bouwDashboardData() {
     frituurlog: (readJSON('frituurlog.json', { items: [] }).items || []).slice().reverse(),
     auditlog: (readJSON('auditlog.json', { items: [] }).items || []).slice(-20).reverse(),
     personas: Object.entries(loadPersonas()).map(([id, p]) => ({ id, ...p })),
+    huisonderwerpen: {
+      actief: actieveHuisonderwerpen(),
+      voorstellen: (loadVoorstellen().voorstellen || []).map(v => ({ ...v, naam: loadMembers()[v.door]?.bijnaam || v.door })),
+    },
   };
 }
 
@@ -20086,6 +20176,42 @@ async function voerDashboardEer(geverId, ontvangerId, reden) {
   const punten = uitkomst.punten[ontvangerId];
   return `${members[geverId].bijnaam} eerde ${members[ontvangerId].bijnaam}: ${punten === 0 ? 'niets' : `+${punten}`} ` +
     `(${uitkomst.klasse}${uitkomst.herhaald ? ', herhaalde reden' : ''})${uitkomst.terugslag ? ` · verbondstrouw +${uitkomst.terugslag}` : ''}`;
+}
+
+// Huisonderwerp-beheer vanuit het dashboard. Goedkeuren laat het woord meewegen bij elk
+// eerbewijs, dus het gaat langs dezelfde toets als de voordracht zelf — een woord dat intussen
+// te algemeen is geworden (omdat er al iets soortgelijks goedgekeurd is) wordt hier alsnog
+// geweigerd in plaats van stilletjes toegelaten.
+async function voerHuisonderwerpBeheer(woord, actie) {
+  const data = loadVoorstellen();
+  const lijst = data.voorstellen || [];
+  const i = lijst.findIndex(v => v && v.woord === woord);
+  if (i < 0) throw new Error('Onbekend voorstel');
+  const v = lijst[i];
+  const members = loadMembers();
+  const naam = members[v.door]?.bijnaam || v.door;
+  if (actie === 'verwijderen') {
+    data.voorstellen = lijst.filter((_, j) => j !== i);
+    saveVoorstellen(data);
+    return `Huisonderwerp "${woord}" van ${naam} verwijderd.`;
+  }
+  if (actie === 'afwijzen') {
+    data.voorstellen = lijst.map((x, j) => (j === i ? { ...x, status: 'afgewezen' } : x));
+    saveVoorstellen(data);
+    return `Huisonderwerp "${woord}" van ${naam} afgewezen.`;
+  }
+  if (actie !== 'goedkeuren') throw new Error('Onbekende actie (goedkeuren/afwijzen/verwijderen)');
+  const probleem = onderwerpProbleem(woord, actieveHuisonderwerpen());
+  if (probleem) throw new Error(`Kan niet goedkeuren — ${ONDERWERP_UITLEG[probleem] || probleem}`);
+  data.voorstellen = lijst.map((x, j) => (j === i ? { ...x, status: 'goedgekeurd', goedgekeurdTs: Date.now() } : x));
+  saveVoorstellen(data);
+  // Eén regel in het kanaal, want dit verandert de spelregels voor iedereen. Niet meer dan een
+  // regel: de Raad kondigt al genoeg aan.
+  try {
+    await postToChannel(app.client, KANAAL(),
+      `📖 De Raad neemt *${woord}* op in het huisboek, op voordracht van <@${v.door}>. Een eerbewijs dat dit raakt weegt voortaan een klasse zwaarder.`);
+  } catch (_) { /* het dashboard mag niet struikelen over een stille Slack */ }
+  return `Huisonderwerp "${woord}" van ${naam} goedgekeurd.`;
 }
 
 async function voerWinkelBeheer(actie, userId, item, aankondig) {

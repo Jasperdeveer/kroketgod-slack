@@ -570,6 +570,33 @@ function personaVerwijder(id){
   post('/api/persona/delete',{id:id},'Verwijderd','p_status');
   setTimeout(tick,800);
 }
+// De voordrachten van de leden. Alleen zichtbaar zodra er iets ligt — een lege kop in een
+// scherm waarover al geklaagd is dat het onoverzichtelijk was, is een regel te veel.
+function huisVoorstellen(d){
+  var h=d.huisonderwerpen||{};var v=(h.voorstellen||[]).slice().sort(function(a,b){return (b.ts||0)-(a.ts||0);});
+  if(!v.length)return '';
+  var rijen=v.map(function(x){
+    var kleur=x.status==='goedgekeurd'?'var(--groen,#7bbf6a)':x.status==='afgewezen'?'var(--muted,#8a7a66)':'var(--amber)';
+    var knoppen=x.status==='voorgedragen'
+      ? '<button class="btn" onclick="huisBeheer(\''+escAttr(x.woord)+'\',\'goedkeuren\')">✓ Goedkeuren</button>'
+        +'<button class="btn" onclick="huisBeheer(\''+escAttr(x.woord)+'\',\'afwijzen\')">✕ Afwijzen</button>'
+      : '<button class="btn" onclick="huisBeheer(\''+escAttr(x.woord)+'\',\'verwijderen\')">🗑️ Weg</button>';
+    return '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:5px 0;border-top:1px solid var(--line)">'
+      +'<b style="color:'+kleur+'">'+esc(x.woord)+'</b>'
+      +'<span class="muted" style="text-transform:none">'+esc(x.naam||x.door)+' · '+esc(x.status)+'</span>'
+      +'<span style="margin-left:auto">'+knoppen+'</span></div>';
+  }).join('');
+  return '<div class="lbl" style="margin-top:12px">Voorgedragen door de leden'
+    +tip('Leden dragen zelf een huisonderwerp voor met /kroketgod huisonderwerp [woord], maximaal twee per persoon. Goedgekeurde woorden tellen precies zo zwaar mee als de lijst hierboven: een eerbewijs dat er een raakt gaat een klasse omhoog. Een te algemeen woord wordt bij het goedkeuren alsnog geweigerd, want het zou elke reden in het spel promoveren.')
+    +'</div>'+rijen;
+}
+// Een woord belandt in een onclick-attribuut binnen een JS-string; een apostrof of aanhalingsteken
+// breekt daar het hele blok. Het woord komt uit Slack, dus dat is geen theoretisch geval.
+function escAttr(w){return String(w).replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/"/g,'&quot;').replace(/</g,'&lt;');}
+function huisBeheer(woord,actie){
+  post('/api/huisonderwerp',{woord:woord,actie:actie},actie==='goedkeuren'?'Goedgekeurd':actie==='afwijzen'?'Afgewezen':'Verwijderd');
+  setTimeout(tick,900);
+}
 function renderInstellingen(d){
   var s=d.instellingen;
   var wLeden=((d.winkel&&d.winkel.leden)||[]).map(function(r){return '<option value="'+esc(r.id)+'">'+esc(r.naam)+'</option>';}).join('');
@@ -601,6 +628,7 @@ function renderInstellingen(d){
     +'<textarea id="i_decreet" rows="2" placeholder="bv. Vandaag spreekt de Kroket God uitsluitend in haiku.">'+esc(s.decreetVanDeDag)+'</textarea>'
     +'<div class="lbl" style="margin-top:12px">Eer — huisonderwerpen'+tip('Komma-gescheiden lijst van zaken die binnen dit genootschap sowieso zwaarder wegen bij een eerbewijs. Raakt een ingetypte reden er een, dan gaat het oordeel van de jury een klasse omhoog — zwak wordt degelijk, sterk wordt legendarisch. Bedoeld voor dingen die een taalmodel onmogelijk kan weten: de tavernehoek leest voor een buitenstaander als toewijding zonder resultaat, terwijl het hier juist erkenning verdient. Werkt direct na opslaan, ook op verbogen vormen (tavernehoekje) en ongeacht hoofdletters.')+'</div>'
     +'<input id="i_huis" type="text" value="'+esc(s.eerHuisonderwerpen||'')+'" placeholder="tavernehoek, de kelder" style="width:100%;background:#16100a;color:var(--txt);border:1px solid var(--line);border-radius:8px;padding:8px;font:inherit;box-sizing:border-box">'
+    +huisVoorstellen(d)
     +'<div class="lbl" style="margin-top:10px">Heftigheid van het decreet'+tip('Hoe sterk de Kroket God het decreet doorvoert: links = subtiele vleug, rechts = absolute obsessie die elke reactie doordrenkt.')+' <span id="i_decreetIntPct" class="muted" style="text-transform:none;font-weight:400">'+Math.round(s.decreetIntensiteit*100)+'%</span></div>'
     +'<input type="range" min="0" max="100" id="i_decreetInt" value="'+Math.round(s.decreetIntensiteit*100)+'" style="width:100%;accent-color:var(--amber)">'
     +'<div style="margin-top:12px"><button class="btn gold" data-save>💾 Opslaan</button>'
