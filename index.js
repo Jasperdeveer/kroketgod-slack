@@ -70,7 +70,7 @@ const { zaakNummer, volgendeTeller, parseerZaak } = require('./lib/jurisprudenti
 const {
   EER_KLASSE_LABEL, EER_REDEN_MIN, EER_REDEN_MAX, ALLIANTIE_TERUGSLAG,
   redenProbleem, parseerKlasse, worpVoorKlasse, promoveerKlasse,
-  isHerhaaldeReden, onthoudReden, huisonderwerpenUit, raaktHuisonderwerp,
+  isHerhaaldeReden, onthoudReden, huisonderwerpenUit, raaktHuisonderwerp, EER_HERHAALD,
 } = require('./lib/eerwaarde.js');
 const {
   inStilVenster, weegDaad, KORST_PUNTEN, KORST_MAX_PER_WEEK, korstenDezeWeek,
@@ -7787,8 +7787,23 @@ Reply with EXACTLY one word: BELEDIGING, SARCASME, LOFZANG, BEDELARIJ, or NEUTRA
 // het kanaal een leesbare lijst met vragen in plaats van een afwisseling van korte vraag en
 // lang decreet. Voorheen kreeg een losse mention een nieuw kanaalbericht (parent_user_id was
 // dan leeg), en dat is precies wat het kanaal vol liet lopen.
+// Waar hoort het antwoord te landen: in een bestaande thread, of gewoon in het kanaal.
+//
+// Stond hier `event.thread_ts || event.ts`, en dat tweede deel was de fout. event.ts is de
+// timestamp van het bericht waarin je de Kroket God noemde; die als thread_ts meegeven maakt van
+// ELK antwoord een thread-reactie, ook op een gewoon kanaalbericht. Gevolg: de God sprak
+// nagenoeg altijd in een dichtgeklapte thread die niemand opent, en het kanaal bleef leeg terwijl
+// het juist het toneel is.
+//
+// Nu: alleen meegaan in een thread die AL bestaat — wordt hij in een thread aangesproken, dan
+// hoort het antwoord daar, want daar staat de context. Een mention op kanaalniveau krijgt
+// gewoon een kanaalbericht.
+//
+// Dit raakt het NASPEL niet: dat hangt zichzelf onder het bericht dat de bot zojuist plaatste
+// (postNaspel met de ts van die post), niet onder het bericht van de gebruiker. Secundaire
+// informatie blijft dus in een thread, precies zoals bedoeld.
 function antwoordThread(event) {
-  return event.thread_ts || event.ts;
+  return event.thread_ts || undefined;
 }
 
 app.event('app_mention', async ({ event, client }) => {
@@ -11682,7 +11697,7 @@ async function voerEer(client, geverId, ontvangerIds, reden, channelId, opties =
   // Dezelfde reden opnieuw? Dan geen jury-call: hergebruik is per definitie geen nieuwe
   // verdienste, en dit spaart bovendien quota bij wie het als sluis probeert te gebruiken.
   const herhaald = isHerhaaldeReden(schoneReden, recenteEerRedenen(geverId));
-  const juryKlasse = herhaald ? 'zwak' : await beoordeelEerReden(schoneReden, geefNaam, namen);
+  const juryKlasse = herhaald ? EER_HERHAALD : await beoordeelEerReden(schoneReden, geefNaam, namen);
   // Huisonderwerp: raakt de reden iets wat in dit genootschap sowieso zwaarder weegt (de
   // tavernehoek voorop), dan gaat het oordeel één klasse omhoog. Dit komt NA de jury en niet
   // ervoor: de jury mag onbevangen wegen, en de groep legt er daarna zijn eigen gewicht bij.
