@@ -40,6 +40,12 @@ if (ontbrekendeVars.length) {
 // ── Interne modules (zie lib/) ────────────────────────────────────────────────
 const { FEATURES, registreerFeature } = require('./lib/registry.js');
 const { BACKUP_BASIS, backupBestanden, controleerBackupDekking, maakBackup } = require('./lib/backup.js');
+const {
+  WISSEL_MAX, WISSEL_MAX_OPEN, BOETE_MAX, VOORSTEL_GELDIG_MS, OVERVAL_GREEP,
+  teBetalen: wisselTeBetalen, boeteVan: wisselBoete, isVervallen: wisselVervallen, naInning,
+  overvalKans, magOvervallen, overval: doeOverval,
+  magVoorstellen, ruimVoorstellen, voorstelVan,
+} = require('./lib/vetwissel.js');
 const { dashboardAuth, logAudit, leesDashboardHtml } = require('./lib/dashboardkern.js');
 const { readJSON, writeJSON } = require('./lib/state.js');
 const { isWeekendAms, getAmsOffsetMs, getMondayOfWeek, secondenTotVrijdagMiddag } = require('./lib/tijd.js');
@@ -7330,19 +7336,34 @@ async function voerKroketCommandoUit({ command, respond, client }) {
     if (input === 'wissel' || input.startsWith('wissel ') || input === 'wissels') {
       const rest = input.replace(/^wissels?\s*/, '').trim();
       if (!rest) {
+        const nu = Date.now();
         const { uitgeleend, geleend } = wisselsVan(command.user_id);
+        // Door ruimVoorstellen heen: een verlopen aanbod staat nog in het bestand tot de
+        // volgende schrijfactie, en dat hier tonen belooft iets wat niet meer kan.
+        const eigenVoorstellen = ruimVoorstellen(loadWissels().voorstellen, nu).voorstellen
+          .filter(v => v.vanId === command.user_id || v.naarId === command.user_id);
         const regel = (w, uit) => {
-          const rest2 = Math.max(0, w.vervalTs - Date.now());
-          const wanneer = rest2 > 0 ? `nog ${resterendeTijd(rest2)}` : '*VERVALLEN*';
+          const over = Math.max(0, w.vervalTs - nu);
+          const wanneer = over > 0
+            ? `nog ${resterendeTijd(over)}, renteloos`
+            : `*VERVALLEN* — boete +${wisselBoete(w, nu)}, ${Math.round(overvalKans(w, nu) * 100)}% overvalkans`;
           return uit
-            ? `> 📜 *${members[w.naarId]?.bijnaam || '?'}* moet u ${w.bedrag + w.rente} — ${wanneer}`
-            : `> 📜 U moet *${members[w.vanId]?.bijnaam || '?'}* ${w.bedrag + w.rente} — ${wanneer}`;
+            ? `> 📜 *${members[w.naarId]?.bijnaam || '?'}* moet u ${wisselTeBetalen(w, nu)} — ${wanneer}`
+            : `> 📜 U moet *${members[w.vanId]?.bijnaam || '?'}* ${wisselTeBetalen(w, nu)} — ${wanneer}`;
         };
-        const regels = [...uitgeleend.map(w => regel(w, true)), ...geleend.map(w => regel(w, false))];
+        const regels = [
+          ...uitgeleend.map(w => regel(w, true)),
+          ...geleend.map(w => regel(w, false)),
+          ...eigenVoorstellen.map(v => v.vanId === command.user_id
+            ? `> ✍️ Aanbod van ${v.bedrag} aan *${members[v.naarId]?.bijnaam || '?'}* — nog niet getekend`
+            : `> ✍️ *${members[v.vanId]?.bijnaam || '?'}* biedt u ${v.bedrag} te leen — teken in het kanaal`),
+        ];
         await respond({
           text: `📜 *DE VETWISSELS* 📜\n\n${regels.length ? regels.join('\n') : '> _Er staat niets open._'}\n\n` +
-            `_Uitlenen: \`wissel [naam] [1-${WISSEL_MAX}]\` · aflossen: \`los af\` · kwijtschelden: \`scheld kwijt [naam]\` · innen na de vervaldag: \`in [naam]\`_\n` +
-            `_Rente is vast ${WISSEL_RENTE} punt. Vervaldag is vrijdag ${WISSEL_VERVAL.uur}:00, met aanmaningen op donderdag en vrijdagochtend._`,
+            `_Aanbieden: \`wissel [naam] [1-${WISSEL_MAX}]\` — de ander moet tekenen._\n` +
+            `_Aflossen: \`los af\` (mag ook deels) · kwijtschelden: \`scheld kwijt [naam]\`_\n` +
+            `_Na de vervaldag: \`in [naam]\` om te innen, of \`overval [naam]\` om te gokken._\n` +
+            `_Op tijd betalen is RENTELOOS. Te laat kost elke week een boete, tot ${BOETE_MAX} bovenop het geleende._`,
           response_type: 'ephemeral',
         });
         return;
@@ -7351,7 +7372,7 @@ async function voerKroketCommandoUit({ command, respond, client }) {
       if (!m) { await respond({ text: `_Gebruik: \`wissel [naam] [1-${WISSEL_MAX}]\`._`, response_type: 'ephemeral' }); return; }
       const { gevonden } = parseerNaamEnReden(m[1]);
       if (!gevonden) { await respond({ text: 'De Kroket God kent geen volgeling met die naam.', response_type: 'ephemeral' }); return; }
-      const uitkomst = await verstrekWissel(client, command.user_id, gevonden[0], m[2]);
+      const uitkomst = await stelWisselVoor(client, command.user_id, gevonden[0], m[2]);
       await respond({ text: uitkomst.tekst, response_type: 'ephemeral' });
       return;
     }
@@ -7373,6 +7394,15 @@ async function voerKroketCommandoUit({ command, respond, client }) {
       const { gevonden } = parseerNaamEnReden(naam);
       if (!gevonden) { await respond({ text: '_Gebruik: `scheld kwijt [naam]`._', response_type: 'ephemeral' }); return; }
       const uitkomst = await scheldWisselKwijt(client, command.user_id, gevonden[0]);
+      await respond({ text: uitkomst.tekst, response_type: 'ephemeral' });
+      return;
+    }
+
+    if (input.startsWith('overval')) {
+      const naam = input.replace(/^overval\s*/, '').trim();
+      const { gevonden } = parseerNaamEnReden(naam);
+      if (!gevonden) { await respond({ text: '_Gebruik: `overval [naam]` — kan pas ná de vervaldag._', response_type: 'ephemeral' }); return; }
+      const uitkomst = await overvalWissel(client, command.user_id, gevonden[0]);
       await respond({ text: uitkomst.tekst, response_type: 'ephemeral' });
       return;
     }
@@ -11134,8 +11164,19 @@ async function verhoorBede(client, doelId, inwilligen) {
 }
 
 // ── De Vetwissel: lenen, en wat er gebeurt als je niet aflost ────────────────
-// Een lid leent een ander 1 tot 3 kroketpunten tegen één punt rente. Wordt de wissel niet
-// ingelost, dan mag de schuldeiser hem met één bevoorrechte rooftocht komen halen.
+// Een lid STELT een ander een lening van 1 tot 3 kroketpunten voor; pas als die tekent beweegt
+// er iets. Op tijd terugbetalen is renteloos. Te laat kost een boete die elke week doorgroeit,
+// en dan mag de schuldeiser kiezen: netjes innen, de boel overvallen, of kwijtschelden.
+//
+// De rekensom en de kansen staan in lib/vetwissel.js, met tests. Hier staat alleen de bedrading:
+// de punten, de knoppen en de berichten.
+//
+// WAT ER MIS WAS (okt 2026, na een klacht van de eigenaar). De wissel rekende één vast punt
+// rente, áltijd. Uitlenen was daardoor gratis geld, en — veel erger — te laat betalen was
+// GOEDKOPER dan op tijd betalen: de schuld bleef na de vervaldag even hoog, de inning pakte
+// hoogstens wat er in de kluis lag, en de rest werd stilzwijgend kwijtgescholden. Wie zijn
+// beurs leegkocht vóór vrijdag betaalde niets en kreeg er een weerwoord bovenop. Niet aflossen
+// was de verstandigste zet in het spel. En de lener werd nooit iets gevraagd.
 //
 // Hier zijn de Vetwissel (11) en de Vetnota (14) SAMENGEVOEGD. Ze waren twee mechanieken voor
 // hetzelfde ding — een schuld met een inningsrecht — en los gebouwd zou een lid twee
@@ -11146,10 +11187,12 @@ async function verhoorBede(client, doelId, inwilligen) {
 // weekendrust waarin de bot niet mag posten. De schuldenaar die WÍL betalen werd dus niet
 // herinnerd op de twee dagen die telden. Verval staat nu op VRIJDAG 11:00, met een aanmaning op
 // donderdag en vrijdagochtend — allemaal werkdagen waarop de bot mag spreken.
-const WISSEL_MAX = 3;          // hoogste bedrag dat je kunt uitlenen
-const WISSEL_RENTE = 1;        // vast, niet procentueel: bij bedragen van 1-3 is een percentage onzin
 const WISSEL_VERVAL = { dag: 5, uur: 11, min: 0 };  // vrijdag 11:00
-const loadWissels = () => readJSON('wissels.json', { open: [] });
+const loadWissels = () => {
+  const d = readJSON('wissels.json', { open: [], voorstellen: [] });
+  return { open: d.open || [], voorstellen: d.voorstellen || [] };
+};
+const saveWissels = (d) => writeJSON('wissels.json', { open: d.open || [], voorstellen: d.voorstellen || [] });
 
 // De eerstvolgende vrijdag 11:00 in Amsterdamse tijd, als timestamp.
 function volgendVervalMoment() {
@@ -11172,146 +11215,256 @@ function wisselsVan(userId) {
   };
 }
 
-async function verstrekWissel(client, vanId, naarId, bedrag) {
+// Een voorstel, geen voldongen feit. De punten bewegen pas als de lener tekent — een schuld
+// die een ander je kan opleggen is geen lening maar een strik, en dat was precies de klacht.
+async function stelWisselVoor(client, vanId, naarId, bedrag) {
   const members = loadMembers();
   if (!members[vanId]) return { ok: false, tekst: 'Alleen leden van de Kroket Illuminati lenen uit.' };
   if (!members[naarId]) return { ok: false, tekst: 'De Kroket God kent die volgeling niet.' };
-  if (vanId === naarId) return { ok: false, tekst: '_Uzelf geld lenen is boekhoudkundig gezien niets._' };
   if (isVerbannen(vanId) || isVerbannen(naarId)) {
     return { ok: false, tekst: '_Met het ballingschap wordt niet gehandeld._' };
   }
-  const n = Math.max(1, Math.min(WISSEL_MAX, parseInt(bedrag, 10) || 0));
-  if ((loadScores()[vanId] || 0) < n) {
-    return { ok: false, tekst: `_U kunt niet ${n} kroketpunt${n === 1 ? '' : 'en'} uitlenen die u niet heeft._` };
-  }
-  const { open } = loadWissels();
-  // Eén wissel per PAAR, in welke richting ook. Twee tegengestelde wissels tussen dezelfde twee
-  // leden is kringschuld: A leent B twee punten, B leent A twee punten, en op vrijdag betalen
-  // ze elkaar rente over hun eigen geld. Netto beweegt er niets behalve verwarring.
-  if (open.some(w => paarSleutel(w.vanId, w.naarId) === paarSleutel(vanId, naarId))) {
-    return { ok: false, tekst: `_Er staat al een wissel tussen u en ${members[naarId].bijnaam}, in de een of andere richting. Eén tegelijk._` };
-  }
-  if (open.filter(w => w.naarId === naarId).length >= 2) {
-    return { ok: false, tekst: `_${members[naarId].bijnaam} heeft al twee wissels open. De Raad staat geen derde toe._` };
-  }
+  const data = loadWissels();
+  const { voorstellen } = ruimVoorstellen(data.voorstellen, Date.now());
+  const toets = magVoorstellen({
+    open: data.open, voorstellen, vanId, naarId,
+    bedrag, standVan: loadScores()[vanId] || 0, sleutelVan: paarSleutel,
+  });
+  if (!toets.ok) return { ok: false, tekst: `_${toets.reden}_` };
 
-  // De punten bewegen METEEN, echte nulsom via verplaatsPunten: geen roem, geen inflatie.
-  const werkelijk = verplaatsPunten(vanId, naarId, n);
-  if (!werkelijk) return { ok: false, tekst: '_De overdracht mislukte; er bewoog niets._' };
+  const id = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+  const voorstel = { id, vanId, naarId, bedrag: toets.bedrag, ts: Date.now() };
+  saveWissels({ open: data.open, voorstellen: [...voorstellen, voorstel] });
+  const uren = Math.round(VOORSTEL_GELDIG_MS / 3_600_000);
+  await postToChannel(client, process.env.SLACK_CHANNEL_ID,
+    `📜 *EEN VETWISSEL WORDT AANGEBODEN* 📜\n\n` +
+    `> *${members[vanId].bijnaam}* biedt *${members[naarId].bijnaam}* *${toets.bedrag} kroketpunt${toets.bedrag === 1 ? '' : 'en'}* te leen.\n` +
+    `> Op tijd terugbetalen kost u *niets extra* — precies ${toets.bedrag} terug, vóór vrijdag 11:00.\n` +
+    `> Te laat, en de schuld groeit elke week door. De Raad dwingt niemand: tekent u niet\n` +
+    `> binnen ${uren} uur, dan vervalt het aanbod en is er niets gebeurd.\n\n— De Hoge Frituurraad` +
+    wekroep(naarId),
+    { knoppen: [
+      { type: 'button', text: { type: 'plain_text', text: '✍️ Tekenen', emoji: true }, action_id: `wissel_teken_${id}`, style: 'primary' },
+      { type: 'button', text: { type: 'plain_text', text: '✋ Weigeren', emoji: true }, action_id: `wissel_weiger_${id}` },
+    ] });
+  return { ok: true, tekst: `📜 _Aanbod gedaan aan ${members[naarId].bijnaam}. Hij moet zelf tekenen._` };
+}
+
+// Tekenen: nú pas bewegen de punten. Alle grenzen worden opnieuw getoetst, want tussen het
+// aanbod en de handtekening kan er van alles gebeurd zijn — de uitlener kan intussen blut zijn,
+// of er kan al een andere wissel tussen dit paar lopen.
+async function tekenWissel(client, id, userId) {
+  const data = loadWissels();
+  const { voorstellen } = ruimVoorstellen(data.voorstellen, Date.now());
+  const v = voorstelVan(voorstellen, id, Date.now());
+  if (!v) return { ok: false, tekst: '_Dat aanbod bestaat niet meer._' };
+  if (v.naarId !== userId) return { ok: false, tekst: '_Dit aanbod is niet aan u gericht._' };
+  const members = loadMembers();
+  const zonder = voorstellen.filter(x => x.id !== id);
+  const toets = magVoorstellen({
+    open: data.open, voorstellen: zonder, vanId: v.vanId, naarId: v.naarId,
+    bedrag: v.bedrag, standVan: loadScores()[v.vanId] || 0, sleutelVan: paarSleutel,
+  });
+  if (!toets.ok) {
+    saveWissels({ open: data.open, voorstellen: zonder });
+    return { ok: false, tekst: `_Het aanbod is vervallen: ${toets.reden}_` };
+  }
+  // Echte nulsom via verplaatsPunten: geen roem, geen inflatie.
+  const werkelijk = verplaatsPunten(v.vanId, v.naarId, v.bedrag);
+  if (!werkelijk) {
+    saveWissels({ open: data.open, voorstellen: zonder });
+    return { ok: false, tekst: '_De overdracht mislukte; er bewoog niets._' };
+  }
   const vervalTs = volgendVervalMoment();
-  open.push({ vanId, naarId, bedrag: werkelijk, rente: WISSEL_RENTE, vervalTs, ts: Date.now(), aangemaand: [] });
-  writeJSON('wissels.json', { open });
-  legRelatieVast(vanId, naarId, 'eer');   // uitlenen is een warme daad, ook al is het zakelijk
-  await telActie(client, vanId, 'wissel_verstrekt');
+  const wissel = { vanId: v.vanId, naarId: v.naarId, bedrag: werkelijk, afbetaald: 0, vervalTs, ts: Date.now() };
+  saveWissels({ open: [...data.open, wissel], voorstellen: zonder });
+  legRelatieVast(v.vanId, v.naarId, 'eer');   // uitlenen is een warme daad, ook al is het zakelijk
+  await telActie(client, v.vanId, 'wissel_verstrekt');
   const verval = new Date(vervalTs).toLocaleString('nl-NL', {
     timeZone: 'Europe/Amsterdam', weekday: 'long', hour: '2-digit', minute: '2-digit',
   });
   await postToChannel(client, process.env.SLACK_CHANNEL_ID,
     `📜 *EEN VETWISSEL IS GETEKEND* 📜\n\n` +
-    `> *${members[vanId].bijnaam}* leent *${members[naarId].bijnaam}* *${werkelijk} kroketpunt${werkelijk === 1 ? '' : 'en'}*.\n` +
-    `> Terug te betalen: *${werkelijk + WISSEL_RENTE}* — het geleende plus één punt rente.\n` +
-    `> Vervaldag: *${verval}*.\n` +
-    `> Lost hij niet af, dan mag de schuldeiser hem één keer bevoorrecht komen halen: een roof\n` +
-    `> die altijd slaagt, tot de hoogte van de schuld. Aflossen met \`/kroketgod los af\`.\n\n— De Hoge Frituurraad` +
-    wekroep(naarId));
-  logGebeurtenis('wissel', naarId, `${members[vanId].bijnaam} leende ${members[naarId].bijnaam} ${werkelijk} punten`, null, vanId);
-  return { ok: true, tekst: `📜 _Wissel getekend: ${werkelijk} uitgeleend aan ${members[naarId].bijnaam}, terug ${werkelijk + WISSEL_RENTE} op vrijdag._` };
+    `> *${members[v.naarId].bijnaam}* tekent voor *${werkelijk} kroketpunt${werkelijk === 1 ? '' : 'en'}* van *${members[v.vanId].bijnaam}*.\n` +
+    `> Terug te betalen vóór *${verval}*: *${werkelijk}* — renteloos, wie op tijd is betaalt niets extra.\n` +
+    `> Daarna groeit er elke week een boete bij, tot ${BOETE_MAX} punten bovenop het geleende,\n` +
+    `> en mag de schuldeiser innen of komen halen. Aflossen met \`/kroketgod los af\`.\n\n— De Hoge Frituurraad`);
+  logGebeurtenis('wissel', v.naarId, `${members[v.vanId].bijnaam} leende ${members[v.naarId].bijnaam} ${werkelijk} punten`, null, v.vanId);
+  return { ok: true, tekst: `📜 _Getekend. U heeft ${werkelijk} punten en betaalt er ${werkelijk} terug._` };
+}
+
+async function weigerWissel(client, id, userId) {
+  const data = loadWissels();
+  const v = voorstelVan(data.voorstellen, id, Date.now());
+  if (!v) return { ok: false, tekst: '_Dat aanbod bestaat niet meer._' };
+  if (v.naarId !== userId) return { ok: false, tekst: '_Dit aanbod is niet aan u gericht._' };
+  saveWissels({ open: data.open, voorstellen: data.voorstellen.filter(x => x.id !== id) });
+  const members = loadMembers();
+  await postToChannel(client, process.env.SLACK_CHANNEL_ID,
+    `📜 *HET AANBOD IS GEWEIGERD* 📜\n\n` +
+    `> *${members[v.naarId]?.bijnaam || 'De volgeling'}* slaat de ${v.bedrag} punten van ` +
+    `*${members[v.vanId]?.bijnaam || 'de schuldeiser'}* af. Geen schuld, geen vervaldag, niets gebeurd.\n\n— De Hoge Frituurraad`);
+  return { ok: true, tekst: '📜 _Geweigerd. Er is niets gebeurd._' };
 }
 
 async function losWisselAf(client, naarId, vanId = null) {
-  const { open } = loadWissels();
+  const data = loadWissels();
   const members = loadMembers();
-  const mijn = open.filter(w => w.naarId === naarId && (!vanId || w.vanId === vanId));
+  const mijn = data.open.filter(w => w.naarId === naarId && (!vanId || w.vanId === vanId));
   if (!mijn.length) return { ok: false, tekst: '_U heeft geen openstaande wissel._' };
+  const nu = Date.now();
   const w = mijn.sort((a, b) => a.vervalTs - b.vervalTs)[0];
-  const totaal = w.bedrag + w.rente;
-  if ((loadScores()[naarId] || 0) < totaal) {
-    return { ok: false, tekst: `_Aflossen kost ${totaal} kroketpunten (${w.bedrag} plus ${w.rente} rente). Zoveel heeft u niet._` };
+  const schuld = wisselTeBetalen(w, nu);
+  const stand = loadScores()[naarId] || 0;
+  if (stand <= 0) {
+    return { ok: false, tekst: `_U moet ${schuld} en u heeft niets. De schuld blijft staan en groeit vrijdag door._` };
   }
-  verplaatsPunten(naarId, w.vanId, totaal);
-  writeJSON('wissels.json', { open: open.filter(x => x !== w) });
-  await pasRoemAan(client, naarId, 1);      // op tijd betalen is aanzien waard
-  await telActie(client, naarId, 'wissel_afgelost');
+  // DEELBETALING MAG. Dat is nieuw en het is bewust: wie niet het hele bedrag heeft kon vroeger
+  // alleen maar niets doen, en niets doen was ook nog eens de voordeligste zet. Nu is elke
+  // betaling een echte zet — ze verlaagt de schuld én maakt een overval veel lastiger.
+  const betaald = verplaatsPunten(naarId, w.vanId, Math.min(schuld, stand));
+  const rest = naInning(w, betaald, nu);
+  saveWissels({ open: [...data.open.filter(x => x !== w), ...(rest ? [rest] : [])], voorstellen: data.voorstellen });
+  const opTijd = !wisselVervallen(w, nu);
+  if (!rest && opTijd) await pasRoemAan(client, naarId, 1);   // op tijd en volledig: dat is aanzien waard
+  if (!rest) await telActie(client, naarId, 'wissel_afgelost');
+  const kop = rest ? 'ER IS AFBETAALD' : 'DE WISSEL IS INGELOST';
   await postToChannel(client, process.env.SLACK_CHANNEL_ID,
-    `📜 *DE WISSEL IS INGELOST* 📜\n\n` +
-    `> *${members[naarId].bijnaam}* betaalt *${members[w.vanId].bijnaam}* ${totaal} kroketpunten terug\n` +
-    `> — het geleende plus de rente, vóór de vervaldag. *+1 roem* voor wie zijn woord houdt.\n\n— De Hoge Frituurraad`);
-  logGebeurtenis('wissel', naarId, `${members[naarId].bijnaam} loste de wissel bij ${members[w.vanId].bijnaam} af (${totaal})`, null, w.vanId);
-  return { ok: true, tekst: `📜 _Afgelost: ${totaal} betaald aan ${members[w.vanId].bijnaam}. +1 roem._` };
+    `📜 *${kop}* 📜\n\n` +
+    `> *${members[naarId].bijnaam}* betaalt *${members[w.vanId].bijnaam}* ${betaald} kroketpunt${betaald === 1 ? '' : 'en'}.\n` +
+    (rest
+      ? `> Er staat nog *${wisselTeBetalen(rest, nu)}* open. Dat groeit vrijdag door — maar wie afbetaalt\n` +
+        `> is wél een stuk moeilijker te overvallen.\n`
+      : opTijd
+        ? `> Op tijd en volledig, renteloos zoals het hoort. *+1 roem* voor wie zijn woord houdt.\n`
+        : `> De schuld is voldaan, zij het na de vervaldag. Geen roem — die was voor wie op tijd was.\n`) +
+    `\n— De Hoge Frituurraad`);
+  logGebeurtenis('wissel', naarId, `${members[naarId].bijnaam} betaalde ${betaald} aan ${members[w.vanId].bijnaam}`, null, w.vanId);
+  return { ok: true, tekst: rest ? `📜 _${betaald} betaald. Nog ${wisselTeBetalen(rest, nu)} open._` : `📜 _Afgelost: ${betaald} betaald.${opTijd ? ' +1 roem.' : ''}_` };
 }
 
 // Kwijtschelden — het beste idee uit de Vetnota. Kost de schuldeiser zijn inleg maar levert
 // aanzien op: de schuld verdwijnt, en de kwijtschelding staat in het kanaal.
 async function scheldWisselKwijt(client, vanId, naarId) {
-  const { open } = loadWissels();
+  const data = loadWissels();
   const members = loadMembers();
-  const w = open.find(x => x.vanId === vanId && x.naarId === naarId);
+  const w = data.open.find(x => x.vanId === vanId && x.naarId === naarId);
   if (!w) return { ok: false, tekst: '_U heeft geen wissel op die naam openstaan._' };
-  writeJSON('wissels.json', { open: open.filter(x => x !== w) });
+  saveWissels({ open: data.open.filter(x => x !== w), voorstellen: data.voorstellen });
   await pasRoemAan(client, vanId, 2);
-  legRelatieVast(vanId, naarId, 'eer');
+  // Kwijtschelden is herstel, geen afkoopsom: het mag de bladzijde verwarmen ook als er nog
+  // een claim tegen de schuldeiser openstaat.
+  legRelatieVast(vanId, naarId, 'eer', 1, { ondanksClaim: true });
   await postToChannel(client, process.env.SLACK_CHANNEL_ID,
     `📜 *EEN SCHULD IS KWIJTGESCHOLDEN* 📜\n\n` +
     `> *${members[vanId].bijnaam}* scheurt de wissel van *${members[naarId].bijnaam}* doormidden.\n` +
-    `> ${w.bedrag} kroketpunt${w.bedrag === 1 ? '' : 'en'} en de rente: weg, zonder tegenprestatie.\n` +
+    `> ${wisselTeBetalen(w, Date.now())} kroketpunt${wisselTeBetalen(w, Date.now()) === 1 ? '' : 'en'}: weg, zonder tegenprestatie.\n` +
     `> *+2 roem* — wie een schuld laat vallen die hij mocht innen, staat hoger dan wie hem int.\n\n— De Hoge Frituurraad` +
     wekroep(naarId));
   logGebeurtenis('genade', naarId, `${members[vanId].bijnaam} schold de wissel van ${members[naarId].bijnaam} kwijt`, null, vanId);
   return { ok: true, tekst: `📜 _Kwijtgescholden. +2 roem._` };
 }
 
-// Het inningsrecht: één bevoorrechte roof die altijd slaagt, tot de hoogte van de schuld.
-// Geldt van de vervaldag tot en met donderdag daarna, dus alleen op werkdagen.
-function heeftInningsrecht(vanId, naarId) {
+function vervallenWisselVan(vanId, naarId) {
   const w = loadWissels().open.find(x => x.vanId === vanId && x.naarId === naarId);
-  if (!w || Date.now() < w.vervalTs) return null;
-  return w;
+  return w && wisselVervallen(w, Date.now()) ? w : null;
 }
 
+// ── Innen: de veilige weg ────────────────────────────────────────────────────
+// Pakt wat er in de kluis ligt, meer niet. De restschuld BLIJFT STAAN en groeit vrijdag door —
+// dat is het hele verschil met vroeger, toen een lege kluis de schuld liet verdampen.
 async function inWissel(client, vanId, naarId) {
-  const w = heeftInningsrecht(vanId, naarId);
+  const nu = Date.now();
+  const data = loadWissels();
   const members = loadMembers();
-  if (!w) return { ok: false, tekst: '_Er staat geen vervallen wissel op die naam._' };
-  const schuld = w.bedrag + w.rente;
-  const aanwezig = loadScores()[naarId] || 0;
-  const geind = Math.min(schuld, aanwezig);
-  const { open } = loadWissels();
-  writeJSON('wissels.json', { open: open.filter(x => x !== w) });
+  const w = data.open.find(x => x.vanId === vanId && x.naarId === naarId);
+  if (!w) return { ok: false, tekst: '_Er staat geen wissel op die naam._' };
+  if (!wisselVervallen(w, nu)) return { ok: false, tekst: '_De vervaldag is nog niet geweest. Tot dan is het gewoon een lening._' };
+  const schuld = wisselTeBetalen(w, nu);
+  const geind = Math.min(schuld, loadScores()[naarId] || 0);
   if (geind > 0) verplaatsPunten(naarId, vanId, geind);
-  // Innen is eenzijdig, maar het is géén inbraak. Dit boekte als `roof_gelukt`, waardoor de
-  // claim "hij kraakte uw kluis" zei over iemand die gewoon zijn eigen geld ophaalde — een
-  // leugen in de tekst en twee punten te zwaar op de bladzijde.
-  //
-  // `wissel_geind` staat niet in KERF_GEWICHT, en daarmee slaat boekVerlies zijn hele paar-blok
-  // over. Dat is precies de bedoeling: geen kerf (die verhoogt de duelinzet, en wel vóór de
-  // wanbetaler tegen zijn schuldeiser), en geen claim (die gaf hem een knop "vergeven" met +1
-  // roem tegenover de man die hij niet terugbetaalde, plus een tweede weerwoord bovenop het
-  // weerwoord dat hij hieronder al krijgt). Het verlies zelf blijft wel geboekt: er zijn echt
-  // punten weg. De bladzijde doen we daarom met de hand, één stap kouder — precies de +1 die
-  // het uitlenen opleverde, zodat de hele boog van de wissel op nul uitkomt.
+  const rest = naInning(w, geind, nu);
+  saveWissels({ open: [...data.open.filter(x => x !== w), ...(rest ? [rest] : [])], voorstellen: data.voorstellen });
   if (geind > 0) {
+    // Innen is eenzijdig, maar het is géén inbraak — zie wissel_geind in lib/paarboek.js. Geen
+    // kerf, geen claim, en sinds de herziening ook GEEN weerwoord meer voor de wanbetaler: een
+    // straf die een cadeau bevat is geen straf. Wie een weerwoord wil, moet een overval
+    // overleven (hieronder).
     boekVerlies(naarId, geind, vanId, 'wissel_geind');
     try {
       const pb = boekDaad(loadPaarboek(), naarId, vanId, 'wissel_geind', dagSleutel(), { dader: vanId });
       if (pb.gewijzigd) savePaarboek(pb.boek);
     } catch (err) { console.warn('⚠️ Paarboek bijwerken na wisselinning mislukt:', err.message); }
-    // Het slachtoffer houdt een weerwoord. Zo is wanbetaling een keuze met gevolgen in twee
-    // richtingen, in plaats van een straf zonder tegenzet.
-    geefWeerwoord(naarId, vanId, 'een geïnde vetwissel');
   }
-  const rest = schuld - geind;
   await postToChannel(client, process.env.SLACK_CHANNEL_ID,
-    `🥷 *DE WISSEL IS GEÏND* 🥷\n\n` +
+    `🧾 *DE WISSEL IS GEÏND* 🧾\n\n` +
     `> *${members[vanId].bijnaam}* haalt de vervallen wissel bij *${members[naarId].bijnaam}* op.\n` +
-    `> Schuld: ${schuld}. Geïnd: *${geind}*.${rest > 0 ? ` De resterende ${rest} viel niet te halen — die kluis was leeg.` : ''}\n` +
-    `> Een geïnde wissel kerft, en ${members[naarId].bijnaam} houdt 24 uur een weerwoord.\n\n— De Hoge Frituurraad` +
-    wekroep(naarId));
+    `> Schuld: ${schuld}. Geïnd: *${geind}*.\n` +
+    (rest
+      ? `> Er blijft *${wisselTeBetalen(rest, nu)}* openstaan. Een lege kluis wist niets meer uit —\n` +
+        `> de rekening schuift door en groeit vrijdag opnieuw.\n`
+      : `> De schuld is voldaan.\n`) +
+    `\n— De Hoge Frituurraad` + wekroep(naarId));
   logGebeurtenis('wissel', naarId, `${members[vanId].bijnaam} inde ${geind} bij ${members[naarId].bijnaam}`, null, vanId);
-  return { ok: true, tekst: `🥷 _Geïnd: ${geind} kroketpunten bij ${members[naarId].bijnaam}._` };
+  return { ok: true, tekst: `🧾 _Geïnd: ${geind}.${rest ? ` Nog ${wisselTeBetalen(rest, nu)} open.` : ''}_` };
+}
+
+// ── De Overval: zélf gaan halen, met een greep bovenop ───────────────────────
+// Innen is veilig en saai. Dit is de gok: slaagt hij, dan haalt u de hele schuld plus een greep
+// uit de kluis. Mislukt hij, dan staat u met lege handen, ligt uw recht een dag stil, en houdt
+// uw schuldenaar 24 uur een weerwoord tegen u. Dáár hoort een weerwoord thuis — als beloning
+// voor wie een overval doorstaat, niet als cadeautje voor wie simpelweg niet betaalde.
+async function overvalWissel(client, vanId, naarId) {
+  const nu = Date.now();
+  const data = loadWissels();
+  const members = loadMembers();
+  const w = data.open.find(x => x.vanId === vanId && x.naarId === naarId);
+  const mag = magOvervallen(w, nu);
+  if (!mag.ok) return { ok: false, tekst: `_${mag.reden}_` };
+  const uitkomst = doeOverval(w, nu, loadScores()[naarId] || 0, Math.random());
+  const over = [...data.open.filter(x => x !== w), ...(uitkomst.wissel ? [uitkomst.wissel] : [])];
+  saveWissels({ open: over, voorstellen: data.voorstellen });
+  const pct = Math.round(uitkomst.kans * 100);
+
+  if (!uitkomst.gelukt) {
+    geefWeerwoord(naarId, vanId, 'een afgeslagen overval');
+    await postToChannel(client, process.env.SLACK_CHANNEL_ID,
+      `🛡️ *DE OVERVAL IS AFGESLAGEN* 🛡️\n\n` +
+      `> *${members[vanId].bijnaam}* klom over de schutting bij *${members[naarId].bijnaam}* — en vond de wacht.\n` +
+      `> Kans was ${pct}%. Niets buitgemaakt, de schuld van ${uitkomst.schuld} blijft staan.\n` +
+      `> Een dag geen nieuwe poging, en ${members[naarId].bijnaam} houdt 24 uur een weerwoord.\n\n— De Hoge Frituurraad` +
+      wekroep(vanId));
+    logGebeurtenis('wissel', vanId, `${members[vanId].bijnaam} mislukte een overval op ${members[naarId].bijnaam}`, null, naarId);
+    return { ok: true, tekst: `🛡️ _Mislukt (${pct}% kans). Morgen weer._` };
+  }
+
+  const totaal = uitkomst.geind + uitkomst.buit;
+  if (totaal > 0) verplaatsPunten(naarId, vanId, totaal);
+  if (uitkomst.geind > 0) {
+    boekVerlies(naarId, uitkomst.geind, vanId, 'wissel_geind');
+    try {
+      const pb = boekDaad(loadPaarboek(), naarId, vanId, 'wissel_geind', dagSleutel(), { dader: vanId });
+      if (pb.gewijzigd) savePaarboek(pb.boek);
+    } catch (err) { console.warn('⚠️ Paarboek bijwerken na overval mislukt:', err.message); }
+  }
+  // De GREEP is geen incasso maar buit: die boekt als een geslaagde roof, met alles erop en
+  // eraan — kerf, bladzijde en een claim voor wie bestolen is.
+  if (uitkomst.buit > 0) boekVerlies(naarId, uitkomst.buit, vanId, 'roof_gelukt');
+  await postToChannel(client, process.env.SLACK_CHANNEL_ID,
+    `🥷 *DE OVERVAL IS GESLAAGD* 🥷\n\n` +
+    `> *${members[vanId].bijnaam}* gaat de schuld bij *${members[naarId].bijnaam}* zélf halen. Kans was ${pct}%.\n` +
+    `> Schuld ingelost: *${uitkomst.geind}*${uitkomst.buit > 0 ? `, en nog *${uitkomst.buit}* meegenomen als buit` : ''}.\n` +
+    (uitkomst.wissel
+      ? `> De kluis was te mager: er staat nog *${wisselTeBetalen(uitkomst.wissel, nu)}* open.\n`
+      : `> De wissel is daarmee gesloten.\n`) +
+    `\n— De Hoge Frituurraad` + wekroep(naarId));
+  logGebeurtenis('wissel', naarId, `${members[vanId].bijnaam} overviel ${members[naarId].bijnaam} voor ${totaal}`, null, vanId);
+  return { ok: true, tekst: `🥷 _Geslaagd (${pct}% kans): ${totaal} binnengehaald._` };
 }
 
 // Donderdag 09:15 en vrijdag 09:15 — de aanmaning. Op werkdagen, want de bot zwijgt in het
-// weekend en een deadline zonder herinnering is een deadline die je mist.
+// weekend en een deadline zonder herinnering is een deadline die je mist. Er staat één knop
+// onder: aflossen moet één klik zijn, anders is "ik was het vergeten" een geldig excuus.
 async function maanWisselsAan(client) {
   const { open } = loadWissels();
   const members = loadMembers();
@@ -11320,29 +11473,48 @@ async function maanWisselsAan(client) {
   if (!bijna.length) return;
   const regels = bijna.map(w => {
     const uren = Math.max(1, Math.round((w.vervalTs - nu) / 3_600_000));
-    return `> 📜 *${members[w.naarId].bijnaam}* → *${members[w.vanId].bijnaam}*: ${w.bedrag + w.rente} te betalen, nog ${uren} uur.`;
+    return `> 📜 *${members[w.naarId].bijnaam}* → *${members[w.vanId].bijnaam}*: ${wisselTeBetalen(w, nu)} te betalen, nog ${uren} uur.`;
   });
   await postToChannel(client, process.env.SLACK_CHANNEL_ID,
     `📜 *DE VETWISSELS LOPEN AF* 📜\n\n${regels.join('\n')}\n\n` +
-    `> Aflossen met \`/kroketgod los af\`. Na de vervaldag mag de schuldeiser komen halen.\n\n— De Hoge Frituurraad` +
-    wekroep(...bijna.map(w => w.naarId)));
+    `> Nu betalen kost precies het geleende — renteloos. Na vrijdag 11:00 komt er elke week een\n` +
+    `> boete bij, tot ${BOETE_MAX} punten bovenop, en mag de schuldeiser innen of komen halen.\n\n— De Hoge Frituurraad` +
+    wekroep(...bijna.map(w => w.naarId)),
+    { knoppen: [{ type: 'button', text: { type: 'plain_text', text: '💰 Aflossen', emoji: true }, action_id: 'wissel_losaf', style: 'primary' }] });
 }
 
 // Vrijdag 11:05 — wie niet afloste, staat er nu voor. Geen automatische inning: het RECHT gaat
 // open en de schuldeiser moet er zelf naar grijpen. Een schuld die zichzelf int, is een boete.
+//
+// Drie knoppen per schuld, want dit is het moment waarop de wissel interessant wordt: netjes
+// innen, de gok wagen, of grootmoedig zijn. Slack neemt hoogstens vijf knoppen per bericht, dus
+// bij meerdere vervallen wissels krijgt elke schuld zijn eigen bericht.
 async function meldVervallenWissels(client) {
+  const nu = Date.now();
   const { open } = loadWissels();
   const members = loadMembers();
-  const vervallen = open.filter(w => Date.now() >= w.vervalTs && members[w.naarId] && members[w.vanId]);
+  const vervallen = open.filter(w => wisselVervallen(w, nu) && members[w.naarId] && members[w.vanId]);
   if (!vervallen.length) return;
-  const regels = vervallen.map(w =>
-    `> ⚠️ *${members[w.naarId].bijnaam}* liet ${w.bedrag + w.rente} onbetaald aan *${members[w.vanId].bijnaam}*.`);
-  await postToChannel(client, process.env.SLACK_CHANNEL_ID,
-    `⚠️ *VERVALLEN VETWISSELS* ⚠️\n\n${regels.join('\n')}\n\n` +
-    `> De schuldeiser mag nu innen met \`/kroketgod in\` — een roof die altijd slaagt, tot de\n` +
-    `> hoogte van de schuld. Hij mag ook kwijtschelden: \`/kroketgod scheld kwijt [naam]\`, en dat\n` +
-    `> levert *+2 roem* op. De keuze is aan hem; de Raad dwingt niets.\n\n— De Hoge Frituurraad` +
-    wekroep(...vervallen.map(w => w.vanId)));
+  for (const w of vervallen) {
+    const schuld = wisselTeBetalen(w, nu);
+    const boete = wisselBoete(w, nu);
+    const kans = Math.round(overvalKans(w, nu) * 100);
+    await postToChannel(client, process.env.SLACK_CHANNEL_ID,
+      `⚠️ *EEN VERVALLEN VETWISSEL* ⚠️\n\n` +
+      `> *${members[w.naarId].bijnaam}* liet de wissel van *${members[w.vanId].bijnaam}* verlopen.\n` +
+      `> Geleend: ${w.bedrag}. Boete: *+${boete}*. Nu te betalen: *${schuld}*.\n` +
+      `> ${members[w.vanId].bijnaam} kiest:\n` +
+      `> · 🧾 *Innen* — veilig, pakt wat er in de kluis ligt. De rest blijft staan en groeit door.\n` +
+      `> · 🥷 *Overvallen* — ${kans}% kans op de hele schuld plus ${OVERVAL_GREEP} buit. Mislukt het, dan\n` +
+      `>   ligt uw recht een dag stil en houdt hij een weerwoord tegen u.\n` +
+      `> · 🕊️ *Kwijtschelden* — alles weg, *+2 roem*.\n\n— De Hoge Frituurraad` +
+      wekroep(w.vanId),
+      { knoppen: [
+        { type: 'button', text: { type: 'plain_text', text: '🧾 Innen', emoji: true }, action_id: `wissel_in_${w.naarId}` },
+        { type: 'button', text: { type: 'plain_text', text: `🥷 Overvallen (${kans}%)`, emoji: true }, action_id: `wissel_overval_${w.naarId}`, style: 'danger' },
+        { type: 'button', text: { type: 'plain_text', text: '🕊️ Kwijtschelden', emoji: true }, action_id: `wissel_kwijt_${w.naarId}` },
+      ] });
+  }
 }
 
 // ── Het Vetpapier ────────────────────────────────────────────────────────────
@@ -13784,6 +13956,53 @@ const CLAIM_AANLEIDING = {
 };
 
 // Eén handler voor alle drie de keuzes; de keuze en de dader zitten in de action_id.
+// ── De Vetwissel: tekenen, weigeren, innen, overvallen, kwijtschelden ────────
+// Alle vijf lopen via dezelfde wrapper, want de uitkomst moet altijd efemeer terug naar wie
+// drukte. Het verschil tussen de knoppen en de commando's is alleen de ingang: de functies
+// eronder zijn dezelfde, dus ze kunnen niet uit elkaar lopen.
+async function meldKnopTerug(client, body, tekst) {
+  const kanaal = body.channel?.id || process.env.SLACK_CHANNEL_ID;
+  try { await postEphemeral(client, kanaal, body.user.id, tekst); } catch (_) { /* stil */ }
+}
+
+app.action(/^wissel_(teken|weiger)_/, async ({ ack, body, client }) => {
+  await ack();
+  try {
+    const m = String(body.actions?.[0]?.action_id || '').match(/^wissel_(teken|weiger)_(.+)$/);
+    if (!m) return;
+    const [, keuze, id] = m;
+    const uitkomst = keuze === 'teken'
+      ? await tekenWissel(client, id, body.user.id)
+      : await weigerWissel(client, id, body.user.id);
+    await meldKnopTerug(client, body, uitkomst.tekst);
+  } catch (err) { console.error('Fout bij wissel-knop:', err); }
+});
+
+app.action(/^wissel_(in|overval|kwijt)_/, async ({ ack, body, client }) => {
+  await ack();
+  try {
+    const m = String(body.actions?.[0]?.action_id || '').match(/^wissel_(in|overval|kwijt)_(.+)$/);
+    if (!m) return;
+    const [, keuze, naarId] = m;
+    // Alleen de SCHULDEISER mag deze drie knoppen indrukken. Ze staan in het kanaal, dus
+    // zonder deze toets kan iedereen zijn eigen schuld kwijtschelden.
+    const w = loadWissels().open.find(x => x.vanId === body.user.id && x.naarId === naarId);
+    if (!w) { await meldKnopTerug(client, body, '_Deze keuze is niet aan u._'); return; }
+    const uitkomst = keuze === 'in' ? await inWissel(client, body.user.id, naarId)
+      : keuze === 'overval' ? await overvalWissel(client, body.user.id, naarId)
+      : await scheldWisselKwijt(client, body.user.id, naarId);
+    await meldKnopTerug(client, body, uitkomst.tekst);
+  } catch (err) { console.error('Fout bij wissel-keuzeknop:', err); }
+});
+
+app.action('wissel_losaf', async ({ ack, body, client }) => {
+  await ack();
+  try {
+    const uitkomst = await losWisselAf(client, body.user.id);
+    await meldKnopTerug(client, body, uitkomst.tekst);
+  } catch (err) { console.error('Fout bij aflos-knop:', err); }
+});
+
 app.action(/^claim_(vergeven|vergelden|laten)_/, async ({ ack, body, client }) => {
   await ack();
   try {
@@ -13832,7 +14051,7 @@ registreerFeature({
           'wissels.json', 'vetpapier.json', 'handdruk.json'],
   help: [
     { gebruik: '/kroketgod kerfstok', verwacht: 'wat er tussen u en de anderen openstaat: kerven, twisten en uw weerwoord' },
-    { gebruik: '/kroketgod wissel', verwacht: 'uw vetwissels — lenen, aflossen, kwijtschelden of innen' },
+    { gebruik: '/kroketgod wissel', verwacht: 'uw vetwissels — aanbieden (de ander tekent), renteloos aflossen, of na de vervaldag innen, overvallen of kwijtschelden' },
     { gebruik: '/kroketgod sus', verwacht: 'sticht vrede in de vete van het Rijk — kost 1 eigen punt, levert 2 roem op (alleen als u geen partij bent)' },
     { gebruik: '/kroketgod bede', verwacht: 'als drager van de Zwarte Korst: leg één bede bij wie u het zwaarst trof' },
   ],
@@ -13876,19 +14095,22 @@ registreerFeature({
       regels.push(`> 🕳️ *U draagt de Zwarte Korst* — u verloor deze week het meest (${z.verlies} punten). Eén bede bij *${members[z.tegenId]?.bijnaam || 'onbekend'}*.`);
     }
     // Openstaande wissels horen hier: het is precies "wat er tussen u en de anderen staat".
+    const nuW = Date.now();
     const { uitgeleend, geleend } = wisselsVan(userId);
     for (const w of uitgeleend) {
-      const rest = Math.max(0, w.vervalTs - Date.now());
-      regels.push(rest > 0
-        ? `> 📜 *${members[w.naarId]?.bijnaam || '?'}* moet u *${w.bedrag + w.rente}* — nog ${resterendeTijd(rest)}`
-        : `> ⚠️ *${members[w.naarId]?.bijnaam || '?'}* liet *${w.bedrag + w.rente}* onbetaald — u mag innen of kwijtschelden`);
+      const over = Math.max(0, w.vervalTs - nuW);
+      regels.push(over > 0
+        ? `> 📜 *${members[w.naarId]?.bijnaam || '?'}* moet u *${wisselTeBetalen(w, nuW)}* — nog ${resterendeTijd(over)}, renteloos`
+        : `> ⚠️ *${members[w.naarId]?.bijnaam || '?'}* liet *${wisselTeBetalen(w, nuW)}* onbetaald (boete +${wisselBoete(w, nuW)}) — innen, overvallen (${Math.round(overvalKans(w, nuW) * 100)}%) of kwijtschelden`);
     }
     for (const w of geleend) {
-      const rest = Math.max(0, w.vervalTs - Date.now());
-      regels.push(rest > 0
-        ? `> 📜 U moet *${members[w.vanId]?.bijnaam || '?'}* *${w.bedrag + w.rente}* — nog ${resterendeTijd(rest)}`
-        : `> ⚠️ U liet *${w.bedrag + w.rente}* onbetaald bij *${members[w.vanId]?.bijnaam || '?'}* — hij mag komen halen`);
+      const over = Math.max(0, w.vervalTs - nuW);
+      regels.push(over > 0
+        ? `> 📜 U moet *${members[w.vanId]?.bijnaam || '?'}* *${wisselTeBetalen(w, nuW)}* — nog ${resterendeTijd(over)}, renteloos`
+        : `> ⚠️ U liet *${wisselTeBetalen(w, nuW)}* onbetaald bij *${members[w.vanId]?.bijnaam || '?'}* (boete +${wisselBoete(w, nuW)}) — hij mag innen of komen halen`);
     }
+    // Eén knop als er iets te betalen valt: aflossen hoort één klik te zijn.
+    const heeftSchuld = geleend.length > 0;
 
     const korstenData = readJSON('dubbelekorst.json', { geschiedenis: [] });
     const korstenNu = korstenDezeWeek(korstenData.geschiedenis, userId, getMondayOfWeek());
@@ -13905,6 +14127,9 @@ registreerFeature({
         'een kroketje op een duelvonnis schaaft de kerfstok glad (+1 roem)' }] },
     ];
     const acties = [];
+    if (heeftSchuld) {
+      acties.push({ type: 'button', text: { type: 'plain_text', text: '💰 Wissel aflossen', emoji: true }, action_id: 'wissel_losaf' });
+    }
     if (draagtKorst) {
       acties.push({ type: 'button', text: { type: 'plain_text', text: '🕳️ Bede leggen', emoji: true }, action_id: 'open_bede', style: 'primary' });
     }
