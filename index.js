@@ -42,7 +42,7 @@ const { FEATURES, registreerFeature } = require('./lib/registry.js');
 const { BACKUP_BASIS, backupBestanden, controleerBackupDekking, maakBackup } = require('./lib/backup.js');
 const {
   WISSEL_MAX, WISSEL_MAX_OPEN, BOETE_MAX, VOORSTEL_GELDIG_MS, OVERVAL_GREEP,
-  teBetalen: wisselTeBetalen, boeteVan: wisselBoete, isVervallen: wisselVervallen, naInning,
+  teBetalen: wisselTeBetalen, boeteVan: wisselBoete, isVervallen: wisselVervallen, dagenTeLaat, naInning,
   overvalKans, magOvervallen, overval: doeOverval,
   magVoorstellen, ruimVoorstellen, voorstelVan,
 } = require('./lib/vetwissel.js');
@@ -7363,7 +7363,7 @@ async function voerKroketCommandoUit({ command, respond, client }) {
             `_Aanbieden: \`wissel [naam] [1-${WISSEL_MAX}]\` — de ander moet tekenen._\n` +
             `_Aflossen: \`los af\` (mag ook deels) · kwijtschelden: \`scheld kwijt [naam]\`_\n` +
             `_Na de vervaldag: \`in [naam]\` om te innen, of \`overval [naam]\` om te gokken._\n` +
-            `_Op tijd betalen is RENTELOOS. Te laat kost elke week een boete, tot ${BOETE_MAX} bovenop het geleende._`,
+            `_Op tijd betalen is RENTELOOS. Elke dag te laat legt er een boete bovenop, tot ${BOETE_MAX} bovenop het geleende._`,
           response_type: 'ephemeral',
         });
         return;
@@ -8847,7 +8847,7 @@ const CRON_LABELS = {
   '40 9 * * 1':      { label: 'Zwarte Korst' },
   '35 9 * * 1-5':    { label: 'Dubbele Korst' },
   '15 9 * * 4,5':    { label: 'Wissels aanmanen' },
-  '5 11 * * 5':      { label: 'Vervallen wissels' },
+  '5 11 * * 1-5':    { label: 'Vervallen wissels' },
   '20 10 * * 1':     { label: 'Vetpapier' },
   '25 10 * * 1':     { label: 'Blinde Handdruk' },
   '0 17 * * 5':      { label: 'Zegelverval' },
@@ -11240,8 +11240,8 @@ async function stelWisselVoor(client, vanId, naarId, bedrag) {
     `📜 *EEN VETWISSEL WORDT AANGEBODEN* 📜\n\n` +
     `> *${members[vanId].bijnaam}* biedt *${members[naarId].bijnaam}* *${toets.bedrag} kroketpunt${toets.bedrag === 1 ? '' : 'en'}* te leen.\n` +
     `> Op tijd terugbetalen kost u *niets extra* — precies ${toets.bedrag} terug, vóór vrijdag 11:00.\n` +
-    `> Te laat, en de schuld groeit elke week door. De Raad dwingt niemand: tekent u niet\n` +
-    `> binnen ${uren} uur, dan vervalt het aanbod en is er niets gebeurd.\n\n— De Hoge Frituurraad` +
+    `> Te laat, en de schuld groeit met elke dag die voorbijgaat.\n` +
+    `> De Raad dwingt niemand: tekent u niet binnen ${uren} uur, dan vervalt het aanbod.\n\n— De Hoge Frituurraad` +
     wekroep(naarId),
     { knoppen: [
       { type: 'button', text: { type: 'plain_text', text: '✍️ Tekenen', emoji: true }, action_id: `wissel_teken_${id}`, style: 'primary' },
@@ -11287,7 +11287,7 @@ async function tekenWissel(client, id, userId) {
     `📜 *EEN VETWISSEL IS GETEKEND* 📜\n\n` +
     `> *${members[v.naarId].bijnaam}* tekent voor *${werkelijk} kroketpunt${werkelijk === 1 ? '' : 'en'}* van *${members[v.vanId].bijnaam}*.\n` +
     `> Terug te betalen vóór *${verval}*: *${werkelijk}* — renteloos, wie op tijd is betaalt niets extra.\n` +
-    `> Daarna groeit er elke week een boete bij, tot ${BOETE_MAX} punten bovenop het geleende,\n` +
+    `> Daarna legt *elke dag* er een boete bovenop, tot ${BOETE_MAX} punten bovenop het geleende,\n` +
     `> en mag de schuldeiser innen of komen halen. Aflossen met \`/kroketgod los af\`.\n\n— De Hoge Frituurraad`);
   logGebeurtenis('wissel', v.naarId, `${members[v.vanId].bijnaam} leende ${members[v.naarId].bijnaam} ${werkelijk} punten`, null, v.vanId);
   return { ok: true, tekst: `📜 _Getekend. U heeft ${werkelijk} punten en betaalt er ${werkelijk} terug._` };
@@ -11478,7 +11478,7 @@ async function maanWisselsAan(client) {
   await postToChannel(client, process.env.SLACK_CHANNEL_ID,
     `📜 *DE VETWISSELS LOPEN AF* 📜\n\n${regels.join('\n')}\n\n` +
     `> Nu betalen kost precies het geleende — renteloos. Na vrijdag 11:00 komt er elke week een\n` +
-    `> boete bij, tot ${BOETE_MAX} punten bovenop, en mag de schuldeiser innen of komen halen.\n\n— De Hoge Frituurraad` +
+    `> boete bovenop, tot ${BOETE_MAX} punten, en mag de schuldeiser innen of komen halen.\n\n— De Hoge Frituurraad` +
     wekroep(...bijna.map(w => w.naarId)),
     { knoppen: [{ type: 'button', text: { type: 'plain_text', text: '💰 Aflossen', emoji: true }, action_id: 'wissel_losaf', style: 'primary' }] });
 }
@@ -11498,13 +11498,14 @@ async function meldVervallenWissels(client) {
   for (const w of vervallen) {
     const schuld = wisselTeBetalen(w, nu);
     const boete = wisselBoete(w, nu);
+    const dagen = dagenTeLaat(w, nu);
     const kans = Math.round(overvalKans(w, nu) * 100);
     await postToChannel(client, process.env.SLACK_CHANNEL_ID,
       `⚠️ *EEN VERVALLEN VETWISSEL* ⚠️\n\n` +
       `> *${members[w.naarId].bijnaam}* liet de wissel van *${members[w.vanId].bijnaam}* verlopen.\n` +
-      `> Geleend: ${w.bedrag}. Boete: *+${boete}*. Nu te betalen: *${schuld}*.\n` +
+      `> Geleend: ${w.bedrag}. ${dagen} dag${dagen === 1 ? '' : 'en'} te laat, boete *+${boete}*. Nu te betalen: *${schuld}*.\n` +
       `> ${members[w.vanId].bijnaam} kiest:\n` +
-      `> · 🧾 *Innen* — veilig, pakt wat er in de kluis ligt. De rest blijft staan en groeit door.\n` +
+      `> · 🧾 *Innen* — veilig, pakt wat er in de kluis ligt. De rest blijft staan en groeit elke dag door.\n` +
       `> · 🥷 *Overvallen* — ${kans}% kans op de hele schuld plus ${OVERVAL_GREEP} buit. Mislukt het, dan\n` +
       `>   ligt uw recht een dag stil en houdt hij een weerwoord tegen u.\n` +
       `> · 🕊️ *Kwijtschelden* — alles weg, *+2 roem*.\n\n— De Hoge Frituurraad` +
@@ -20948,7 +20949,11 @@ planCron('15 9 * * 4,5', async () => {
   catch (err) { console.error('⚠️ Wissels aanmanen mislukt:', err.message); }
 }, { timezone: 'Europe/Amsterdam' });
 
-planCron('5 11 * * 5', async () => {
+// Elke WERKDAG om 11:05, niet alleen op vrijdag. De boete loopt per dag, dus één melding per
+// week zou de druk die we net hebben ingebouwd weer wegnemen: je ziet pas zeven dagen later dat
+// je schuld is verdubbeld. Dit post niets zolang er niemand in gebreke is, en het stopt op de
+// dag dat er betaald wordt — het kanaal wordt dus alleen belast zolang het ergens over gaat.
+planCron('5 11 * * 1-5', async () => {
   try { await meldVervallenWissels(app.client); }
   catch (err) { console.error('⚠️ Vervallen wissels melden mislukt:', err.message); }
 }, { timezone: 'Europe/Amsterdam' });
