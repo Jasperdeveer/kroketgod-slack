@@ -126,6 +126,7 @@ const {
   vensterSleutels, snoeiVenster, dadenInVenster, aanspraakVan,
   stichtingsBezetting, bepaalAmbten, zegelBudget,
 } = require('./lib/ambten.js');
+const { ZAKGELD, uitdeelMomentGeweest, nogTeOntvangen, naUitkering, verdiendeStand, kampioenWaardig } = require('./lib/zakgeld.js');
 // Alleen wat index.js zélf gebruikt. De uitvoervalidatie (rijksgrens, uit-karakter, lege
 // respons) zit in lib/llm.js, waar élk modelantwoord langskomt — niet hier; die symbolen
 // stonden hier alleen nog als ongebruikte import.
@@ -1401,6 +1402,47 @@ function verplaatsPunten(vanId, naarId, gewenst) {
   pasScoreAan(vanId, -echt);
   pasScoreAan(naarId, echt);
   return echt;
+}
+
+// ── Zakgeld ────────────────────────────────────────────────────────────────────
+// Elk lid krijgt maandag om 08:00 ZAKGELD kroketpunten (regels en waarom: lib/zakgeld.js).
+// Kale boeking, géén pasScoreAanMetCheck: zakgeld levert geen roem, relikwie of verbondszegen op.
+// Eén scores-write en dan de lijst, zonder await ertussen — dus atomair binnen één Node-tick.
+registreerFeature({ naam: 'zakgeld', state: ['zakgeld.json'] });
+
+function zakgeldMomentGeweest(week) {
+  const nu = new Date();
+  const vandaag = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Amsterdam' }).format(nu);
+  const [uur, min] = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Europe/Amsterdam', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+  }).format(nu).split(':').map(Number);
+  return uitdeelMomentGeweest(week, vandaag, uur * 60 + min);
+}
+
+// Stil: deelt uit aan wie het deze week nog mist, en geeft hun ids terug.
+function zorgVoorZakgeld(week = getMondayOfWeek()) {
+  const resetWeek = readJSON('weekreset.json', { week: null }).week;
+  const state = readJSON('zakgeld.json', { week: null, ontvangen: [] });
+  const ids = nogTeOntvangen(state, week, Object.keys(loadMembers()), { resetWeek, momentGeweest: zakgeldMomentGeweest(week) });
+  if (!ids.length) return [];
+  const scores = loadScores();
+  for (const id of ids) scores[id] = Math.max(0, scores[id] || 0) + ZAKGELD;
+  saveScores(scores);
+  writeJSON('zakgeld.json', naUitkering(state, week, ids));
+  console.log(`💰 Zakgeld (${ZAKGELD}) uitgedeeld voor de week van ${week} aan ${ids.length} lid/leden.`);
+  return ids;
+}
+
+// Met kanaalbericht, maar alleen bij een echte uitdeelronde: kreeg ieder lid het tegelijk. Kreeg
+// alleen een nieuwkomer het, dan blijft het stil — "ieder lid kreeg zakgeld" zou dan niet kloppen.
+async function deelZakgeldUit(client) {
+  const ids = zorgVoorZakgeld();
+  if (ids.length && ids.length === Object.keys(loadMembers()).length) {
+    await postToChannel(client, process.env.SLACK_CHANNEL_ID,
+      `💰 *ZAKGELD* 💰\n\n> De Hoge Frituurraad heeft ieder lid *${ZAKGELD} kroketpunten* zakgeld toegestopt. ` +
+      `Zet ze in tegen de weekvijand, voor een roof of in de winkel — of houd ze vast tot zondag.\n\n— De Hoge Frituurraad`);
+  }
+  return ids;
 }
 
 // ── NASPEL: het kleine grut ná een spelactie ──────────────────────────────────
@@ -3105,16 +3147,21 @@ async function controleerAchievements(client, userId, oudeScore, nieuweScore, op
   const bijnaam = members[userId]?.bijnaam || 'Onbekende volgeling';
 
   let aangepast = false;
+  // Score-relikwieën meten wat u deze week bovenop het zakgeld verdiende. Op de kale stand lagen
+  // de eerste twee (1 en 5 punten) anders al klaar voordat u iets deed — en gingen ze stil over,
+  // want de oude stand lag dan al boven de drempel en er volgde geen aankondiging.
+  const oudVerdiend = verdiendeStand(oudeScore);
+  const nieuwVerdiend = verdiendeStand(nieuweScore);
 
   for (const a of ACHIEVEMENTS) {
     if (eigen.has(a.id)) continue;
 
-    if (nieuweScore >= a.drempel) {
+    if (nieuwVerdiend >= a.drempel) {
       eigen.add(a.id);
       aangepast = true;
 
       // Alleen aankondigen als de drempel NU is gepasseerd (oude score lag eronder)
-      if (oudeScore < a.drempel) {
+      if (oudVerdiend < a.drempel) {
         try {
           if (!naspelRegel(naspel, `🏆 *Relikwie* — ${bijnaam}: *${a.naam}* (_${a.tekst}_)`, userId)) {
             await postToChannel(client, process.env.SLACK_CHANNEL_ID,
@@ -3258,7 +3305,7 @@ function backfillAchievements() {
   for (const [userId, score] of Object.entries(scores)) {
     const eigen = new Set(all[userId] || []);
     for (const a of ACHIEVEMENTS) {
-      if (score >= a.drempel && !eigen.has(a.id)) {
+      if (verdiendeStand(score) >= a.drempel && !eigen.has(a.id)) {
         eigen.add(a.id);
         gewijzigd = true;
       }
@@ -3280,9 +3327,10 @@ function backfillRoem() {
   const roemData = loadRoem();
   let gewijzigd = false;
 
+  // Het zakgeld telt niet mee: dat is een cadeau, geen verdienste.
   for (const [userId, score] of Object.entries(scores)) {
-    if (roemData[userId] === undefined && score > 0) {
-      roemData[userId] = score;
+    if (roemData[userId] === undefined && verdiendeStand(score) > 0) {
+      roemData[userId] = verdiendeStand(score);
       gewijzigd = true;
     }
   }
@@ -4973,9 +5021,13 @@ OUTPUT: Only the prompt. No explanation, no quotes.`,
 
 async function genereerStem(tekst) {
   // Pollinations openai-audio endpoint. Houdt het kort (< 500 chars) voor stabiliteit.
-  const kort = tekst.replace(/[*_>⚜️📜🥄🥉🥈🥇⚖️🏆💎]/g, '').replace(/\n+/g, ' ').trim().substring(0, 480);
-  const url = `https://text.pollinations.ai/${encodeURIComponent(kort)}?model=openai-audio&voice=onyx`;
+  // De `u`-vlag is dragend: zonder die vlag ziet de tekenklasse elke emoji als twee losse
+  // UTF-16-helften en knipt hij ook de eerste helft van andere emoji weg (👑 werd een los
+  // surrogaat). encodeURIComponent gooit daar een URIError op, en die brak voerWeekkampioenUit
+  // vóór de puntenreset af. Om dezelfde reden staat de URL nu binnen de try.
+  const kort = Array.from(tekst.replace(/[*_>⚜️📜🥄🥉🥈🥇⚖️🏆💎]/gu, '').replace(/\n+/g, ' ').trim()).slice(0, 480).join('');
   try {
+    const url = `https://text.pollinations.ai/${encodeURIComponent(kort)}?model=openai-audio&voice=onyx`;
     const response = await fetch(url, { timeout: 60000 });
     const contentType = response.headers.get('content-type') || '';
     if (contentType.includes('audio')) return await response.buffer();
@@ -6044,7 +6096,7 @@ async function voerKroketCommandoUit({ command, respond, client }) {
         const goud = heeftPowerup(id, 'gouden_korst') ? ' ✨' : ''; // Gouden Korst (Aflatenhandel)
         return `${rang.naam} — ${allMembers[id]?.bijnaam || id}${kroon}${goud}: ${score} pts deze week  _(${roem} roem)_${heldLabel}`;
       }).join('\n');
-      const tekst = `⚜️ DE HEILIGE RANGLIJST DER KROKET ILLUMINATI ⚜️\n\n${lijst}\n\n_Rang is permanent en stijgt nooit terug. Kroketpunten resetten elke week (zondagnacht); roem blijft voor altijd._\n\n— De Almachtige Kroket God`;
+      const tekst = `⚜️ DE HEILIGE RANGLIJST DER KROKET ILLUMINATI ⚜️\n\n${lijst}\n\n_Rang is permanent en stijgt nooit terug. Kroketpunten resetten elke week (zondagnacht), maandag 08:00 volgt ${ZAKGELD} zakgeld; roem blijft voor altijd._\n\n— De Almachtige Kroket God`;
       if (isDM) {
         await client.chat.postMessage({ channel: command.channel_id, text: schoonOutput(tekst) });
       } else {
@@ -7725,6 +7777,9 @@ app.view('intake_modal', async ({ ack, view, body, client }) => {
       scores[userId] = 0;
       saveScores(scores);
     }
+    // Een nieuw lid krijgt meteen het zakgeld van deze week (vóór maandag 08:00 wacht het op de
+    // uitdeelronde) — maar één keer: wie zich in dezelfde week opnieuw aanmeldt, staat al op de lijst.
+    zorgVoorZakgeld();
 
     let welkomPrompt = `Een nieuwe volgeling meldt zich aan bij de Kroket Illuminati. Hun bijnaam: ${bijnaam}.`;
     if (favorieteKroket) welkomPrompt += ` Favoriete kroket: ${favorieteKroket}.`;
@@ -11877,8 +11932,10 @@ function inhaalBonus(userId) {
     const alle = Object.keys(members).map(id => scores[id] || 0);
     if (alle.length < 2) return 0;
     const leider = Math.max(...alle);
-    // Iedereen staat gelijk (of niemand heeft punten) → niets bij te sturen.
-    if (leider <= 0) return 0;
+    // Iedereen staat gelijk (of niemand heeft punten) → niets bij te sturen. Gelijk staan is sinds
+    // het zakgeld de gewone maandagochtend; zonder de tweede toets kreeg dan iedereen de
+    // koploper-malus.
+    if (leider <= 0 || Math.min(...alle) === leider) return 0;
     if (eigen >= leider) return -KOPLOPER_MALUS;
     const achterstand = (leider - eigen) / leider; // 0 = koploper, 1 = op nul
     return Math.min(INHAAL_MAX, achterstand * INHAAL_MAX);
@@ -12859,6 +12916,8 @@ async function verkondigBeursDecreet(client, channelId = process.env.SLACK_CHANN
     'Wie stijgt, maakt zijn aandeelhouders rijk; wie faalt, sleept ze mee in het vet.');
 
   const laagste = `${MIN_KOERS} kroketpunt`;
+  const startKoers = beursKoers(ZAKGELD);
+  const startPrijs = `${startKoers} kroketpunt${startKoers === 1 ? '' : 'en'}`;
   const regels = [
     stripOndertekening(schoonOutput(aanhef)), // de code ondertekent zelf, onderaan
     '',
@@ -12866,7 +12925,7 @@ async function verkondigBeursDecreet(client, channelId = process.env.SLACK_CHANN
     '',
     `> *Wat kost een aandeel?* De weekstand van dat lid gedeeld door ${KOERS_DELER}, naar boven afgerond. ` +
       `Minimaal ${laagste}.`,
-    `> *Waarom maandag?* Dan staat iedereen op nul en kost élk aandeel ${laagste}. Wie pas donderdag instapt ` +
+    `> *Waarom maandag?* Dan staat iedereen gelijk op zijn zakgeld en kost élk aandeel ${startPrijs}. Wie pas donderdag instapt ` +
       `betaalt de volle prijs voor iemand die al bovenaan staat. Vroege overtuiging is goedkoop; meelopen is duur.`,
     `> *Wat levert het op?* Zondagnacht keert elk aandeel *roem* uit naar de eindstand: ` +
       DIVIDEND_PER_PLEK.map((r, i) => `plek ${i + 1} = ${r}`).join(', ') + ` roem per aandeel. Daarbuiten: niets.`,
@@ -16834,6 +16893,8 @@ function herstelLid(userId) {
     const act = loadActiviteit();
     act[userId] = { laatsteBericht: Date.now(), hersteld: Date.now() };
     saveActiviteit(act);
+    // Zakgeld als hij het deze week nog niet had (gearchiveerd vóór de laatste uitdeelronde).
+    zorgVoorZakgeld();
     console.log(`🕊️ ${rec.lid.bijnaam} hersteld uit het archief.`);
     return rec;
   } catch (err) {
@@ -17168,7 +17229,7 @@ const NASLAG = {
           })) });
         }
       }
-      blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: '`*` = Gouden Korst · `<` = u · kroketpunten resetten zondagnacht' }] });
+      blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: `\`*\` = Gouden Korst · \`<\` = u · kroketpunten resetten zondagnacht, maandag 08:00 ${ZAKGELD} zakgeld` }] });
       return blocks;
     },
   },
@@ -17537,7 +17598,7 @@ function bouwAppHomeBlocks(userId, melding = '', extraBlocks = []) {
     { type: 'button', text: { type: 'plain_text', text: '🔄 Verversen', emoji: true }, action_id: 'home_verversen' },
   ] });
   blocks.push({ type: 'context', elements: [{ type: 'mrkdwn',
-    text: `Kroketpunten resetten zondagnacht, roem blijft eeuwig · alle commando's via \`/kroketgod help\` · bijgewerkt ${new Date().toLocaleTimeString('nl-NL', { timeZone: 'Europe/Amsterdam', hour: '2-digit', minute: '2-digit' })}` }] });
+    text: `Kroketpunten resetten zondagnacht, maandag 08:00 ${ZAKGELD} zakgeld, roem blijft eeuwig · alle commando's via \`/kroketgod help\` · bijgewerkt ${new Date().toLocaleTimeString('nl-NL', { timeZone: 'Europe/Amsterdam', hour: '2-digit', minute: '2-digit' })}` }] });
   return blocks;
 }
 
@@ -19059,13 +19120,26 @@ registreerFeature({
 });
 
 // ── Cron: zondag 23:59 — weekkampioen & wekelijkse kroketpunten-reset ──────────
-// Kroketpunten resetten elke week (zondagnacht); roempunten blijven permanent staan.
+// Kroketpunten resetten elke week (zondagnacht); roempunten blijven permanent staan. Het zakgeld
+// volgt maandag 08:00 met een eigen cron (hieronder).
 
 planCron('59 23 * * 0', async () => {
   try {
     await voerWeekkampioenUit(app.client);
   } catch (error) {
     console.error('Fout bij weekkampioen:', error);
+  }
+}, { timezone: 'Europe/Amsterdam' });
+
+// ── Cron: maandag 08:00 — zakgeld ──────────────────────────────────────────────
+// Bewust zónder CRON_LABELS-entry: een dashboard-"overslaan" zou hier niets overslaan, want de
+// inhaalslag van 09:00 deelt een gemiste ronde alsnog uit. Een knop die niet doet wat hij zegt
+// is erger dan geen knop.
+planCron('0 8 * * 1', async () => {
+  try {
+    await deelZakgeldUit(app.client);
+  } catch (error) {
+    console.error('Fout bij zakgeld:', error);
   }
 }, { timezone: 'Europe/Amsterdam' });
 
@@ -19085,8 +19159,9 @@ async function voerWeekkampioenUit(client) {
     .filter(([id]) => beursLeden[id] && !isVerbannen(id))
     .sort((a, b) => b[1] - a[1] || beursLeden[a[0]].bijnaam.localeCompare(beursLeden[b[0]].bijnaam));
 
-  // Alleen een kampioen kronen als er deze week überhaupt punten zijn verdiend.
-  const heeftPunten = gesorteerd.length > 0 && (gesorteerd[0][1] || 0) > 0;
+  // Alleen een kampioen kronen als er deze week überhaupt punten zijn verdiend — dus als iemand
+  // boven het zakgeld uitkwam. Anders kroonde een week zonder spel wie niets uitgaf.
+  const heeftPunten = gesorteerd.length > 0 && kampioenWaardig(gesorteerd[0][1]);
   if (heeftPunten) {
     const members = loadMembers();
     const [kampioenId, kampioenScore] = gesorteerd[0];
@@ -19105,11 +19180,11 @@ async function voerWeekkampioenUit(client) {
 
     const tekst = await kroketResponseMetVangnet(
       `Het is zondagnacht — het einde van de kroketweek. Kondig ${kampioenBijnaam} aan als WEEKKAMPIOEN met ${kampioenScore} kroketpunten. ` +
-      `Dramatisch en plechtig, met kroning. Maak duidelijk dat de kroketpunten nu voor iedereen op nul gaan voor een frisse nieuwe week, ` +
+      `Dramatisch en plechtig, met kroning. Maak duidelijk dat de kroketpunten nu voor iedereen op nul gaan voor een frisse nieuwe week (maandagochtend volgt het zakgeld), ` +
       `maar dat de roempunten — de eeuwige prestige — voor altijd blijven staan. ` +
       `Verkondig ook dat ${kampioenBijnaam} de komende week DE PROFEET VAN DE FRITUUR is: één heilige zegen te vergeven via "/kroketgod zegen [naam]". Geen inleidingszin.`,
       500, false,
-      `👑 *DE WEEKKAMPIOEN* 👑\n\n> *${kampioenBijnaam}* wint de kroketweek met *${kampioenScore} kroketpunten* en is komende week DE PROFEET VAN DE FRITUUR (één zegen te vergeven via \`/kroketgod zegen [naam]\`).\n> De kroketpunten gaan op nul; de roem blijft eeuwig.\n\n— De Almachtige Kroket God`
+      `👑 *DE WEEKKAMPIOEN* 👑\n\n> *${kampioenBijnaam}* wint de kroketweek met *${kampioenScore} kroketpunten* en is komende week DE PROFEET VAN DE FRITUUR (één zegen te vergeven via \`/kroketgod zegen [naam]\`).\n> De kroketpunten gaan op nul (maandag 08:00 volgt het zakgeld); de roem blijft eeuwig.\n\n— De Almachtige Kroket God`
     );
     await postMetStem(client, process.env.SLACK_CHANNEL_ID, tekst);
   }
@@ -19128,7 +19203,12 @@ async function voerWeekkampioenUit(client) {
   // Marker voor de opstart-inhaalslag: welke week is als laatste gereset? (Bij de normale
   // zondag-23:59-run is dat de kómende week; bij een inhaalslag doordeweeks de huidige.)
   // Onvoorwaardelijk — óók zonder kampioen, anders blijft de inhaalslag dagelijks herhalen.
-  writeJSON('weekreset.json', { week: getMondayOfWeek(new Date(Date.now() + 26 * 3_600_000)) });
+  const nieuweWeek = getMondayOfWeek(new Date(Date.now() + 26 * 3_600_000));
+  writeJSON('weekreset.json', { week: nieuweWeek });
+  // De zakgeldlijst van die week leeg: de reset heeft net ieders punten weggeveegd, dus ook het
+  // zakgeld van een eventuele eerdere uitkering. De volgende uitdeelronde (maandag 08:00, of de
+  // inhaalslag van 09:00) vult hem weer.
+  writeJSON('zakgeld.json', { week: nieuweWeek, ontvangen: [] });
   logGebeurtenis('week_reset', null, heeftPunten ? 'Kroketpunten gereset; weekkampioen gekroond' : 'Kroketpunten gereset (geen punten deze week)');
   // Het wereldbord toont standen die nu allemaal op nul staan — direct bijwerken, anders
   // wijst het gepinde bericht het hele weekend nog naar de oude week.
@@ -20902,6 +20982,13 @@ async function voerLuideInhaalslagen(herkomst) {
     }
   } catch (err) {
     console.error('Fout bij weekreset-inhaalslag:', err);
+  }
+  // Zakgeld: ná de weekreset hierboven, want die leegt de lijst. Vangt een gemiste 08:00-ronde op
+  // (bot plat, of de reset zelf werd pas net ingehaald) en vult aan wie het deze week nog mist.
+  try {
+    await deelZakgeldUit(app.client);
+  } catch (err) {
+    console.error('Fout bij zakgeld-inhaalslag:', err);
   }
   // Seizoenscampagne: de fase wordt uit de datum berekend, dus een gemiste maandag-cron wordt
   // hier alsnog aangekondigd — en een seizoen dat tijdens de downtime uit de tijd liep, beslecht.
