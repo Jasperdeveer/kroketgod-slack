@@ -126,7 +126,10 @@ const {
   vensterSleutels, snoeiVenster, dadenInVenster, aanspraakVan,
   stichtingsBezetting, bepaalAmbten, zegelBudget,
 } = require('./lib/ambten.js');
-const { ZAKGELD, uitdeelMomentGeweest, nogTeOntvangen, naUitkering, verdiendeStand, kampioenWaardig } = require('./lib/zakgeld.js');
+const {
+  ZAKGELD, uitdeelMomentGeweest, nogTeOntvangen, naUitkering, verdiendeStand, kampioenWaardig,
+  beschermdTegenRoof, roofbaar,
+} = require('./lib/zakgeld.js');
 // Alleen wat index.js zélf gebruikt. De uitvoervalidatie (rijksgrens, uit-karakter, lege
 // respons) zit in lib/llm.js, waar élk modelantwoord langskomt — niet hier; die symbolen
 // stonden hier alleen nog als ongebruikte import.
@@ -1440,10 +1443,25 @@ async function deelZakgeldUit(client) {
   if (ids.length && ids.length === Object.keys(loadMembers()).length) {
     await postToChannel(client, process.env.SLACK_CHANNEL_ID,
       `💰 *ZAKGELD* 💰\n\n> De Hoge Frituurraad heeft ieder lid *${ZAKGELD} kroketpunten* zakgeld toegestopt. ` +
-      `Zet ze in tegen de weekvijand, voor een roof of in de winkel — of houd ze vast tot zondag.\n\n— De Hoge Frituurraad`);
+      `Zet ze in tegen de weekvijand, voor een roof of in de winkel — of houd ze vast tot zondag. ` +
+      `Tot en met woensdag kan niemand het u afroven.\n\n— De Hoge Frituurraad`);
   }
   return ids;
 }
+
+// Amsterdamse weekdag, maandag = 1 … zondag = 7.
+function amsWeekdag(nu = new Date()) {
+  const dag = new Intl.DateTimeFormat('en-US', { timeZone: 'Europe/Amsterdam', weekday: 'short' }).format(nu);
+  return ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].indexOf(dag) + 1;
+}
+
+// Zakgeld is tot en met woensdag niet te roven (zie lib/zakgeld.js). Beide geven de stand van NU.
+function zakgeldBescherming(userId) {
+  const z = readJSON('zakgeld.json', { week: null, ontvangen: [] });
+  return { ontvangen: z.week === getMondayOfWeek() && (z.ontvangen || []).includes(userId), weekdag: amsWeekdag() };
+}
+const roofbareStand = (userId) => roofbaar(loadScores()[userId] || 0, zakgeldBescherming(userId));
+const tegenRoofBeschermd = (userId) => beschermdTegenRoof(loadScores()[userId] || 0, zakgeldBescherming(userId));
 
 // ── NASPEL: het kleine grut ná een spelactie ──────────────────────────────────
 // Eén duel kon tot zeventien losse kanaalberichten opleveren: het vonnis, plus een eigen bericht voor
@@ -3439,7 +3457,7 @@ const COMMANDO_LIJST = [
   { gebruik: '/kroketgod eer [namen] voor [reden]', verwacht: '0–5 kroketpunten per lid — de Raad weegt uw reden (verplicht); meerdere namen met "en" of komma' },
   { gebruik: '/kroketgod ranglijst',  verwacht: 'wie staat waar in de hiërarchie' },
   { gebruik: '/kroketgod duel [naam]', verwacht: 'heilig frituurduel — winnaar pakt de inzet van de verliezer (1×/dag; openstaande kerven en een eeuwige twist verhogen de inzet)' },
-  { gebruik: '/kroketgod roof [naam]', verwacht: `de Grote Kroketroof — 40% kans op een buit (tot 6 punten), anders ${ROOF_BOETE} punt smartengeld (1×/week); het slachtoffer houdt daarna een weerwoord` },
+  { gebruik: '/kroketgod roof [naam]', verwacht: `de Grote Kroketroof — 40% kans op een buit (tot 6 punten), anders ${ROOF_BOETE} punt smartengeld (1×/week); het slachtoffer houdt daarna een weerwoord. Zakgeld is t/m woensdag niet te roven` },
   // GEEN interpolatie van VETBAD_MAX_INZET hier: deze tabel is een module-level literal die bij
   // het laden wordt geëvalueerd, terwijl die constante veel later wordt gedeclareerd. Dat gaf een
   // temporal-dead-zone-crash bij opstarten die `node -c` niet ziet.
@@ -6354,7 +6372,7 @@ async function voerKroketCommandoUit({ command, respond, client }) {
     if (input === 'roof' || input.startsWith('roof ')) {
       const doelNaam = input.replace(/^roof\s*/, '').trim();
       if (!doelNaam) {
-        await respond({ text: '_De Grote Kroketroof: `roof [naam]` — 40% kans op een flinke buit (tot 8 punten), anders betaalt u 2 punten smartengeld. Eén poging per week. Kies uw doelwit._', response_type: 'ephemeral' });
+        await respond({ text: `_De Grote Kroketroof: \`roof [naam]\` — 40% kans op een flinke buit (tot 6 punten), anders betaalt u ${ROOF_BOETE} punt smartengeld. Eén poging per week. Tot en met woensdag is ieders zakgeld (${ZAKGELD}) onaantastbaar. Kies uw doelwit._`, response_type: 'ephemeral' });
         return;
       }
       const gevonden = getMemberByNaam(doelNaam);
@@ -10928,6 +10946,11 @@ async function voerRoof(client, userId, doelId, channelId) {
   if ((scores[doelId] || 0) < ROOF_DOELWIT_MIN) {
     return { ok: false, tekst: `_${doelLid.bijnaam} bezit minder dan ${ROOF_DOELWIT_MIN} kroketpunten. Zelfs een dief heeft standaarden — kies een rijker doelwit._` };
   }
+  // Het zakgeld is tot en met woensdag onaantastbaar: de dief ziet alleen wat erboven ligt. Vóór
+  // de cooldown, zodat een doelwit dat alleen zakgeld heeft geen rooftocht van de week kost.
+  if (roofbareStand(doelId) < ROOF_DOELWIT_MIN) {
+    return { ok: false, tekst: `_De kluis van ${doelLid.bijnaam} is tot en met woensdag verzegeld: het zakgeld (${ZAKGELD}) is onaantastbaar, en wat erboven ligt is minder dan ${ROOF_DOELWIT_MIN} kroketpunten. Kies een rijker doelwit — of wacht tot donderdag._` };
+  }
   if ((scores[userId] || 0) < ROOF_DADER_MIN) {
     return { ok: false, tekst: `_Een rooftocht vereist minstens ${ROOF_DADER_MIN} kroketpunt als borg — mislukt de roof, dan betaalt u smartengeld._` };
   }
@@ -10955,7 +10978,13 @@ async function voerRoof(client, userId, doelId, channelId) {
   const basisKans = (0.40 + getGeluk(userId)) * (versterkt ? 0.5 : 1);
   const geslaagd = fortuin || (!beschermd && Math.random() < basisKans);
   if (geslaagd) {
-    const buit = Math.min(6, Math.max(2, Math.ceil((scores[doelId] || 0) * 0.5)));
+    // De buit wordt over de roofbare kluis berekend, niet over de hele stand: tot en met woensdag
+    // bestaat het zakgeld voor de dief niet. Vers gelezen, want sinds de toets zaten er awaits, en
+    // nooit meer dan er te halen valt (pasScoreAan klemt het slachtoffer op nul, maar zou de dief
+    // dan punten uit het niets geven).
+    const kluis = roofbareStand(doelId);
+    const zakgeldVeilig = tegenRoofBeschermd(doelId);
+    const buit = Math.min(kluis, 6, Math.max(2, Math.ceil(kluis * 0.5)));
     pasScoreAan(doelId, -buit);
     pasScoreAan(userId, buit);
     logGebeurtenis('roof', userId, `${dader.bijnaam} beroofde ${doelLid.bijnaam} van ${buit} kroketpunten`);
@@ -10970,7 +10999,8 @@ async function voerRoof(client, userId, doelId, channelId) {
       `🥷 *DE GROTE KROKETROOF* 🥷\n\n> In het holst van de nacht beroofde *${dader.bijnaam}* de kluis van ${doelLid.bijnaam}.\n\n— De Hoge Frituurraad`
     );
     const standNa = loadScores();
-    const standBlok = `\n\n💰 *DE BUIT*\n\n> ${dader.bijnaam}: *${standNa[userId] ?? 0} kroketpunten* (+${buit})\n> ${doelLid.bijnaam}: *${standNa[doelId] ?? 0} kroketpunten* (−${buit})`;
+    const standBlok = `\n\n💰 *DE BUIT*\n\n> ${dader.bijnaam}: *${standNa[userId] ?? 0} kroketpunten* (+${buit})\n> ${doelLid.bijnaam}: *${standNa[doelId] ?? 0} kroketpunten* (−${buit})` +
+      (zakgeldVeilig ? `\n> _Het zakgeld van ${doelLid.bijnaam} (${zakgeldVeilig}) bleef buiten schot — dat is tot en met woensdag onaantastbaar._` : '');
     const weerRoof = `\n\n⏳ _${doelLid.bijnaam} houdt 24 uur een weerwoord tegen ${dader.bijnaam}: één duel buiten de daglimiet, met 60% in zijn voordeel._`;
     await postToChannel(client, channelId, tekst + standBlok + weerRoof + wekroep(doelId));
     return { ok: true, tekst: `🥷 _De roof is geslaagd: ${buit} kroketpunten buitgemaakt._` };
@@ -17800,7 +17830,7 @@ function bouwDoelwitModal(callbackId, titel, kop, knop, userId) {
 }
 
 const doelwitModals = {
-  open_roof: () => ['modal_roof', 'De Grote Kroketroof', `🥷 *Beroof een medelid.* 40% kans op een buit (tot 6 punten); mislukt het, dan betaalt u ${ROOF_BOETE} punt smartengeld. Eén poging per week — die telt ook bij falen.\n_Wie u berooft, houdt 24 uur een weerwoord tegen u._`, 'Beroven'],
+  open_roof: () => ['modal_roof', 'De Grote Kroketroof', `🥷 *Beroof een medelid.* 40% kans op een buit (tot 6 punten); mislukt het, dan betaalt u ${ROOF_BOETE} punt smartengeld. Eén poging per week — die telt ook bij falen.\n_Tot en met woensdag is ieders zakgeld (${ZAKGELD}) onaantastbaar; u rooft alleen wat erboven ligt._\n_Wie u berooft, houdt 24 uur een weerwoord tegen u._`, 'Beroven'],
   winkel_koop_vloek: () => ['modal_vloek', 'Vloek der Slappe Korst', '😈 *Leg anoniem een vloek.* Diens eerstvolgende puntenwinst heeft 50% kans te verbranden. Uw naam blijft in de schaduw.', 'Vervloeken'],
   ambt_boekenzegel: () => ['modal_boekenzegel', 'Het Boekenzegel',
     '⚖️ *Onthul openbaar één verborgen feit* over een medelid — een beurspositie, wie een vloek legde, of hoe stil iemand is geweest. Het onderwerp krijgt 1 punt smartengeld voor de blootstelling.', 'Onthullen'],
