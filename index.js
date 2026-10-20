@@ -137,7 +137,7 @@ const {
 const {
   DECREET_MAX, HEFTIGHEDEN, HEFTIGHEID_STANDAARD, heftigheidLabel,
   kandidatenVoor, staatVoorDag, keuzeVan: handKeuzeVan, magSchrijven, magUitnodigen, naUitnodiging,
-  toetsDecreet,
+  toetsDecreet, lektLetterlijk,
 } = require('./lib/verborgenhand.js');
 // Alleen wat index.js zélf gebruikt. De uitvoervalidatie (rijksgrens, uit-karakter, lege
 // respons) zit in lib/llm.js, waar élk modelantwoord langskomt — niet hier; die symbolen
@@ -3575,34 +3575,58 @@ async function sluitUitnodiging(responseUrl) {
   } catch (_) {}
 }
 
-// De uitspraak: eerst het verhaal van het gevonden perkament, dan het decreet, dan de Kroket God
-// zelf in zijn nieuwe stemming. Eén LLM-aanroep die twee delen levert, gescheiden door §§§; zonder
-// scheiding komt de hele tekst als verhaal boven het decreet te staan.
+// ── Nooit letterlijk ──────────────────────────────────────────────────────────
+// Een anoniem decreet (Verborgen Hand of /kroketgod decreet) verkondigt de Kroket God alleen
+// verkapt, in zijn eigen woorden: aan woordkeus, spelling of leestekens zou het genootschap
+// kunnen herleiden wie het schreef. Het model krijgt die regel mee, en lektLetterlijk controleert
+// achteraf. Lekt het toch, dan één nieuwe poging; lekt die ook, dan het vangnet zonder inhoud.
+const VERKAP_REGELS =
+  'Citeer de tekst NOOIT letterlijk, ook niet in stukjes, en gebruik geen aanhalingstekens. ' +
+  'Verwoord de strekking verkapt en in je eigen woorden — als raadsel, beeldspraak of profetie — zodat het genootschap merkt wat er geldt, ' +
+  'maar niemand aan woordkeus, spelling, leestekens, uitroepen of uitdrukkingen kan herleiden wie het schreef. Neem geen opvallende woorden uit de tekst over.';
+
+async function verkapteTekst(prompt, decreet, maxTokens, vangnet) {
+  for (let poging = 0; poging < 2; poging++) {
+    const extra = poging ? '\n\nLET OP: je vorige poging nam letterlijk woorden uit de tekst over. Herformuleer alles.' : '';
+    const ruw = await kroketResponseMetVangnet(prompt + extra, maxTokens, false, vangnet);
+    if (ruw === vangnet || !lektLetterlijk(ruw, decreet)) return ruw;
+    console.warn('⚠️ Verkapping nam letterlijke tekst over — opnieuw.'); // bewust zonder de tekst
+  }
+  return vangnet;
+}
+
+// Elke regel als citaat, zonder ondertekening: het fragment komt midden in een groter bericht.
+const alsCitaat = (t) => stripOndertekening(String(t || '')).split('\n')
+  .map(r => (r.startsWith('>') ? r : `> ${r}`)).join('\n');
+
+// De uitspraak: eerst het verhaal van het gevonden perkament, dan de stemming, dan de Kroket God
+// zelf, die verkapt laat doorschemeren wat er op het perkament stond. Eén LLM-aanroep die twee
+// delen levert, gescheiden door §§§; zonder scheiding komt de hele tekst als verhaal bovenaan.
 // Bij een echte keuze is de stemming al opgeslagen vóór deze aanroep, dus de systeemprompt
 // spreekt hier al in de nieuwe stemming. Een proef slaat niets op en zegt het er dus bij.
 async function spreekVerborgenHand(client, kanaal, keuze, { proef = false } = {}) {
   const stemming = STEMMINGEN.find(s => s.naam === keuze.stemming) || getDagelijkseStemming();
   const vangnet =
     '> Op de rand van de frituur lag een perkament dat er gisteren nog niet lag. Niemand zag wie het neerlegde; het zegel was nog warm.' +
-    `\n§§§\n> De Kroket God heeft het gelezen. Vanaf nu is hij ${stemming.naam}.`;
-  const ruw = await kroketResponseMetVangnet(
+    `\n§§§\n> De Kroket God heeft het gelezen en zwijgt over de woorden. Vanaf nu is hij ${stemming.naam}; het genootschap zal de rest aan den lijve merken.`;
+  const ruw = await verkapteTekst(
     'Vertel een kort verhaal, speels en geheimzinnig. Zojuist heeft een naamloze, gesluierde hand een verzegeld perkament in de frituur achtergelaten. ' +
     'Je weet NIET wie het was. Noem geen enkel lid, raad niet en geef geen hint: het blijft een mysterie, en dat vind je heerlijk. ' +
     `Het perkament bevat het Decreet van de Dag en zet je stemming vanaf nu op "${stemming.naam}": ${stemming.omschrijving}` +
     `${proef ? ' (Dit is een proef: spreek in déze stemming, ook als je instructies een andere noemen.)' : ''}\n\n` +
     `${wrapOnvertrouwd('Het decreet op het perkament', keuze.decreet)}\n\n` +
+    `Over de inhoud van het perkament: ${VERKAP_REGELS}\n\n` +
     'Schrijf twee delen, gescheiden door een regel met alleen §§§ erop:\n' +
-    '1. Twee of drie korte zinnen over hoe het perkament gevonden werd: waar het lag, hoe het rook, wat er met het zegel gebeurde. Citeer het decreet niet; dat volgt in het bericht.\n' +
-    '2. Twee of drie zinnen: jouw uitspraak nadat je het gelezen hebt, volledig in de nieuwe stemming en gekleurd door het decreet.\n' +
+    '1. Twee of drie korte zinnen over hoe het perkament gevonden werd: waar het lag, hoe het rook, wat er met het zegel gebeurde. Nog niets over de inhoud.\n' +
+    '2. Twee of drie zinnen: jouw uitspraak nadat je het gelezen hebt, volledig in de nieuwe stemming, waarin je verkapt laat doorschemeren wat er vanaf nu geldt.\n' +
     'Geen kop, geen ondertekening, geen inleidingszin.',
-    450, false, vangnet);
+    keuze.decreet, 450, vangnet);
   const [verhaal, ...rest] = String(ruw || vangnet).split(/\s*§§§\s*/);
   const schoon = (t) => stripOndertekening(String(t || '').replace(/§/g, '').trim());
   const uitspraak = schoon(rest.join('\n\n'));
   const tekst =
     `${proef ? '🧪 _Proef: dit verandert niets aan de echte dag._\n\n' : ''}` +
     `🕯️ *DE VERBORGEN HAND* 🕯️\n\n${schoon(verhaal)}\n\n` +
-    `📜 *Het perkament luidt:*\n> _"${keuze.decreet}"_\n` +
     `🎭 Stemming: *${stemming.naam}* · ${heftigheidLabel(keuze.intensiteit).toLowerCase()}` +
     `${uitspraak ? `\n\n${uitspraak}` : ''}\n\n— De Almachtige Kroket God`;
   await postToChannel(client, kanaal, tekst);
@@ -3661,7 +3685,8 @@ app.view('modal_verborgenhand', async ({ ack, body, view, client }) => {
   writeJSON('verborgenhand.json', { ...staat, keuze });
   await ack();
   console.log(`🕯️ Het perkament is verzegeld (stemming: ${stemming.naam}).`);
-  logGebeurtenis('decreet', null, `Een verborgen hand schreef het Decreet van de Dag (stemming: ${stemming.naam}): ${keuze.decreet.slice(0, 120)}`);
+  // Zonder de tekst: het weekoverzicht en de kroniek citeren uit deze log.
+  logGebeurtenis('decreet', null, `Een verborgen hand schreef het Decreet van de Dag (stemming: ${stemming.naam})`);
   try { await spreekVerborgenHand(client, KANAAL(), keuze); }
   catch (err) { console.error('⚠️ Uitspraak van de Verborgen Hand mislukt:', err.message); }
   await sluitUitnodiging(meta.responseUrl);
@@ -3836,7 +3861,7 @@ function buildSystemPrompt() {
     : decreetInt >= 0.3 ? 'Laat je hier merkbaar door kleuren waar het natuurlijk past'
     : 'Houd dit losjes in je achterhoofd — slechts een vleugje, en alleen wanneer het echt past';
   const decreetBlok = decreet
-    ? `\n\nDECREET VAN DE DAG: ${decreet}\n(${decreetSterkte}. Blijf altijd volledig in karakter.)`
+    ? `\n\nDECREET VAN DE DAG: ${decreet}\n(${decreetSterkte}. Blijf altijd volledig in karakter. Citeer het nooit letterlijk; je weet niet van wie het komt.)`
     : '';
 
   // Ledeninformatie bevat door gebruikers opgegeven velden (bijnaam, motto, zonde) → onvertrouwd.
@@ -8005,8 +8030,10 @@ async function voerKroketCommandoUit({ command, respond, client }) {
         : '';
       if (!decreetTekst) {
         const huidig = (instelling('decreetVanDeDag') || '').trim();
+        // Niet de woorden zelf: dat decreet kan van een andere Opperkroket zijn, en de tekst
+        // verraadt de schrijver.
         await respond({ text: (huidig
-          ? `_Huidig decreet: "${huidig}". Overschrijf met \`decreet [tekst]\`, of wis met \`decreet wis\`._`
+          ? '_Er geldt al een decreet; de woorden blijven verzegeld. Overschrijf met `decreet [tekst]`, of wis met `decreet wis`._'
           : '_Er geldt geen decreet. Vaardig er een uit met `decreet [tekst]` — bijvoorbeeld: `decreet vandaag spreekt de Kroket God uitsluitend in haiku`._') + handNota, response_type: 'ephemeral' });
         return;
       }
@@ -8023,11 +8050,22 @@ async function voerKroketCommandoUit({ command, respond, client }) {
       saveInstellingen({ decreetVanDeDag: toets.tekst });
       logGebeurtenis('decreet', null, wissen
         ? 'Een ongenoemde Opperkroket trok het decreet in'
-        : `Een ongenoemde Opperkroket vaardigde een decreet uit: ${toets.tekst.slice(0, 120)}`);
-      await postToChannel(client, command.channel_id, wissen
-        ? '🔱 *HET DECREET IS INGETROKKEN* 🔱\n\n> Iemand heeft het perkament van de deur van de Raad gerukt. Niemand zag wie; er hangt alleen nog een spijker. De frituur keert terug tot haar gewone aard.\n\n— De Hoge Frituurraad'
-        : `🔱 *DECREET VAN DE DAG* 🔱\n\n> In het holst van de nacht werd een perkament aan de deur van de Raad gespijkerd. Het zegel draagt het teken van een Opperkroket, maar de naam is eruit gebrand:\n> _"${toets.tekst}"_\n> De Kroket God zal hiernaar handelen.\n\n— De Hoge Frituurraad`);
-      await respond({ text: '🔱 _Uw decreet hangt aan de deur. Niemand weet dat het van u komt._', response_type: 'ephemeral' });
+        : 'Een ongenoemde Opperkroket vaardigde een decreet uit');
+      if (wissen) {
+        await postToChannel(client, command.channel_id,
+          '🔱 *HET DECREET IS INGETROKKEN* 🔱\n\n> Iemand heeft het perkament van de deur van de Raad gerukt. Niemand zag wie; er hangt alleen nog een spijker. De frituur keert terug tot haar gewone aard.\n\n— De Hoge Frituurraad');
+        await respond({ text: '🔱 _Het decreet is ingetrokken. Niemand zag uw hand._', response_type: 'ephemeral' });
+        return;
+      }
+      // Nooit de woorden zelf (zie VERKAP_REGELS): de Kroket God verwoordt het verkapt.
+      const verkapt = await verkapteTekst(
+        'Een ongenoemde Opperkroket heeft vannacht een decreet aan de deur van de Raad gespijkerd. Je weet niet wie, en je raadt niet. ' +
+        `${VERKAP_REGELS}\n\n${wrapOnvertrouwd('Het decreet', toets.tekst)}\n\n` +
+        'Omschrijf in één of twee korte zinnen wat er vanaf nu geldt. Geen kop, geen ondertekening, geen inleidingszin.',
+        toets.tekst, 200, 'De woorden zijn de Kroket God bekend. Het genootschap zal ze aan den lijve merken.');
+      await postToChannel(client, command.channel_id,
+        `🔱 *DECREET VAN DE DAG* 🔱\n\n> In het holst van de nacht werd een perkament aan de deur van de Raad gespijkerd. Het zegel draagt het teken van een Opperkroket, maar de naam is eruit gebrand.\n${alsCitaat(verkapt)}\n> De Kroket God zal hiernaar handelen.\n\n— De Hoge Frituurraad`);
+      await respond({ text: '🔱 _Uw decreet hangt aan de deur, in de woorden van de Kroket God. Niemand weet dat het van u komt._', response_type: 'ephemeral' });
       return;
     }
 
@@ -15663,7 +15701,10 @@ function bouwWereldBlocks() {
   const nalatenschap = actieveNalatenschap();
   const decreet = huidigDecreet();
   const staat = [];
-  if (decreet.tekst) staat.push(`> ${decreet.vanHand ? '🕯️' : '🔱'} *Decreet van de dag:* _"${decreet.tekst}"_`);
+  // Nooit de woorden zelf: een decreet kan anoniem zijn, en de tekst verraadt de schrijver.
+  if (decreet.tekst) staat.push(decreet.vanHand
+    ? '> 🕯️ *Er geldt een Decreet van de Dag*, verzegeld door de Verborgen Hand. _Alleen de Kroket God kent de woorden._'
+    : '> 🔱 *Er geldt een Decreet van de Dag.* _Alleen de Kroket God kent de woorden._');
   if (nalatenschap) staat.push(`> ${nalatenschap.soort === 'zegen' ? '✨' : '🕳️'} _${nalatenschap.tekst}_`);
   if (staat.length) blocks.push({ type: 'section', text: { type: 'mrkdwn', text: staat.join('\n') } });
 
