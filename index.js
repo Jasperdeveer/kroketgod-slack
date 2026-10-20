@@ -130,6 +130,10 @@ const {
   ZAKGELD, uitdeelMomentGeweest, nogTeOntvangen, naUitkering, verdiendeStand, kampioenWaardig,
   beschermdTegenRoof, roofbaar,
 } = require('./lib/zakgeld.js');
+const {
+  VETPOT_START, VETPOT_MAX, DUBBEL_GELDIG_MS,
+  jackpotVrij, beslisUitkomst, vetbadDelta, potInleg, naInleg, dubbelOfNiksDelta, toetsDubbel, ruimKansen,
+} = require('./lib/vetbad.js');
 // Alleen wat index.js zélf gebruikt. De uitvoervalidatie (rijksgrens, uit-karakter, lege
 // respons) zit in lib/llm.js, waar élk modelantwoord langskomt — niet hier; die symbolen
 // stonden hier alleen nog als ongebruikte import.
@@ -12004,7 +12008,8 @@ function getGeluk(userId) {
 // ── Het Gefluisterde Voorrecht (verborgen) ─────────────────────────────────────
 // Eén eenmalig teken per lid: de EERSTVOLGENDE kansactie valt in zijn voordeel. Gezet met een
 // geheime code als slash-commando in het testkanaal, verbruikt zodra hij ergens toeslaat.
-// Werkt op: duel (ook wanneer u wordt uitgedaagd), roof, offer aan het Vetbad (jackpot),
+// Werkt op: duel (ook wanneer u wordt uitgedaagd), roof, offer aan het Vetbad (verdubbeling — nooit
+// de jackpot, die is hoogstens één keer per week en niet af te dwingen),
 // troonstrijd (aanval én verdediging), beroep vanuit ballingschap en uitbraakpoging.
 //
 // De code staat NIET in deze repo: hij komt uit KROKETGOD_FORTUIN_CODE in .env op de Pi. Zonder
@@ -12358,9 +12363,10 @@ async function voerEer(client, geverId, ontvangerIds, reden, channelId, opties =
 // Waarom precies zó: de speelruimte is het huisvoordeel van 5%, en die is klein. Een vaste
 // procentuele demping werkt niet met hele punten — 10% van 7 is 6,3, afgerond 6, en dat is een
 // korting van 14% waardoor de EV positief wordt. Daarom een KANS op één punt teruggave:
-//   EV = 0,18·s + 0,27·s − 0,5·s + 0,5·r  met r = teruggavekans
-//   EV ≤ 0  ⟺  r ≤ 0,1·s
-// Bij r = 0,1·s·achterstand blijft de EV exact ≤ 0 bij élke inzet, zonder afrondingslek.
+//   EV = 0,03·s + 0,37·s − 0,45·s + 0,45·r  met r = teruggavekans (zie de kansen in lib/vetbad.js)
+//   EV ≤ 0  ⟺  r ≤ 0,111·s
+// Bij r = 0,1·s·achterstand blijft de EV ≤ 0 bij élke inzet, zonder afrondingslek. (De pot telt
+// hier niet mee: die komt bij één speler terecht, niet bij de bank of de verliezer.)
 // Gevolg: hoe hoger je inzet en hoe verder je achterloopt, hoe vaker de Raad de klap dempt.
 function vetbadTeruggave(userId, inzet) {
   try {
@@ -12378,11 +12384,20 @@ function vetbadTeruggave(userId, inzet) {
 }
 
 const VETBAD_MAX_INZET = 10;
-// De basis staat op 1 en niet op 3, omdat het voorrecht van de Paneerknecht (+2, vanaf 25 roem) er
-// bovenop komt: iedereen in het genootschap zit daar ruim boven en komt dus precies op drie offers
-// per dag uit. Zo blijft dat voorrecht echt bestaan zonder dat het plafond weer oploopt. Zie
-// offerLimiet().
-const VETBAD_BASIS_PER_DAG = 1;
+// Drie offers per dag, voor iedereen. Dat was het tot 30 september ook, maar via een omweg: de
+// basis stond op 1 en het voorrecht van de Paneerknecht deed er +2 bij. De Onderste Codex gaf de
+// Paneerknecht een ambtszegel in plaats daarvan, en daarmee viel iedereen stilletjes terug op één
+// offer per dag — terwijl offeren het meest gespeelde kansspel was (spelers gebruikten hun derde
+// offer op tientallen dagen). Nu staat het getal hier zelf, zodat een herziening van de rangen het
+// niet nog eens ongemerkt kan wegnemen. offerExtra in RANGEN telt er nog steeds bij op.
+const VETBAD_BASIS_PER_DAG = 3;
+
+// ── De Vetpot en Dubbel of niks (rekenregels en waarom: lib/vetbad.js) ────────
+// vetpot.json: { pot, geopend, laatste }. De pot rolt door over de weekreset; `geopend` is de
+// guard voor de eenmalige openingsverkondiging. dubbelofniks.json: openstaande kansen per id.
+registreerFeature({ naam: 'vetpot', state: ['vetpot.json', 'dubbelofniks.json'] });
+const loadVetpot = () => ({ pot: VETPOT_START, geopend: false, ...readJSON('vetpot.json', {}) });
+const saveVetpot = (data) => writeJSON('vetpot.json', data);
 
 // Het maximum dat dit lid NU mag offeren: nooit meer dan VETBAD_MAX_INZET, en nooit meer dan de
 // helft van het bezit. Bestaat als aparte functie omdat de modal, de hulptekst en de toets
@@ -12407,7 +12422,7 @@ async function voerOffer(client, userId, inzet, channelId) {
     const gedaan = vetbadNu[userId]?.datum === vandaag ? (vetbadNu[userId].aantal || 0) : 0;
     return { ok: false, tekst: max < 1
       ? `_U bezit ${punten} kroketpunten en kunt dus niets offeren. Verdien eerst iets; het Vetbad neemt geen schuldbrieven._`
-      : `🎲 *HET GROTE VETBAD*\n\n> Uw bezit: *${punten}* kroketpunten\n> U mag nu hoogstens *${max}* per offer inzetten (de helft van uw bezit, met een absoluut plafond van ${VETBAD_MAX_INZET})\n> Offers vandaag: *${gedaan}/${offerLimiet(userId)}*\n\nGebruik \`/kroketgod offer [aantal]\` — bijvoorbeeld \`offer ${max}\`.` };
+      : `🎲 *HET GROTE VETBAD*\n\n> Uw bezit: *${punten}* kroketpunten\n> U mag nu hoogstens *${max}* per offer inzetten (de helft van uw bezit, met een absoluut plafond van ${VETBAD_MAX_INZET})\n> Offers vandaag: *${gedaan}/${offerLimiet(userId)}*\n> 🍯 De Vetpot staat op *${loadVetpot().pot}* — ${jackpotVrij(loadVetpot(), getMondayOfWeek()) ? 'één op de honderd offers slaat hem om, hoogstens één keer per week' : 'deze week al gevallen, volgende week weer te winnen'}\n\nGebruik \`/kroketgod offer [aantal]\` — bijvoorbeeld \`offer ${max}\`.` };
   }
   if (inzet > VETBAD_MAX_INZET) {
     return { ok: false, tekst: `_Het Vetbad aanvaardt hoogstens ${VETBAD_MAX_INZET} kroketpunten per offer. Hoogmoed wordt niet beloond._` };
@@ -12446,7 +12461,9 @@ async function voerOffer(client, userId, inzet, channelId) {
   // vetbadoverride.json op de Pi (gitignored, nergens in de stats, App Home of een kanaalbericht,
   // net als geluk.json) forceert de uitkomst van het EERSTVOLGENDE offer van één lid en wordt
   // daarbij verbruikt. Handmatig gezet; er is bewust geen dashboardknop, zodat dit geen gewoonte
-  // wordt. Vorm: { "U0XXXX": "jackpot" } — geldige waarden: jackpot, dubbel, terug, verzwolgen.
+  // wordt. Vorm: { "U0XXXX": "dubbel" } — geldige waarden: jackpot (= vetpot), dubbel, terug,
+  // verzwolgen. Ook een geforceerde jackpot valt onder het weekplafond: is hij deze week al gevallen,
+  // dan wordt het een verdubbeling.
   //   ⚠️ Dit doorbreekt de gelijke kansen die hierboven beschreven staan. De uitkomst wordt wél
   //   normaal gelogd, dus hij verschijnt in het weekoverzicht als elk ander offer.
   const override = readJSON('vetbadoverride.json', {});
@@ -12457,28 +12474,36 @@ async function voerOffer(client, userId, inzet, channelId) {
     writeJSON('vetbadoverride.json', override);   // verbruikt: precies één keer
     console.log(`🎯 Vetbad-override verbruikt voor ${bijnaam}: ${geforceerd}`);
   }
-  // Het Gefluisterde Voorrecht (zie pakFortuin) levert de best mogelijke uitkomst: de jackpot.
+  // Het Gefluisterde Voorrecht (zie pakFortuin) levert een VERDUBBELING, nooit de jackpot. Op
+  // verzoek van de eigenaar: de jackpot moet echt zeldzaam zijn, hoogstens één per week, en mag
+  // door geen enkel teken af te dwingen zijn (zie lib/vetbad.js).
   // Staat er al een handmatige override, dan blijft die staan en blijft het teken bewaard.
-  if (!geforceerd && pakFortuin(userId, `offer van ${inzet}`)) geforceerd = 'jackpot';
-  const roll = geforceerd === 'jackpot'    ? 0.00
+  if (!geforceerd && pakFortuin(userId, `offer van ${inzet}`)) geforceerd = 'dubbel';
+  const roll = geforceerd === 'jackpot' || geforceerd === 'vetpot' ? 0.00
              : geforceerd === 'dubbel'     ? 0.10
-             : geforceerd === 'terug'      ? 0.30
+             : geforceerd === 'terug'      ? 0.40
              : geforceerd === 'verzwolgen' ? 0.99
              : Math.random();
-  let delta, kop, regel;
-  if (roll < 0.06) {                 // 6% — jackpot (×3)
-    delta = inzet * 3;
-    kop = '🌟 *GODDELIJKE JACKPOT* 🌟';
-    regel = `Het vet kookt over van zegen! ${bijnaam} offerde ${inzet} en het Grote Vetbad braakt *${delta}* kroketpunten terug. De frituurgoden zijn dronken van genoegen.`;
-  } else if (roll < 0.33) {          // 27% — verdubbeld (netto +inzet)
-    delta = inzet;
+  const vetpot = loadVetpot();
+  const week = getMondayOfWeek();
+  const uitkomst = beslisUitkomst(roll, { jackpotVrij: jackpotVrij(vetpot, week) });
+  let delta, kop, regel, potRegel = '';
+  if (uitkomst === 'vetpot') {       // 1% — de jackpot: ×3 én de hele pot, hoogstens één per week
+    const pot = vetpot.pot;
+    delta = vetbadDelta('vetpot', inzet, pot);
+    saveVetpot({ ...vetpot, pot: 0, jackpotWeek: week, laatste: { userId, bedrag: pot, ts: Date.now() } });
+    kop = '🍯 *DE VETPOT SLAAT OM* 🍯';
+    regel = `Het vet kookt over en de pot kantelt! ${bijnaam} offerde ${inzet}: ×3 én de hele Vetpot van *${pot}* — *+${delta}* kroketpunten. Het hele genootschap heeft die pot gevuld, en ${bijnaam} strijkt hem op.`;
+    potRegel = '🍯 _De Vetpot is leeg en begint opnieuw te vullen. Deze week valt er geen jackpot meer._';
+  } else if (uitkomst === 'dubbel') {    // 37% — verdubbeld (netto +inzet)
+    delta = vetbadDelta('dubbel', inzet);
     kop = '🔥 *HET VET ZEGENT* 🔥';
     regel = `De olie sist gunstig. ${bijnaam} ziet de inzet van ${inzet} *verdubbeld* — *+${delta}* kroketpunten.`;
-  } else if (roll < 0.50) {          // 17% — push (0)
+  } else if (uitkomst === 'terug') {     // 17% — push (0)
     delta = 0;
     kop = '〰️ *HET VET BLIJFT KALM* 〰️';
     regel = `Het oppervlak rimpelt nauwelijks. ${bijnaam} krijgt de ${inzet} kroketpunten ongedeerd terug — geen winst, geen verlies.`;
-  } else {                           // 50% — verlies (−inzet, gedempt voor wie achterloopt)
+  } else {                           // 45% — verlies (−inzet, gedempt voor wie achterloopt)
     // Minstens 1 punt verlies, anders zou een kleine inzet gratis worden en kantelt de EV.
     const verlies = Math.max(1, inzet - vetbadTeruggave(userId, inzet));
     delta = -verlies;
@@ -12487,17 +12512,45 @@ async function voerOffer(client, userId, inzet, channelId) {
     // klopt dan met de saldomutatie, en een grillig vetbad dat niet altijd alles houdt past
     // binnen het karakter. Wie geholpen wordt, blijft daarmee onzichtbaar.
     regel = `Een dorre sis, dan stilte. Het Grote Vetbad slokt *${verlies}* kroketpunt${verlies === 1 ? '' : 'en'} van ${bijnaam} op en geeft niets terug.`;
+    // Een deel van het verlies druipt in de Vetpot in plaats van te verdampen. De verliezer
+    // verliest er niets extra door; alleen de bank houdt minder (zie lib/vetbad.js).
+    const inleg = potInleg(verlies, Math.random());
+    if (inleg) {
+      const na = naInleg(vetpot.pot, inleg);
+      saveVetpot({ ...vetpot, pot: na.pot });
+      potRegel = na.overloop >= inleg
+        ? `🍯 _De Vetpot zit vol (${VETPOT_MAX}) — wat erbij druipt, loopt over de rand._`
+        : `🍯 _${inleg} punt druipt in de Vetpot — die staat nu op *${na.pot}*._`;
+    }
   }
+  if (!potRegel) potRegel = `🍯 _De Vetpot staat op *${loadVetpot().pot}*${jackpotVrij(loadVetpot(), week) ? '' : ' — deze week al gevallen, volgende week weer te winnen'}._`;
   if (delta !== 0) pasScoreAan(userId, delta);
   logGebeurtenis('offer', userId, `${bijnaam} offerde ${inzet} aan het Vetbad → ${delta >= 0 ? '+' : ''}${delta}`);
   const naspel = maakNaspel([userId], userId);
-  if (roll < 0.06) await telActie(client, userId, 'jackpot', 1, naspel);
+  if (uitkomst === 'vetpot') await telActie(client, userId, 'jackpot', 1, naspel);
   const nieuweStand = loadScores()[userId] || 0;
+  // Na elke winst één kans op dubbel of niks: een knop onder het bericht, alleen voor de winnaar.
+  let knoppen = null;
+  if (delta > 0) {
+    const nu = Date.now();
+    const id = `${nu.toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+    const kansen = ruimKansen(readJSON('dubbelofniks.json', {}), nu);
+    kansen[id] = { userId, winst: delta, ts: nu, gespeeld: false };
+    writeJSON('dubbelofniks.json', kansen);
+    knoppen = [{ type: 'button', text: { type: 'plain_text', text: `🎲 Dubbel of niks (±${delta})`, emoji: true },
+      action_id: 'vetbad_dubbel', value: id, style: 'danger' }];
+  }
+  const dubbelRegel = knoppen
+    ? `\n_🎲 ${bijnaam} mag deze winst binnen ${Math.round(DUBBEL_GELDIG_MS / 60_000)} minuten nog één keer inzetten: dubbel of niks._`
+    : '';
   const hoofd = await postToChannel(client, channelId,
-    `⚜️ *HET GROTE VETBAD* ⚜️\n\n${kop}\n\n> ${regel}\n\n_Nieuwe stand: *${nieuweStand} kroketpunten*_\n\n— De Hoge Frituurraad${naspelMenties(naspel)}`);
+    `⚜️ *HET GROTE VETBAD* ⚜️\n\n${kop}\n\n> ${regel}\n\n_Nieuwe stand: *${nieuweStand} kroketpunten*_\n${potRegel}${dubbelRegel}\n\n— De Hoge Frituurraad${naspelMenties(naspel)}`,
+    knoppen ? { knoppen } : {});
   await telActie(client, userId, 'offer', 1, naspel);
   await postNaspel(client, channelId, hoofd?.ts, naspel);
-  return { ok: true, tekst: `_Het Vetbad heeft gesproken: ${delta > 0 ? `+${delta}` : delta} kroketpunt${Math.abs(delta) === 1 ? '' : 'en'}. Nieuwe stand: ${nieuweStand}._` };
+  updateWereldbord(client).catch(() => {}); // de pot staat op het bord
+  return { ok: true, tekst: `_Het Vetbad heeft gesproken: ${delta > 0 ? `+${delta}` : delta} kroketpunt${Math.abs(delta) === 1 ? '' : 'en'}. Nieuwe stand: ${nieuweStand}.` +
+    `${knoppen ? ' Onder het bericht in het kanaal kunt u de winst nog dubbel-of-niks spelen.' : ''}_` };
 }
 
 // Frituur-visioen: de Kroket God fritueert een afbeelding. Gedeeld door `/kroketgod frituur` en de
@@ -15284,6 +15337,8 @@ function bouwWereldBlocks() {
     const hoogste = [...(veiling.biedingen || [])].sort((a, b) => b.bod - a.bod)[0];
     ambten.push(`> 🔨 De Grote Veiling is open — hoogste bod: ${hoogste ? `${hoogste.bod} pt` : 'nog geen'}`);
   }
+  const vetpot = loadVetpot();
+  if (vetpot.geopend) ambten.push(`> 🍯 De Vetpot staat op *${vetpot.pot}* kroketpunten`);
   if (ambten.length) blocks.push({ type: 'section', text: { type: 'mrkdwn', text: `*⚖️ AMBTEN & GEBEURTENISSEN*\n${ambten.join('\n')}` } });
 
   const nalatenschap = actieveNalatenschap();
@@ -17979,7 +18034,7 @@ app.action('open_offer', async ({ ack, body, client }) => {
         blocks: [
           // max_value op het ECHTE plafond (helft van het bezit), niet op de absolute limiet —
           // anders biedt het veld een getal aan dat gegarandeerd wordt afgewezen.
-          { type: 'section', text: { type: 'mrkdwn', text: `🎲 *Offer aan het Grote Vetbad.*\n6% jackpot (×3) · 27% verdubbeld · 17% ongedeerd terug · 50% verzwolgen.\nU bezit *${loadScores()[body.user.id] || 0}* punten en mag nu hoogstens *${offerPlafond(body.user.id)}* per offer inzetten (helft van uw bezit, absoluut plafond ${VETBAD_MAX_INZET}), ${offerLimiet(body.user.id)}× per dag.` } },
+          { type: 'section', text: { type: 'mrkdwn', text: `🎲 *Offer aan het Grote Vetbad.*\n1% de jackpot: ×3 + de Vetpot van *${loadVetpot().pot}* (hoogstens één per week) · 37% verdubbeld · 17% ongedeerd terug · 45% verzwolgen. Na een winst: dubbel of niks.\nU bezit *${loadScores()[body.user.id] || 0}* punten en mag nu hoogstens *${offerPlafond(body.user.id)}* per offer inzetten (helft van uw bezit, absoluut plafond ${VETBAD_MAX_INZET}), ${offerLimiet(body.user.id)}× per dag.` } },
           {
             type: 'input', block_id: 'inzet',
             label: { type: 'plain_text', text: `Hoeveel kroketpunten offert u? (1–${Math.max(1, offerPlafond(body.user.id))})` },
@@ -17989,6 +18044,61 @@ app.action('open_offer', async ({ ack, body, client }) => {
       },
     });
   } catch (err) { console.error('Fout bij openen offer-modal:', err.data?.error || err.message); }
+});
+
+// ── Dubbel of niks: de knop onder een gewonnen Vetbad-offer ──────────────────
+// Haalt de knop van het oorspronkelijke bericht en zet er een slotregel onder. Zonder deze stap
+// blijft er een knop staan die alleen nog "verlopen" of "al gespeeld" kan zeggen.
+async function haalDubbelKnopWeg(client, body, slotregel) {
+  const msg = body.message;
+  const kanaal = body.channel?.id;
+  if (!msg?.ts || !kanaal) return;
+  const blocks = (msg.blocks || []).filter(b => b.type !== 'actions');
+  if (slotregel) blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: slotregel }] });
+  try {
+    await slackLimiter.schedule(() => client.chat.update({ channel: kanaal, ts: msg.ts, text: msg.text || slotregel || ' ', blocks }));
+  } catch (err) { console.warn('⚠️ Dubbel-of-niks-knop weghalen mislukt:', err.data?.error || err.message); }
+}
+
+const DUBBEL_WEIGERING = {
+  onbekend: '_Deze kans bestaat niet meer._',
+  niet_uw: '_Dit is niet uw winst. Dubbel of niks speelt alleen wie het Vetbad zelf deed winnen._',
+  gespeeld: '_Deze winst is al dubbel-of-niks gespeeld._',
+  verlopen: `_Te laat: dubbel of niks kan alleen binnen ${Math.round(DUBBEL_GELDIG_MS / 60_000)} minuten na de winst._`,
+  uitgegeven: '_U hebt deze winst al (deels) uitgegeven — er valt niets meer in te zetten._',
+};
+
+app.action('vetbad_dubbel', async ({ ack, body, client }) => {
+  await ack();
+  try {
+    const id = body.actions?.[0]?.value;
+    const userId = body.user.id;
+    const nu = Date.now();
+    // Lezen, toetsen en als gespeeld markeren zonder await ertussen: een dubbelklik of een tweede
+    // tabblad speelt anders twee keer met dezelfde winst.
+    const kansen = readJSON('dubbelofniks.json', {});
+    const kans = kansen[id];
+    const toets = toetsDubbel(kans, userId, nu, loadScores()[userId] || 0);
+    if (!toets.ok) {
+      // Wie de knop van een ander indrukt, laat hem staan; een dode knop gaat weg.
+      if (['onbekend', 'gespeeld', 'verlopen'].includes(toets.reden)) await haalDubbelKnopWeg(client, body, '🎲 _Dubbel of niks is voorbij._');
+      await meldKnopTerug(client, body, DUBBEL_WEIGERING[toets.reden] || '_Dat kan nu niet._');
+      return;
+    }
+    kans.gespeeld = true;
+    writeJSON('dubbelofniks.json', kansen);
+    const delta = dubbelOfNiksDelta(kans.winst, Math.random());
+    pasScoreAan(userId, delta);
+    const bijnaam = loadMembers()[userId]?.bijnaam || 'een volgeling';
+    logGebeurtenis('offer', userId, `${bijnaam} speelde dubbel of niks met ${kans.winst} → ${delta > 0 ? '+' : ''}${delta}`);
+    const stand = loadScores()[userId] || 0;
+    await haalDubbelKnopWeg(client, body, delta > 0
+      ? `🎲 _Dubbel of niks gespeeld: *gewonnen* (+${delta})._`
+      : `🎲 _Dubbel of niks gespeeld: *verloren* (${delta})._`);
+    await postToChannel(client, body.channel?.id || process.env.SLACK_CHANNEL_ID, delta > 0
+      ? `🎲 *DUBBEL OF NIKS* 🎲\n\n> *${bijnaam}* zet de buit van *${kans.winst}* opnieuw in het vet… en het vet zegt *JA*. *+${delta}* kroketpunten.\n\n_Nieuwe stand: *${stand} kroketpunten*_\n\n— De Hoge Frituurraad`
+      : `🎲 *DUBBEL OF NIKS* 🎲\n\n> *${bijnaam}* zet de buit van *${kans.winst}* opnieuw in het vet… en het vet slokt alles op. *−${kans.winst}* kroketpunten.\n\n_Nieuwe stand: *${stand} kroketpunten*_\n\n— De Hoge Frituurraad`);
+  } catch (err) { console.error('Fout bij dubbel of niks:', err); }
 });
 
 app.action('open_visioen', async ({ ack, body, client }) => {
@@ -20988,6 +21098,24 @@ async function voerDashboardActie(actie) {
 }
 
 
+// ── De Vetpot opent (eenmalig) ────────────────────────────────────────────────
+// Eén verkondiging bij de eerste uitrol, gelijk met de ruimere daglimiet. `geopend` wordt vóór het
+// posten gezet, zodat een herstart tijdens het posten geen tweede verkondiging oplevert. Hangt
+// aan de luide inhaalslagen, dus nooit 's nachts.
+async function openVetpotAlsNodig(client) {
+  const v = loadVetpot();
+  if (v.geopend) return;
+  saveVetpot({ ...v, geopend: true });
+  await postToChannel(client, process.env.SLACK_CHANNEL_ID,
+    `🍯 *DE VETPOT IS GEOPEND* 🍯\n\n` +
+    `> De Hoge Frituurraad zet een pot op het vuur en legt er zelf de eerste *${v.pot}* kroketpunten in.\n` +
+    `> Van elk offer dat het Vetbad verzwelgt, druipt voortaan een deel in de pot. Hij blijft staan — ook over de zondag heen — tot iemand hem wint.\n` +
+    `> Dat is de jackpot, en die is zeldzaam: één op de honderd offers, en *hoogstens één keer per week*. Wie hem raakt, krijgt ×3 én de hele pot (plafond ${VETPOT_MAX}).\n` +
+    `> Wie wint, mag de winst meteen nog één keer inzetten: 🎲 *dubbel of niks*.\n` +
+    `> En het Vetbad gaat weer ruimer open: *${VETBAD_BASIS_PER_DAG} offers per dag*.\n\n— De Hoge Frituurraad`);
+  await updateWereldbord(client, true);
+}
+
 // ── Luide inhaalslagen: de weekkampioen en de seizoensfinale ───────────────────
 // Beide verkondigingen zijn de grootste momenten van hun cyclus (een week, respectievelijk zes
 // weken). Ze stonden zonder tijdpoort in de opstartroutine, en pm2 herstart dagelijks om 03:00 —
@@ -21019,6 +21147,11 @@ async function voerLuideInhaalslagen(herkomst) {
     await deelZakgeldUit(app.client);
   } catch (err) {
     console.error('Fout bij zakgeld-inhaalslag:', err);
+  }
+  try {
+    await openVetpotAlsNodig(app.client);
+  } catch (err) {
+    console.error('Fout bij openen Vetpot:', err);
   }
   // Seizoenscampagne: de fase wordt uit de datum berekend, dus een gemiste maandag-cron wordt
   // hier alsnog aangekondigd — en een seizoen dat tijdens de downtime uit de tijd liep, beslecht.
