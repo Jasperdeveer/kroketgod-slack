@@ -3431,6 +3431,10 @@ function getDagelijkseStemming() {
 registreerFeature({ naam: 'verborgen hand', state: ['verborgenhand.json'] });
 const loadVerborgenHand = () => readJSON('verborgenhand.json', {});
 const BEHEERDER_ID = 'U08ALFNQB1V';
+// Vaste dagen waarop een lid nooit aan de beurt is (0 = zondag … 6 = zaterdag).
+const VERBORGEN_HAND_NIET_OP = {
+  U08PWNK9V7H: [1, 5], // De Groene Kroket werkt niet op maandag en vrijdag
+};
 
 // De keuze van vandaag, of null. Alleen lezen: dit zit in het pad van elke systeemprompt.
 function handKeuzeVandaag() {
@@ -3463,7 +3467,7 @@ function verborgenHandVandaag() {
     magDecreet: (id) => getVoorrechten(id).decreet,
     nu: Date.now(),
   });
-  const staat = staatVoorDag(oud, datum, kandidaten);
+  const staat = staatVoorDag(oud, datum, kandidaten, { nietOp: VERBORGEN_HAND_NIET_OP });
   writeJSON('verborgenhand.json', staat);
   console.log(`🕯️ De Verborgen Hand is voor vandaag aangewezen (${kandidaten.length} kandidaten).`);
   return staat;
@@ -3477,9 +3481,10 @@ const PERKAMENT_UITNODIGINGEN = [
   '🕯️ _De olie in de frituur rimpelt, al brandt er geen vuur onder._ Alleen u ziet het.\n\n' +
   '> Op het oppervlak drijft een perkament dat niet nat wordt. Het lot is vandaag op u gevallen: schrijf het Decreet van de Dag en kies de stemming van de Kroket God. Niemand zal weten dat het uw hand was.',
 ];
+// Staat op zichzelf: wie om 08:00 niet online was, heeft de eerste uitnodiging nooit gezien.
 const PERKAMENT_HERINNERING =
-  '🕯️ _De gesluierde gestalte staat er nog._ Alleen u ziet dit.\n\n' +
-  '> Het perkament in uw zak is nog onbeschreven, en het zegel houdt maar tot middernacht.';
+  '🕯️ _Psst. Er ligt nog een verzegeld perkament voor u._ Alleen u ziet dit.\n\n' +
+  '> De Hoge Frituurraad heeft vandaag ú gekozen om het Decreet van de Dag te schrijven en de stemming van de Kroket God te bepalen. Het perkament is nog onbeschreven, en het zegel houdt maar tot middernacht. Wie het schreef, zal niemand weten.';
 const PERKAMENT_VERZEGELD = '🕯️ _Het perkament is verzegeld en in de olie verdwenen. Niemand zag uw hand._';
 const willekeurigeUitnodiging = () => PERKAMENT_UITNODIGINGEN[Math.floor(Math.random() * PERKAMENT_UITNODIGINGEN.length)];
 
@@ -3503,17 +3508,24 @@ function perkamentHomeBlocks(userId) {
   ];
 }
 
-// De verborgen uitnodiging. Gaat pas weg als de uitverkorene iets zegt in het kanaal: een
-// ephemeral komt alleen aan bij wie op dat moment actief is, en wie net iets zei, is dat.
-async function nodigVerborgenHandUit(client, userId, channelId, threadTs = null) {
+// De verborgen uitnodiging. Om 08:00 vanuit de cron (zonder `userId`: dan de uitverkorene zelf),
+// en daarna bij het eerste bericht van de uitverkorene (met `userId` van wie sprak; is dat een
+// ander, dan gebeurt er niets). Een ephemeral komt alleen aan bij wie op dat moment actief is,
+// dus die tweede is de vangst voor wie om acht uur nog niet online was.
+async function nodigVerborgenHandUit(client, channelId, { userId = null, threadTs = null } = {}) {
   const staat = verborgenHandVandaag();
+  if (!staat?.userId) return;
+  const wie = userId || staat.userId;
   const nu = Date.now();
-  if (!staat || !magUitnodigen(staat, userId, staat.datum, nu)) return;
+  const uur = Number(new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Europe/Amsterdam', hour: '2-digit', hourCycle: 'h23',
+  }).format(new Date(nu)));
+  if (!magUitnodigen(staat, wie, staat.datum, nu, uur)) return;
   // Eerst vastleggen, dan versturen (geen await ertussen): twee berichten vlak na elkaar mogen
   // geen twee uitnodigingen opleveren.
   writeJSON('verborgenhand.json', naUitnodiging(staat, nu));
   const tekst = staat.uitnodigingen ? PERKAMENT_HERINNERING : willekeurigeUitnodiging();
-  const aangekomen = await postEphemeral(client, channelId, userId, tekst,
+  const aangekomen = await postEphemeral(client, channelId, wie, tekst,
     { blocks: perkamentBlocks(tekst), thread_ts: threadTs || undefined });
   // Niet aangekomen: de beurt niet verspillen, de volgende keer opnieuw proberen.
   if (!aangekomen) writeJSON('verborgenhand.json', staat);
@@ -8958,7 +8970,7 @@ app.event('message', async ({ event, client }) => {
       // een verborgen uitnodiging, in de draad waarin dat bericht stond. Niet awaiten: het
       // bericht zelf hoeft daar niet op te wachten.
       if (event.channel === process.env.SLACK_CHANNEL_ID) {
-        nodigVerborgenHandUit(client, event.user, event.channel, event.thread_ts)
+        nodigVerborgenHandUit(client, event.channel, { userId: event.user, threadTs: event.thread_ts })
           .catch(err => console.error('⚠️ Verborgen uitnodiging mislukt:', err.message));
       }
     }
@@ -9222,6 +9234,7 @@ const CRON_LABELS = {
   '25 10 * * 1':     { label: 'Blinde Handdruk' },
   '0 17 * * 5':      { label: 'Zegelverval' },
   '30 8 * * *':      { label: 'Verjaardagszegen' },
+  '0 8 * * *':       { label: 'Verborgen Hand (uitnodiging)' },
   '50 14 * * 5':     { label: 'Weekvijand ontsnapping' },
   '45 23 * * 0':     { label: 'Kroniek schrijven' },
   '45 10 1-7 * 1':   { label: 'Weefselrapport' },
@@ -9535,6 +9548,17 @@ planCron('0 9 * * 1', async () => {
     await postToChannel(app.client, process.env.SLACK_CHANNEL_ID, tekst);
   } catch (error) {
     console.error('Fout bij weekopening:', error);
+  }
+}, { timezone: 'Europe/Amsterdam' });
+
+// ── Cron: dagelijks 08:00 — de verborgen uitnodiging aan de uitverkorene ─────
+// Alleen de uitverkorene ziet hem. Rust de Kroket God (weekend, stil-modus), dan is er niemand
+// aangewezen en gebeurt er niets. Zie nodigVerborgenHandUit voor wie om acht uur niet online was.
+planCron('0 8 * * *', async () => {
+  try {
+    await nodigVerborgenHandUit(app.client, process.env.SLACK_CHANNEL_ID);
+  } catch (err) {
+    console.error('Fout bij verborgen uitnodiging:', err);
   }
 }, { timezone: 'Europe/Amsterdam' });
 
