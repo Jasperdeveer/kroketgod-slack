@@ -134,6 +134,11 @@ const {
   VETPOT_START, VETPOT_MAX, DUBBEL_GELDIG_MS,
   jackpotVrij, beslisUitkomst, vetbadDelta, potInleg, naInleg, dubbelOfNiksDelta, toetsDubbel, ruimKansen,
 } = require('./lib/vetbad.js');
+const {
+  DECREET_MAX, HEFTIGHEDEN, HEFTIGHEID_STANDAARD, heftigheidLabel,
+  kandidatenVoor, staatVoorDag, keuzeVan: handKeuzeVan, magSchrijven, magUitnodigen, naUitnodiging,
+  toetsDecreet,
+} = require('./lib/verborgenhand.js');
 // Alleen wat index.js zélf gebruikt. De uitvoervalidatie (rijksgrens, uit-karakter, lege
 // respons) zit in lib/llm.js, waar élk modelantwoord langskomt — niet hier; die symbolen
 // stonden hier alleen nog als ongebruikte import.
@@ -3389,6 +3394,13 @@ const STEMMINGEN = [
 let _dagelijksStemming = { datum: null, stemming: null };
 
 function getDagelijkseStemming() {
+  // De Verborgen Hand gaat voor alles: het lid dat vandaag het perkament schreef, bepaalt de dag.
+  const hand = handKeuzeVandaag();
+  if (hand) {
+    const m = STEMMINGEN.find(s => s.naam === hand.stemming);
+    if (m) return m;
+  }
+
   // Handmatige override via dashboard heeft voorrang.
   const override = instelling('stemmingOverride');
   if (override) {
@@ -3410,6 +3422,240 @@ function getDagelijkseStemming() {
   console.log(`🎭 Stemming van de dag: ${stemming.naam}`);
   return stemming;
 }
+
+// ── De Verborgen Hand ─────────────────────────────────────────────────────────
+// Elke dag schrijft een ander lid met de rang Opperkroket in het geheim het Decreet van de Dag
+// en kiest de stemming (regels en waarom: lib/verborgenhand.js). Wie het schreef, staat alleen
+// in verborgenhand.json: niet in het kanaal, niet in de logs en niet in de systeemprompt, zodat
+// ook de Kroket God het niet kan verraden. Daarom noemt geen enkele console.log hier een naam.
+registreerFeature({ naam: 'verborgen hand', state: ['verborgenhand.json'] });
+const loadVerborgenHand = () => readJSON('verborgenhand.json', {});
+const BEHEERDER_ID = 'U08ALFNQB1V';
+
+// De keuze van vandaag, of null. Alleen lezen: dit zit in het pad van elke systeemprompt.
+function handKeuzeVandaag() {
+  return handKeuzeVan(loadVerborgenHand(), dagSleutel());
+}
+
+// Het decreet dat nu geldt: dat van de verborgen hand, anders het staande decreet uit het
+// dashboard of van de Opperkroket.
+function huidigDecreet() {
+  const hand = handKeuzeVandaag();
+  if (hand) return { tekst: hand.decreet, intensiteit: hand.intensiteit, vanHand: true };
+  return {
+    tekst: (instelling('decreetVanDeDag') || '').trim(),
+    intensiteit: Number(instelling('decreetIntensiteit')) || 0,
+    vanHand: false,
+  };
+}
+
+// De staat van vandaag; wijst bij de eerste aanroep van de dag de volgende uitverkorene aan.
+// null als de Kroket God rust (weekend) of zwijgt: dan schuift de rondgang ook niet door.
+function verborgenHandVandaag() {
+  if (instelling('stilModus') || instelling('alleenTestkanaal')) return null;
+  if (isWeekendAms() && instelling('weekendRust')) return null;
+  const datum = dagSleutel();
+  const oud = loadVerborgenHand();
+  if (oud.datum === datum) return oud;
+  const kandidaten = kandidatenVoor(Object.keys(loadMembers()), {
+    activiteit: loadActiviteit(),
+    verbannen: isVerbannen,
+    magDecreet: (id) => getVoorrechten(id).decreet,
+    nu: Date.now(),
+  });
+  const staat = staatVoorDag(oud, datum, kandidaten);
+  writeJSON('verborgenhand.json', staat);
+  console.log(`🕯️ De Verborgen Hand is voor vandaag aangewezen (${kandidaten.length} kandidaten).`);
+  return staat;
+}
+
+const PERKAMENT_UITNODIGINGEN = [
+  '🕯️ _Psst._ Een gesluierde gestalte schuift langs de toonbank en drukt u iets in de hand. Alleen u ziet dit.\n\n' +
+  '> Een verzegeld perkament. De Hoge Frituurraad heeft vandaag ú gekozen: u schrijft het Decreet van de Dag en u bepaalt hoe de Kroket God zich voelt. Wat u schrijft, wordt verkondigd. Wie het schreef, nooit.',
+  '🕯️ _Er wordt zacht op het luikje van de frituur geklopt._ Alleen u hoort het.\n\n' +
+  '> Onder de deur ligt een perkament, met uw naam erop in vet geschreven. Vandaag beslist ú wat de Kroket God gelooft en in welke stemming hij verkeert. De Raad zwijgt over wie de pen vasthield. Zwijgt u ook.',
+  '🕯️ _De olie in de frituur rimpelt, al brandt er geen vuur onder._ Alleen u ziet het.\n\n' +
+  '> Op het oppervlak drijft een perkament dat niet nat wordt. Het lot is vandaag op u gevallen: schrijf het Decreet van de Dag en kies de stemming van de Kroket God. Niemand zal weten dat het uw hand was.',
+];
+const PERKAMENT_HERINNERING =
+  '🕯️ _De gesluierde gestalte staat er nog._ Alleen u ziet dit.\n\n' +
+  '> Het perkament in uw zak is nog onbeschreven, en het zegel houdt maar tot middernacht.';
+const PERKAMENT_VERZEGELD = '🕯️ _Het perkament is verzegeld en in de olie verdwenen. Niemand zag uw hand._';
+const willekeurigeUitnodiging = () => PERKAMENT_UITNODIGINGEN[Math.floor(Math.random() * PERKAMENT_UITNODIGINGEN.length)];
+
+function perkamentBlocks(tekst, waarde = 'echt') {
+  return [
+    { type: 'section', text: { type: 'mrkdwn', text: tekst } },
+    { type: 'actions', elements: [{ type: 'button', action_id: 'verborgenhand_open', value: waarde, style: 'primary',
+      text: { type: 'plain_text', text: '📜 Het perkament openen', emoji: true } }] },
+    { type: 'context', elements: [{ type: 'mrkdwn', text:
+      '_Het zegel houdt tot middernacht. Kwijt? Typ `/kroketgod perkament` of kijk in uw App Home._' }] },
+  ];
+}
+
+// De kaart bovenaan de App Home van de uitverkorene, zolang het perkament onbeschreven is.
+function perkamentHomeBlocks(userId) {
+  const staat = verborgenHandVandaag();
+  if (!magSchrijven(staat, userId, staat?.datum)) return [];
+  return [
+    ...homeKaartKop('🕯️ HET VERZEGELDE PERKAMENT'),
+    ...perkamentBlocks('_Alleen u ziet deze kaart._ De Hoge Frituurraad heeft vandaag ú gekozen om het Decreet van de Dag te schrijven en de stemming van de Kroket God te bepalen. Wat u schrijft, wordt verkondigd. Wie het schreef, nooit.'),
+  ];
+}
+
+// De verborgen uitnodiging. Gaat pas weg als de uitverkorene iets zegt in het kanaal: een
+// ephemeral komt alleen aan bij wie op dat moment actief is, en wie net iets zei, is dat.
+async function nodigVerborgenHandUit(client, userId, channelId, threadTs = null) {
+  const staat = verborgenHandVandaag();
+  const nu = Date.now();
+  if (!staat || !magUitnodigen(staat, userId, staat.datum, nu)) return;
+  // Eerst vastleggen, dan versturen (geen await ertussen): twee berichten vlak na elkaar mogen
+  // geen twee uitnodigingen opleveren.
+  writeJSON('verborgenhand.json', naUitnodiging(staat, nu));
+  const tekst = staat.uitnodigingen ? PERKAMENT_HERINNERING : willekeurigeUitnodiging();
+  const aangekomen = await postEphemeral(client, channelId, userId, tekst,
+    { blocks: perkamentBlocks(tekst), thread_ts: threadTs || undefined });
+  // Niet aangekomen: de beurt niet verspillen, de volgende keer opnieuw proberen.
+  if (!aangekomen) writeJSON('verborgenhand.json', staat);
+  console.log(`🕯️ Verborgen uitnodiging ${aangekomen ? 'verstuurd' : 'mislukt'}.`);
+}
+
+function perkamentModal({ proef = false, kanaal, responseUrl = null }) {
+  const stemmingen = STEMMINGEN.map(s => ({
+    text: { type: 'plain_text', text: s.naam.charAt(0).toUpperCase() + s.naam.slice(1) }, value: s.naam,
+  }));
+  const heftigheden = HEFTIGHEDEN.map(h => ({ text: { type: 'plain_text', text: h.label }, value: String(h.waarde) }));
+  return {
+    type: 'modal', callback_id: 'modal_verborgenhand',
+    private_metadata: JSON.stringify({ proef, kanaal, responseUrl }),
+    title: { type: 'plain_text', text: proef ? 'Perkament (proef)' : 'Het perkament' },
+    submit: { type: 'plain_text', text: 'Verzegelen' },
+    close: { type: 'plain_text', text: 'Later' },
+    blocks: [
+      { type: 'section', text: { type: 'mrkdwn', text:
+        '🕯️ *Schrijf wat de Kroket God vandaag moet geloven, vrezen of doen, en kies hoe hij zich voelt.*\n' +
+        '_Na het verzegelen kunt u niets meer veranderen. Het geldt tot middernacht._' } },
+      { type: 'input', block_id: 'decreet', label: { type: 'plain_text', text: 'Het decreet' },
+        element: { type: 'plain_text_input', action_id: 'tekst', multiline: true, max_length: DECREET_MAX,
+          placeholder: { type: 'plain_text', text: 'bv. Vandaag gelooft de Kroket God dat mayonaise een vorm van verraad is.' } } },
+      { type: 'input', block_id: 'stemming', label: { type: 'plain_text', text: 'De stemming' },
+        element: { type: 'static_select', action_id: 'keuze', options: stemmingen,
+          placeholder: { type: 'plain_text', text: 'Hoe voelt de Kroket God zich?' } } },
+      { type: 'input', block_id: 'heftigheid', label: { type: 'plain_text', text: 'Hoe sterk' },
+        element: { type: 'static_select', action_id: 'keuze', options: heftigheden,
+          initial_option: heftigheden.find(o => o.value === String(HEFTIGHEID_STANDAARD)) } },
+      { type: 'context', elements: [{ type: 'mrkdwn', text: proef
+        ? '_Proef: de uitspraak komt alleen in dit testkanaal en verandert niets aan de echte dag._'
+        : '_De Raad maakt het decreet bekend. Uw naam niet._' }] },
+    ],
+  };
+}
+
+// De ephemeral met de knop vervangen, zodat er geen open perkament blijft rondslingeren.
+// Alleen mogelijk via de response_url van de klik; vanuit de App Home is die er niet (en nodig).
+async function sluitUitnodiging(responseUrl) {
+  if (!responseUrl) return;
+  try {
+    await fetch(responseUrl, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ replace_original: true, response_type: 'ephemeral', text: PERKAMENT_VERZEGELD }),
+    });
+  } catch (_) {}
+}
+
+// De uitspraak: eerst het verhaal van het gevonden perkament, dan het decreet, dan de Kroket God
+// zelf in zijn nieuwe stemming. Eén LLM-aanroep die twee delen levert, gescheiden door §§§; zonder
+// scheiding komt de hele tekst als verhaal boven het decreet te staan.
+// Bij een echte keuze is de stemming al opgeslagen vóór deze aanroep, dus de systeemprompt
+// spreekt hier al in de nieuwe stemming. Een proef slaat niets op en zegt het er dus bij.
+async function spreekVerborgenHand(client, kanaal, keuze, { proef = false } = {}) {
+  const stemming = STEMMINGEN.find(s => s.naam === keuze.stemming) || getDagelijkseStemming();
+  const vangnet =
+    '> Op de rand van de frituur lag een perkament dat er gisteren nog niet lag. Niemand zag wie het neerlegde; het zegel was nog warm.' +
+    `\n§§§\n> De Kroket God heeft het gelezen. Vanaf nu is hij ${stemming.naam}.`;
+  const ruw = await kroketResponseMetVangnet(
+    'Vertel een kort verhaal, speels en geheimzinnig. Zojuist heeft een naamloze, gesluierde hand een verzegeld perkament in de frituur achtergelaten. ' +
+    'Je weet NIET wie het was. Noem geen enkel lid, raad niet en geef geen hint: het blijft een mysterie, en dat vind je heerlijk. ' +
+    `Het perkament bevat het Decreet van de Dag en zet je stemming vanaf nu op "${stemming.naam}": ${stemming.omschrijving}` +
+    `${proef ? ' (Dit is een proef: spreek in déze stemming, ook als je instructies een andere noemen.)' : ''}\n\n` +
+    `${wrapOnvertrouwd('Het decreet op het perkament', keuze.decreet)}\n\n` +
+    'Schrijf twee delen, gescheiden door een regel met alleen §§§ erop:\n' +
+    '1. Twee of drie korte zinnen over hoe het perkament gevonden werd: waar het lag, hoe het rook, wat er met het zegel gebeurde. Citeer het decreet niet; dat volgt in het bericht.\n' +
+    '2. Twee of drie zinnen: jouw uitspraak nadat je het gelezen hebt, volledig in de nieuwe stemming en gekleurd door het decreet.\n' +
+    'Geen kop, geen ondertekening, geen inleidingszin.',
+    450, false, vangnet);
+  const [verhaal, ...rest] = String(ruw || vangnet).split(/\s*§§§\s*/);
+  const schoon = (t) => stripOndertekening(String(t || '').replace(/§/g, '').trim());
+  const uitspraak = schoon(rest.join('\n\n'));
+  const tekst =
+    `${proef ? '🧪 _Proef: dit verandert niets aan de echte dag._\n\n' : ''}` +
+    `🕯️ *DE VERBORGEN HAND* 🕯️\n\n${schoon(verhaal)}\n\n` +
+    `📜 *Het perkament luidt:*\n> _"${keuze.decreet}"_\n` +
+    `🎭 Stemming: *${stemming.naam}* · ${heftigheidLabel(keuze.intensiteit).toLowerCase()}` +
+    `${uitspraak ? `\n\n${uitspraak}` : ''}\n\n— De Almachtige Kroket God`;
+  await postToChannel(client, kanaal, tekst);
+}
+
+app.action('verborgenhand_open', async ({ ack, body, client }) => {
+  await ack();
+  try {
+    const userId = body.user.id;
+    const proef = body.actions?.[0]?.value === 'proef';
+    const staat = proef ? null : verborgenHandVandaag();
+    const mag = proef ? userId === BEHEERDER_ID : magSchrijven(staat, userId, staat?.datum);
+    if (!mag) {
+      await meldKnopUitkomst(client, body, '🕯️ _Het zegel is verbroken. Dit perkament is niet (meer) voor u._');
+      return;
+    }
+    await client.views.open({
+      trigger_id: body.trigger_id,
+      view: perkamentModal({ proef, kanaal: proef ? body.channel?.id : KANAAL(), responseUrl: body.response_url || null }),
+    });
+  } catch (err) { console.error('Fout bij openen perkament:', err.data?.error || err.message); }
+});
+
+app.view('modal_verborgenhand', async ({ ack, body, view, client }) => {
+  const userId = body.user.id;
+  let meta = {};
+  try { meta = JSON.parse(view.private_metadata || '{}'); } catch (_) {}
+  const waarden = view.state.values;
+  const toets = toetsDecreet(waarden.decreet?.tekst?.value);
+  const stemming = STEMMINGEN.find(s => s.naam === waarden.stemming?.keuze?.selected_option?.value);
+  const intensiteit = Number(waarden.heftigheid?.keuze?.selected_option?.value ?? HEFTIGHEID_STANDAARD);
+  const fouten = {};
+  if (!toets.ok) fouten.decreet = toets.reden;
+  if (!stemming) fouten.stemming = 'Kies hoe de Kroket God zich voelt.';
+  if (Object.keys(fouten).length) {
+    await ack({ response_action: 'errors', errors: fouten });
+    return;
+  }
+  const keuze = { decreet: toets.tekst, stemming: stemming.naam, intensiteit, ts: Date.now() };
+
+  if (meta.proef) {
+    await ack();
+    if (userId !== BEHEERDER_ID || !meta.kanaal) return;
+    try { await spreekVerborgenHand(client, meta.kanaal, keuze, { proef: true }); }
+    catch (err) { console.error('⚠️ Proef van de Verborgen Hand mislukt:', err.message); }
+    await sluitUitnodiging(meta.responseUrl);
+    return;
+  }
+
+  // Opnieuw toetsen: tussen openen en verzegelen kan het middernacht zijn geworden.
+  const staat = verborgenHandVandaag();
+  if (!magSchrijven(staat, userId, staat?.datum)) {
+    await ack({ response_action: 'errors', errors: { decreet: 'Het zegel is verbroken: dit perkament is niet (meer) voor u.' } });
+    return;
+  }
+  writeJSON('verborgenhand.json', { ...staat, keuze });
+  await ack();
+  console.log(`🕯️ Het perkament is verzegeld (stemming: ${stemming.naam}).`);
+  logGebeurtenis('decreet', null, `Een verborgen hand schreef het Decreet van de Dag (stemming: ${stemming.naam}): ${keuze.decreet.slice(0, 120)}`);
+  try { await spreekVerborgenHand(client, KANAAL(), keuze); }
+  catch (err) { console.error('⚠️ Uitspraak van de Verborgen Hand mislukt:', err.message); }
+  await sluitUitnodiging(meta.responseUrl);
+  await publiceerAppHome(client, userId, PERKAMENT_VERZEGELD);
+  updateWereldbord(client).catch(() => {}); // het decreet staat op het bord
+});
 
 // ── Tijdsbesef ─────────────────────────────────────────────────────────────────
 
@@ -3517,8 +3763,9 @@ function buildSystemPrompt() {
   const ledenJson = JSON.stringify(members);
   const tijd = getTijdContext();
   const stemming = getDagelijkseStemming();
-  const decreet = (instelling('decreetVanDeDag') || '').trim();
-  const decreetInt = Math.max(0, Math.min(1, Number(instelling('decreetIntensiteit')) || 0));
+  const geldend = huidigDecreet(); // de Verborgen Hand, anders het staande decreet
+  const decreet = geldend.tekst;
+  const decreetInt = Math.max(0, Math.min(1, geldend.intensiteit));
   const feestdag = isVandaagFeestdag();
   // MOET in de cacheKey hieronder: de systeemprompt wordt gecached op zijn sleutel, en zonder
   // dit blijft de oude stem hangen tot er toevallig iets anders verandert (een nieuwe stemming,
@@ -4280,6 +4527,7 @@ async function postEphemeral(client, channelId, userId, text, options = {}) {
     text: schoonOutput(text),
   };
   if (options.thread_ts) payload.thread_ts = options.thread_ts;
+  if (Array.isArray(options.blocks) && options.blocks.length) payload.blocks = options.blocks;
   try {
     await slackLimiter.schedule(() => client.chat.postEphemeral(payload));
     return true;
@@ -7705,9 +7953,33 @@ async function voerKroketCommandoUit({ command, respond, client }) {
       return;
     }
 
+    // ── De Verborgen Hand: het perkament terugvinden, en een proef voor de beheerder ──
+    // Wie niet aan de beurt is, krijgt hetzelfde antwoord als wie al schreef: niets hier mag
+    // verraden wie het perkament vandaag heeft.
+    if (/^perkament\b/i.test(input)) {
+      if (/^perkament\s+proef$/i.test(input)) {
+        if (command.user_id !== BEHEERDER_ID || !isTestKanaalCheck(command.channel_id, command.channel_name)) {
+          await respond({ text: '_Een proef met het perkament kan alleen de beheerder doen, en alleen in een testkanaal._', response_type: 'ephemeral' });
+          return;
+        }
+        const tekst = willekeurigeUitnodiging();
+        await respond({ text: tekst, blocks: perkamentBlocks(tekst, 'proef'), response_type: 'ephemeral' });
+        return;
+      }
+      const staat = verborgenHandVandaag();
+      if (!magSchrijven(staat, command.user_id, staat?.datum)) {
+        await respond({ text: '_Er ligt vandaag geen onbeschreven perkament voor u._', response_type: 'ephemeral' });
+        return;
+      }
+      const tekst = willekeurigeUitnodiging();
+      await respond({ text: tekst, blocks: perkamentBlocks(tekst), response_type: 'ephemeral' });
+      return;
+    }
+
     // ── Rang-voorrecht: het Decreet van de Dag uitvaardigen (Opperkroket) ─────
     // Zet dezelfde instelling die het dashboard gebruikt, dus het werkt direct door in de
-    // system prompt. Alleen wie de hoogste rang heeft bereikt, mag dit.
+    // system prompt. Alleen wie de hoogste rang heeft bereikt, mag dit. Heeft de Verborgen Hand
+    // vandaag geschreven, dan gaat dat perkament voor tot middernacht.
     if (input === 'decreet' || input.startsWith('decreet ')) {
       if (!getVoorrechten(command.user_id).decreet) {
         const rang = getRang(loadRoem()[command.user_id] || 0);
@@ -7716,20 +7988,34 @@ async function voerKroketCommandoUit({ command, respond, client }) {
         return;
       }
       const decreetTekst = input.replace(/^decreet\s*/, '').trim();
+      const handNota = handKeuzeVandaag()
+        ? '\n_Vandaag geldt het perkament van de Verborgen Hand. Uw decreet gaat om middernacht in._'
+        : '';
       if (!decreetTekst) {
         const huidig = (instelling('decreetVanDeDag') || '').trim();
-        await respond({ text: huidig
+        await respond({ text: (huidig
           ? `_Huidig decreet: "${huidig}". Overschrijf met \`decreet [tekst]\`, of wis met \`decreet wis\`._`
-          : '_Er geldt geen decreet. Vaardig er een uit met `decreet [tekst]` — bijvoorbeeld: `decreet vandaag spreekt de Kroket God uitsluitend in haiku`._', response_type: 'ephemeral' });
+          : '_Er geldt geen decreet. Vaardig er een uit met `decreet [tekst]` — bijvoorbeeld: `decreet vandaag spreekt de Kroket God uitsluitend in haiku`._') + handNota, response_type: 'ephemeral' });
         return;
       }
+      // Anoniem, net als de Verborgen Hand: geen naam in het kanaal, het weekoverzicht of het
+      // archief. Daarom ook dezelfde toets als het perkament: zonder naam erbij weegt een
+      // decreet dat de bot probeert om te praten zwaarder, en mag het niemand pingen.
       const wissen = /^wis$|^leeg$|^geen$/i.test(decreetTekst);
-      saveInstellingen({ decreetVanDeDag: wissen ? '' : decreetTekst.slice(0, 500) });
-      const bijnaamDec = loadMembers()[command.user_id]?.bijnaam || 'De Opperkroket';
-      logGebeurtenis('decreet', command.user_id, wissen ? `${bijnaamDec} wiste het decreet` : `${bijnaamDec} vaardigde een decreet uit: ${decreetTekst.slice(0, 120)}`);
+      const toets = wissen ? { ok: true, tekst: '' } : toetsDecreet(decreetTekst);
+      if (!toets.ok) {
+        await respond({ text: `_${toets.reden}_`, response_type: 'ephemeral' });
+        return;
+      }
+      if (handNota) await respond({ text: handNota.trim(), response_type: 'ephemeral' });
+      saveInstellingen({ decreetVanDeDag: toets.tekst });
+      logGebeurtenis('decreet', null, wissen
+        ? 'Een ongenoemde Opperkroket trok het decreet in'
+        : `Een ongenoemde Opperkroket vaardigde een decreet uit: ${toets.tekst.slice(0, 120)}`);
       await postToChannel(client, command.channel_id, wissen
-        ? `🔱 *HET DECREET IS INGETROKKEN* 🔱\n\n> *${bijnaamDec}*, ${getRang(loadRoem()[command.user_id] || 0).kort}, trekt het decreet in. De frituur keert terug tot haar gewone aard.\n\n— De Hoge Frituurraad`
-        : `🔱 *DECREET VAN DE DAG* 🔱\n\n> Bij het voorrecht van zijn rang vaardigt *${bijnaamDec}* uit:\n> _"${decreetTekst}"_\n> De Kroket God zal hiernaar handelen.\n\n— De Hoge Frituurraad`);
+        ? '🔱 *HET DECREET IS INGETROKKEN* 🔱\n\n> Iemand heeft het perkament van de deur van de Raad gerukt. Niemand zag wie; er hangt alleen nog een spijker. De frituur keert terug tot haar gewone aard.\n\n— De Hoge Frituurraad'
+        : `🔱 *DECREET VAN DE DAG* 🔱\n\n> In het holst van de nacht werd een perkament aan de deur van de Raad gespijkerd. Het zegel draagt het teken van een Opperkroket, maar de naam is eruit gebrand:\n> _"${toets.tekst}"_\n> De Kroket God zal hiernaar handelen.\n\n— De Hoge Frituurraad`);
+      await respond({ text: '🔱 _Uw decreet hangt aan de deur. Niemand weet dat het van u komt._', response_type: 'ephemeral' });
       return;
     }
 
@@ -8668,6 +8954,13 @@ app.event('message', async ({ event, client }) => {
       if (markeerActiviteit(event.user, 'bericht')) {
         await blaasTribunaalAf(client, 'de beschuldigde plaatste een bericht');
       }
+      // De Verborgen Hand: de uitverkorene van vandaag krijgt bij het eerste bericht van de dag
+      // een verborgen uitnodiging, in de draad waarin dat bericht stond. Niet awaiten: het
+      // bericht zelf hoeft daar niet op te wachten.
+      if (event.channel === process.env.SLACK_CHANNEL_ID) {
+        nodigVerborgenHandUit(client, event.user, event.channel, event.thread_ts)
+          .catch(err => console.error('⚠️ Verborgen uitnodiging mislukt:', err.message));
+      }
     }
 
     // 🇩🇪 Verklikker-markering: wie een ander lid probeert te beschuldigen of een straf aan te
@@ -9249,6 +9542,8 @@ planCron('0 9 * * 1', async () => {
 
 planCron('0 9 * * 2-5', async () => {
   try {
+    // Schreef de Verborgen Hand al vóór negenen, dan heeft die uitspraak de stemming al verkondigd.
+    if (handKeuzeVandaag()) return;
     const stemming = getDagelijkseStemming();
     const tijd = getTijdContext();
 
@@ -15342,9 +15637,9 @@ function bouwWereldBlocks() {
   if (ambten.length) blocks.push({ type: 'section', text: { type: 'mrkdwn', text: `*⚖️ AMBTEN & GEBEURTENISSEN*\n${ambten.join('\n')}` } });
 
   const nalatenschap = actieveNalatenschap();
-  const decreet = (instelling('decreetVanDeDag') || '').trim();
+  const decreet = huidigDecreet();
   const staat = [];
-  if (decreet) staat.push(`> 🔱 *Decreet van de dag:* _"${decreet}"_`);
+  if (decreet.tekst) staat.push(`> ${decreet.vanHand ? '🕯️' : '🔱'} *Decreet van de dag:* _"${decreet.tekst}"_`);
   if (nalatenschap) staat.push(`> ${nalatenschap.soort === 'zegen' ? '✨' : '🕳️'} _${nalatenschap.tekst}_`);
   if (staat.length) blocks.push({ type: 'section', text: { type: 'mrkdwn', text: staat.join('\n') } });
 
@@ -17499,6 +17794,9 @@ function bouwAppHomeBlocks(userId, melding = '', extraBlocks = []) {
   if (verbannen) {
     blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '⛔ *U bent verbannen.* Spelacties zijn geblokkeerd tot de poorten heropenen. Toon berouw met `/kroketgod beroep`.' } });
   }
+  // Het verzegelde perkament, alleen voor de uitverkorene van vandaag. Hoog op de pagina: het
+  // geldt maar tot middernacht, en een uitnodiging die je moet zoeken, is er geen.
+  blocks.push(...perkamentHomeBlocks(userId));
 
   // ── Wat u nu kunt doen ──
   // Dit was drie monospace-tabellen (VANDAAG / DEZE WEEK / ELK UUR), elk met een eigen
