@@ -82,6 +82,13 @@ const {
   GUNST_PER_WEEK, GUNST_BODEM,
   gegevenDezeWeek, mag: magGunst, boekGunst, nettoGulheid, uitkering: gunstUitkering, ruimOudeWeken,
 } = require('./lib/gunst.js');
+// Daglimieten voor de bronnen die de speler niets kosten: zondebok, lofzang, organische eer.
+const {
+  IEDEREEN: LIMIET_IEDEREEN, magNog: magNogVandaag, boekIn: boekDaglimiet, zondebokStraf,
+} = require('./lib/limieten.js');
+const loadDaglimieten = () => readJSON('daglimieten.json', {});
+const saveDaglimieten = (d) => writeJSON('daglimieten.json', d);
+registreerFeature({ naam: 'daglimieten', state: ['daglimieten.json'] });
 const loadVoorstellen = () => readJSON('huisonderwerpen.json', { voorstellen: [] });
 const saveVoorstellen = (d) => writeJSON('huisonderwerpen.json', d);
 
@@ -6464,12 +6471,27 @@ async function voerKroketCommandoUit({ command, respond, client }) {
     }
 
     // ── Zondebok
+    // Alleen voor leden, één keer per dag. Dit stond open voor iedereen zonder wachttijd: elke
+    // aanroep kostte een willekeurig lid een punt en een LLM-call, dus een gast in het kanaal kon
+    // de hele Raad leegtikken. De beurt wordt geboekt vóór de LLM-call, zodat twee aanroepen
+    // kort na elkaar niet allebei door de limiet glippen.
     if (input === 'zondebok') {
+      if (!members[command.user_id]) {
+        await respond({ text: 'Alleen leden van de Kroket Illuminati mogen een zondebok aanwijzen.', response_type: 'ephemeral' });
+        return;
+      }
+      const vandaag = dagSleutel();
+      const limieten = loadDaglimieten();
+      if (!magNogVandaag(limieten, 'zondebok', command.user_id, vandaag)) {
+        await respond({ text: '_U heeft vandaag al een zondebok aangewezen. De Kroket God offert er één per dag — morgen mag u weer wijzen._', response_type: 'ephemeral' });
+        return;
+      }
       const lid = randomMember();
       if (!lid) {
         await respond('De Hoge Frituurraad heeft geen leden gevonden.');
         return;
       }
+      saveDaglimieten(boekDaglimiet(limieten, 'zondebok', command.user_id, vandaag));
       const [zondeId, zondebok] = lid;
       // Zegen van de Paneerlaag (Aflatenhandel): de straf ketst af, geen puntenverlies.
       if (heeftPowerup(zondeId, 'zegen')) {
@@ -6480,8 +6502,13 @@ async function voerKroketCommandoUit({ command, respond, client }) {
         await postToChannel(client, command.channel_id, tekst);
         return;
       }
-      pasScoreAan(zondeId, -1);
-      const tekst = await kroketResponse(`De Kroket God wijst ${zondebok.bijnaam} aan als zondebok — uit eigen goddelijke wil. Begin DIRECT met het vonnis, geen inleidingszin, geen verwijzing naar wie dit aanvroeg of waarom.`, 400, false);
+      // Wie al op nul staat verliest niets meer: de zondebok duwt niemand onder de bodem.
+      const straf = zondebokStraf(loadScores()[zondeId]);
+      if (straf) pasScoreAan(zondeId, -straf);
+      const tekst = await kroketResponse(
+        `De Kroket God wijst ${zondebok.bijnaam} aan als zondebok — uit eigen goddelijke wil. ` +
+        (straf ? '' : `${zondebok.bijnaam} bezit geen kroketpunt meer, dus er valt niets af te nemen: alleen de schande blijft. Vermeld GEEN puntenaantal. `) +
+        'Begin DIRECT met het vonnis, geen inleidingszin, geen verwijzing naar wie dit aanvroeg of waarom.', 400, false);
       await postToChannel(client, command.channel_id, tekst);
       return;
     }

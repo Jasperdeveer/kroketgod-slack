@@ -85,6 +85,9 @@ voorraad.json
 # De Frituurbeurs: posities per week. Geheim voor de leden onderling.
 beurs.json
 
+# Daglimieten (zondebok, lofzang, organische eer): wie vandaag zijn beurt al had.
+daglimieten.json
+
 # Backups bevatten kopieën van alle ledengegevens
 backups/
 
