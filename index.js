@@ -148,9 +148,10 @@ const {
   // redeneer-headroom die de gpt-oss-modellen nodig hebben (een classifier met max_tokens 5 zou anders
   // al zijn budget aan denk-tokens kwijt zijn en leeg terugkomen).
   GROQ_SLIM, GROQ_LICHT, geminiKeys, callGemini, callOpenAICompat, roepModelAan,
-  telLlmCall, krimpBerichten, _draaiModellen,
-  providerCooldownTot, geminiKeyCooldownTot, REDENEER_HEADROOM,
+  telLlmCall, krimpBerichten, _draaiModellen, ketenDefinitie,
+  providerCooldownTot, geminiKeyCooldownTot, geminiSleutelVrijOp, REDENEER_HEADROOM,
 } = require('./lib/llm.js');
+const { bankLijst, bankStatus, wisBank } = require('./lib/providerbank.js');
 
 
 // ── Dashboard authenticatie ────────────────────────────────────────────────────
@@ -20789,14 +20790,19 @@ async function logQuotaStatus() {
     }
   } catch (e) { console.warn('📊 Groq quota-check faalde:', e.message); }
 
-  // Gemini: hoeveel keys staan momenteel in cooldown (op hun limiet)? Geen quota-verbruik.
+  // Gemini: hoeveel keys staan momenteel in cooldown of op de bank? Geen quota-verbruik.
   const keys = geminiKeys();
   if (keys.length) {
     const nu = Date.now();
-    const tot = keys.map(k => geminiKeyCooldownTot.get(k) || 0);
-    const vrij = tot.filter(t => t <= nu).length;
+    const tot = keys.map(k => geminiSleutelVrijOp(k, nu));
+    const vrij = tot.filter(t => !t).length;
     const eerstvrij = vrij > 0 ? 0 : Math.round((Math.min(...tot) - nu) / 1000);
     console.log(`📊 Gemini — ${vrij}/${keys.length} keys vrij${vrij === 0 ? `, eerstvolgende over ~${eerstvrij}s` : ''}`);
+  }
+  // De bank: wat staat er langdurig uit de keten, en waarom.
+  const bank = bankLijst();
+  if (bank.length) {
+    console.log(`📊 Op de bank — ${bank.map(r => `${r.label} (${r.status ?? '?'}${r.reden ? `, ${r.reden}` : ''}) nog ${Math.round(r.restMs / 60_000)} min`).join(' · ')}`);
   }
 }
 planCron('*/15 * * * *', logQuotaStatus, { timezone: 'Europe/Amsterdam' });
@@ -20832,29 +20838,25 @@ async function bouwDashboardData() {
     .map(([id, lijst]) => ({ naam: naam(id), aantal: (lijst || []).filter(x => nu - x.ts < VERGRIJP_VENSTER_MS).length }))
     .filter(x => x.aantal > 0).sort((a, b) => b.aantal - a.aantal);
 
-  // Cooldown-keys zijn tegenwoordig `provider:model` (Groq-limieten zijn per model) —
-  // toon per provider de langste resterende cooldown over al zijn modellen.
-  const provCooldown = (p) => {
-    let t = 0;
-    for (const [key, tot] of providerCooldownTot) {
-      if (key === p || key.startsWith(`${p}:`)) t = Math.max(t, tot);
-    }
-    return t > nu ? Math.round((t - nu) / 1000) : 0;
-  };
+  // Uit de ketendefinitie zelf, niet uit een eigen lijst: die noemde "Groq 70B" en "Groq 8B-instant"
+  // terwijl de keten allang op gpt-oss-120b/20b draaide. Cooldown-keys zijn `provider:model`
+  // (Groq-limieten zijn per model), dus elke schakel heeft zijn eigen cooldown en bankregel.
   const keys = geminiKeys();
   const geminiKeysStatus = keys.map((k, i) => {
-    const t = geminiKeyCooldownTot.get(k) || 0;
-    return { nr: i + 1, vrij: t <= nu, resetOver: t > nu ? Math.round((t - nu) / 1000) : 0 };
+    const t = geminiSleutelVrijOp(k, nu);
+    return { nr: i + 1, vrij: !t, resetOver: t ? Math.round((t - nu) / 1000) : 0 };
   });
-  const providers = [
-    { naam: 'Gemini 2.5-flash', provider: 'gemini', tier: 'zwaar', actief: keys.length > 0, cooldown: provCooldown('gemini') },
-    { naam: 'Cerebras gpt-oss-120b', provider: 'cerebras', tier: 'zwaar', actief: !!process.env.CEREBRAS_API_KEY, cooldown: provCooldown('cerebras') },
-    { naam: 'SambaNova 70B', provider: 'sambanova', tier: 'middel', actief: !!process.env.SAMBANOVA_API_KEY, cooldown: provCooldown('sambanova') },
-    { naam: 'Groq 70B', provider: 'groq', tier: 'middel', actief: !!process.env.GROQ_API_KEY, cooldown: provCooldown('groq') },
-    { naam: 'Cloudflare 70B', provider: 'cloudflare', tier: 'middel', actief: !!(process.env.CLOUDFLARE_ACCOUNT_ID && process.env.CLOUDFLARE_API_TOKEN), cooldown: provCooldown('cloudflare') },
-    { naam: 'OpenRouter', provider: 'openrouter', tier: 'middel', actief: !!process.env.OPENROUTER_API_KEY, cooldown: provCooldown('openrouter') },
-    { naam: 'Groq 8B-instant', provider: 'groq', tier: 'licht', actief: !!process.env.GROQ_API_KEY, cooldown: provCooldown('groq') },
-  ];
+  const providers = ketenDefinitie().map(m => {
+    const t = providerCooldownTot.get(m.cooldownKey) || 0;
+    const bank = bankStatus(m.cooldownKey, nu);
+    return {
+      naam: m.label, provider: m.provider, tier: m.tier, actief: m.beschikbaar,
+      cooldown: t > nu ? Math.round((t - nu) / 1000) : 0,
+      bank: bank ? { status: bank.status, reden: bank.reden, trap: Number.isInteger(bank.trap) ? bank.trap + 1 : null, restSec: Math.round((bank.tot - nu) / 1000) } : null,
+    };
+  });
+  // Alles wat op de bank staat, ook Gemini-sleutels met hun dagquotum op en het beeldquotum.
+  const bank = bankLijst(nu).map(r => ({ label: r.label, status: r.status, reden: r.reden, trap: r.trap, restSec: Math.round(r.restMs / 1000) }));
 
   // Aggregaties voor de grafieken op het dashboard (uit de gebeurtenissen van deze week).
   const DAG_LABELS = ['ma', 'di', 'wo', 'do', 'vr', 'za', 'zo'];
@@ -21039,7 +21041,7 @@ async function bouwDashboardData() {
       vrijdagSec: secondenTotVrijdagMiddag(),
       weekend: isNaHeiligMoment(),
     },
-    llm: { geminiKeys: geminiKeysStatus, providers, groq: laatsteGroqQuota },
+    llm: { geminiKeys: geminiKeysStatus, providers, bank, groq: laatsteGroqQuota },
     stats: {
       leden: Object.keys(members).length,
       ranglijst,
@@ -21258,8 +21260,8 @@ async function voerOverslaan(soort, { key, ts, id }) {
 async function voerDashboardActie(actie) {
   switch (actie) {
     case 'resetCooldowns':
-      geminiKeyCooldownTot.clear(); providerCooldownTot.clear();
-      return 'Cooldowns gewist.';
+      geminiKeyCooldownTot.clear(); providerCooldownTot.clear(); wisBank();
+      return 'Cooldowns en bank gewist.';
     case 'ververseQuota':
       await logQuotaStatus();
       return 'Quota ververst.';
