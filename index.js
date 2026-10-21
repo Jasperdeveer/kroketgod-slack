@@ -8938,16 +8938,27 @@ app.event('app_mention', async ({ event, client }) => {
       const tokenReden = (eerTokenMatch[2] || '').trim();
       tekst = tekst.replace(/[ \t]*\[EER:[^\]\n]+\]/i, '').trim();
       const gevonden = getMemberByNaam(bijnaamTarget);
-      if (gevonden && gevonden[0] !== userId && telEerVandaag(userId) < eerLimiet(userId)) {
+      // Uit het budget van de Kroket God zelf: twee per dag voor de hele Raad, één per ontvanger
+      // (lib/limieten.js). Niet meer op naam van de spreker — zie voerEer. De spreker zelf eren
+      // blijft uitgesloten, anders is "eer mij" een verzoek dat de bot inwilligt; en de spreker
+      // moet lid zijn, zodat een gast geen punten in beweging zet. Een lege of te schrale reden
+      // kost het budget niets: die wordt vóór het boeken afgewezen.
+      const vandaag = dagSleutel();
+      const limieten = loadDaglimieten();
+      if (gevonden && gevonden[0] !== userId && members[userId] && !redenProbleem(tokenReden)
+          && magNogVandaag(limieten, 'organische_eer', LIMIET_IEDEREEN, vandaag)
+          && magNogVandaag(limieten, 'organische_eer_ontvanger', gevonden[0], vandaag)) {
+        saveDaglimieten(boekDaglimiet(boekDaglimiet(limieten, 'organische_eer', LIMIET_IEDEREEN, vandaag),
+          'organische_eer_ontvanger', gevonden[0], vandaag));
         // Stil: voerEer plaatst geen eigen bericht, we plakken de verkondiging onder de reactie
         // die hier tóch al de deur uit gaat. Alle puntenlogica (jury, dobbel, Dubbele Eer-zegen,
-        // alliantie-terugslag, weefsel, daglimiet) zit in voerEer — dit pad had daar zijn eigen
-        // gedupliceerde versie van, en die liep bij elke wijziging achter.
-        const uitkomst = await voerEer(client, userId, [gevonden[0]], tokenReden, event.channel, { bron: 'organisch', stil: true });
+        // weefsel) zit in voerEer — dit pad had daar zijn eigen gedupliceerde versie van, en die
+        // liep bij elke wijziging achter.
+        const uitkomst = await voerEer(client, null, [gevonden[0]], tokenReden, event.channel, { bron: 'organisch', stil: true, vanGod: true });
         if (uitkomst.ok) tekst += `\n\n${uitkomst.aankondiging}`;
-        else console.log(`⚜️ EER-token genegeerd: ${uitkomst.code} (reden: "${tokenReden}")`);
+        else console.log(`⚜️ EER-token genegeerd: ${uitkomst.code}`);
       } else {
-        console.log(`⚜️ EER-token genegeerd: "${bijnaamTarget}" onbekend, zelflof of daglimiet bereikt`);
+        console.log('⚜️ EER-token genegeerd: onbekend lid, de spreker zelf, geen reden of het eerbudget van vandaag is op');
       }
     }
 
@@ -12673,11 +12684,19 @@ async function verwerkBingoClaim(client, userId, nr, bewijs, channelId) {
 // en is nu een gok waarvan de inzet is hoe goed je motiveert.
 async function voerEer(client, geverId, ontvangerIds, reden, channelId, opties = {}) {
   const members = loadMembers();
+  // opties.vanGod: het organische eerbewijs uit een reactie van de Kroket God. Dat komt uit zijn
+  // EIGEN budget (lib/limieten.js, getoetst door de aanroeper) en niet meer uit dat van de spreker:
+  // er is dan geen gever onder de leden — geen eerlimiet, geen herhaalde-redenregister, geen
+  // weefselrelatie, geen eer_gegeven-daad en geen verbondstrouw. Het boekte vroeger op naam van de
+  // spreker, en dan liet een decreet dat elke reactie een [EER:auteur|…] liet aanhangen het
+  // eerbudget van iedereen die de bot aansprak naar de auteur vloeien.
+  const vanGod = !!opties.vanGod;
+  if (vanGod) geverId = null;
   // De gever moet zelf lid zijn. De drie ingangen (commando, App Home-modal, organisch
   // [EER:]-token) controleerden dat allemaal niet, waardoor een gast uit het kanaal punten kon
   // laten uitdelen — en de daglimiet van een niet-lid is nooit vol.
-  if (!members[geverId]) return { ok: false, code: 'geen_lid', tekst: '_Alleen leden van de Kroket Illuminati kunnen eer bewijzen._' };
-  const geefNaam = members[geverId].bijnaam;
+  if (!vanGod && !members[geverId]) return { ok: false, code: 'geen_lid', tekst: '_Alleen leden van de Kroket Illuminati kunnen eer bewijzen._' };
+  const geefNaam = vanGod ? 'de Kroket God zelf' : members[geverId].bijnaam;
 
   // Reden verplicht — vóór elke boeking en vóór elk limietverbruik. Een geweigerde reden kost
   // niets: geen punt, geen eerbewijs, geen post in het kanaal.
@@ -12702,13 +12721,13 @@ async function voerEer(client, geverId, ontvangerIds, reden, channelId, opties =
   // Slack- en LLM-I/O: twee eerbewijzen kort na elkaar lazen beide de oude stand en glipten samen
   // door de limiet. De aanroeper heeft de limiet al getoetst; dit legt het gebruik vast vóór er
   // iets kan wachten.
-  registreerEer(geverId, ontvangers.length);
+  if (!vanGod) registreerEer(geverId, ontvangers.length);
 
   const namen = ontvangers.map(id => members[id].bijnaam);
 
   // Dezelfde reden opnieuw? Dan geen jury-call: hergebruik is per definitie geen nieuwe
   // verdienste, en dit spaart bovendien quota bij wie het als sluis probeert te gebruiken.
-  const herhaald = isHerhaaldeReden(schoneReden, recenteEerRedenen(geverId));
+  const herhaald = !vanGod && isHerhaaldeReden(schoneReden, recenteEerRedenen(geverId));
   const juryKlasse = herhaald ? EER_HERHAALD : await beoordeelEerReden(schoneReden, geefNaam, namen);
   // Huisonderwerp: raakt de reden iets wat in dit genootschap sowieso zwaarder weegt (de
   // tavernehoek voorop), dan gaat het oordeel één klasse omhoog. Dit komt NA de jury en niet
@@ -12718,12 +12737,12 @@ async function voerEer(client, geverId, ontvangerIds, reden, channelId, opties =
   // een verse. Dat is precies de juiste rangorde.
   const huisGeraakt = raaktHuisonderwerp(schoneReden, actieveHuisonderwerpen());
   const basisKlasse = huisGeraakt ? promoveerKlasse(juryKlasse) : juryKlasse;
-  onthoudEerReden(geverId, schoneReden);
+  if (!vanGod) onthoudEerReden(geverId, schoneReden);
 
   const eerPunten = {};
   const klassePer = {};
   const verdubbeld = {};
-  const naspel = maakNaspel([geverId, ...ontvangers], geverId);
+  const naspel = vanGod ? maakNaspel(ontvangers, null) : maakNaspel([geverId, ...ontvangers], geverId);
   for (const id of ontvangers) {
     // De Dubbele Eer-zegen promoveert de klasse in plaats van de punten te verdubbelen: elke
     // boeking wordt hard op 5 geklemd, dus verdubbelen is bij een goede reden grotendeels
@@ -12741,15 +12760,15 @@ async function voerEer(client, geverId, ontvangerIds, reden, channelId, opties =
     // Bewust NIET `alliantieBonus: false`: die zou ook de solidariteitsbonus bij een relikwie
     // uitzetten, en die heeft niets met deze eer-regel te maken.
     if (punten > 0) await pasScoreAanMetCheck(client, id, punten, { geverId, channelId, naspel, geenVerbondszegen: true });
-    legRelatieVast(geverId, id, 'eer'); // Het Sociale Weefsel: richting doet hier het werk
+    if (!vanGod) legRelatieVast(geverId, id, 'eer'); // Het Sociale Weefsel: richting doet hier het werk
   }
-  await telActie(client, geverId, 'eer_gegeven', ontvangers.length, naspel);
+  if (!vanGod) await telActie(client, geverId, 'eer_gegeven', ontvangers.length, naspel);
 
   // Alliantie-terugslag: wie zijn eigen bondgenoot eert krijgt precies één punt terug — nooit
   // meer, ook niet bij een legendarische reden en ook niet bij meerdere ontvangers (een lid
   // heeft hoogstens één partner). Alleen als de eer werkelijk iets opleverde: een eerbewijs dat
   // op 0 uitkwam is geen daad van trouw om te belonen.
-  const partnerId = getAlliantiePartner(geverId);
+  const partnerId = vanGod ? null : getAlliantiePartner(geverId);
   const terugslagVoor = partnerId && ontvangers.includes(partnerId) && eerPunten[partnerId] > 0 ? partnerId : null;
   let terugslag = 0;
   if (terugslagVoor) {
@@ -12774,10 +12793,11 @@ async function voerEer(client, geverId, ontvangerIds, reden, channelId, opties =
     ? ` LET OP: ${geefNaam} gebruikte deze reden al eerder — hergebruikte motivatie weegt automatisch als de laagste klasse. Benoem die kaalslag met milde hoon.`
     : '';
   const nulNamen = ontvangers.filter(id => eerPunten[id] === 0).map(id => members[id].bijnaam);
-  const nulZin = nulNamen.length
-    ? ` De reden bleek te schraal: ${nulNamen.join(' en ')} ${nulNamen.length === 1 ? 'ontvangt' : 'ontvangen'} NUL kroketpunten. ` +
-      `Het eerbewijs van ${geefNaam} is verbruikt en heeft niets opgeleverd. Wees daar droog en vernietigend over — de schande is van de GEVER, niet van de geëerde.`
-    : '';
+  const nulZin = !nulNamen.length ? ''
+    : vanGod
+      ? ` De reden bleek te schraal: ${nulNamen.join(' en ')} ${nulNamen.length === 1 ? 'ontvangt' : 'ontvangen'} NUL kroketpunten. Wees daar droog over.`
+      : ` De reden bleek te schraal: ${nulNamen.join(' en ')} ${nulNamen.length === 1 ? 'ontvangt' : 'ontvangen'} NUL kroketpunten. ` +
+        `Het eerbewijs van ${geefNaam} is verbruikt en heeft niets opgeleverd. Wees daar droog en vernietigend over — de schande is van de GEVER, niet van de geëerde.`;
   const terugslagZin = terugslag
     ? ` ${geefNaam} eerde zijn eigen bondgenoot en ontvangt daarvoor ${terugslag} kroketpunt terug uit de verbondskas — benoem die trouw kort.`
     : '';
@@ -12828,7 +12848,7 @@ async function voerEer(client, geverId, ontvangerIds, reden, channelId, opties =
     await postNaspel(client, channelId, hoofd?.ts, naspel);
   }
   for (const id of ontvangers) {
-    logGebeurtenis('eer', id, `${geefNaam} eerde ${members[id].bijnaam} (+${eerPunten[id]}, ${klassePer[id]}${herhaald ? ', herhaalde reden' : ''}${opties.bron ? `, via ${opties.bron}` : ''}): ${schoneReden}`, null, geverId);
+    logGebeurtenis('eer', id, `${vanGod ? 'De Kroket God' : geefNaam} eerde ${members[id].bijnaam} (+${eerPunten[id]}, ${klassePer[id]}${herhaald ? ', herhaalde reden' : ''}${opties.bron ? `, via ${opties.bron}` : ''}): ${schoneReden}`, null, geverId);
   }
 
   // Samenvatting voor de aanroeper (ephemeral in Slack, statusregel op het dashboard): het
