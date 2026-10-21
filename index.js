@@ -90,6 +90,8 @@ const {
 const {
   IEDEREEN: LIMIET_IEDEREEN, magNog: magNogVandaag, boekIn: boekDaglimiet, zondebokStraf,
 } = require('./lib/limieten.js');
+// Wie mag lid worden: niet opnieuw, en alleen vanuit het besloten kanaal.
+const { magAanmelden } = require('./lib/toegang.js');
 const loadDaglimieten = () => readJSON('daglimieten.json', {});
 const saveDaglimieten = (d) => writeJSON('daglimieten.json', d);
 registreerFeature({ naam: 'daglimieten', state: ['daglimieten.json'] });
@@ -5411,6 +5413,32 @@ async function controleerVerlopenBan(client, userId) {
 
 // ── Aanmeld modal ──────────────────────────────────────────────────────────────
 
+// Zit dit lid in het besloten kanaal van het genootschap? true/false, of null als Slack het niet
+// kan zeggen (conversations.members vraagt channels:read/groups:read, en die scope ontbreekt op de
+// Pi vaak). De ledenlijst wordt tien minuten bewaard: aanmelden is zeldzaam, maar een dubbelklik
+// hoeft geen twee keer de hele lijst op te halen.
+let _kanaalLedenCache = { ts: 0, leden: null };
+async function isKanaalLid(client, userId) {
+  const kanaal = process.env.SLACK_CHANNEL_ID;
+  if (!kanaal || !userId) return null;
+  if (!_kanaalLedenCache.leden || Date.now() - _kanaalLedenCache.ts > 10 * 60_000) {
+    try {
+      const leden = new Set();
+      let cursor;
+      do {
+        const res = await client.conversations.members({ channel: kanaal, limit: 200, cursor });
+        for (const id of res.members || []) leden.add(id);
+        cursor = res.response_metadata?.next_cursor || undefined;
+      } while (cursor);
+      _kanaalLedenCache = { ts: Date.now(), leden };
+    } catch (err) {
+      console.warn('⚠️ Kanaalleden ophalen mislukt (aanmelden alleen in het kanaal zelf):', err.data?.error || err.message);
+      return null;
+    }
+  }
+  return _kanaalLedenCache.leden.has(userId);
+}
+
 function buildIntakeModal(triggerId) {
   return {
     trigger_id: triggerId,
@@ -5685,8 +5713,19 @@ async function voerKroketCommandoUit({ command, respond, client }) {
       return;
     }
 
-    // Aanmelden — modal openen
+    // Aanmelden — modal openen. Dit staat vóór de DM- en kanaaltoets hieronder, dus de toegang
+    // wordt hier zelf getoetst (zie lib/toegang.js): niet opnieuw voor wie al lid is, en alleen
+    // vanuit het besloten kanaal. Een commando uit de App Home doet zich voor als het hoofdkanaal
+    // (zie voerHomeCommandoUit) en telt daarom niet als bewijs.
     if (input === 'aanmelden') {
+      const alLid = !!loadMembers()[command.user_id];
+      const inHoofdkanaal = command.bron !== 'home' && command.channel_id === process.env.SLACK_CHANNEL_ID;
+      const kanaalLid = alLid || inHoofdkanaal ? null : await isKanaalLid(client, command.user_id);
+      const toets = magAanmelden({ alLid, inHoofdkanaal, kanaalLid });
+      if (!toets.ok) {
+        await respond({ text: `_${toets.reden}_`, response_type: 'ephemeral' });
+        return;
+      }
       await client.views.open(buildIntakeModal(command.trigger_id));
       return;
     }
@@ -8131,6 +8170,13 @@ async function voerKroketCommandoUit({ command, respond, client }) {
 // ── Modal callback: aanmelding ─────────────────────────────────────────────────
 
 app.view('intake_modal', async ({ ack, view, body, client }) => {
+  // Een bestaand dossier wordt nooit overschreven: het formulier schreef het hele lid opnieuw weg,
+  // en wie zich nog eens aanmeldde verloor zo zijn rol en karakter. Het openen is al getoetst
+  // (zie `aanmelden`); dit vangt een tweede formulier dat nog open stond.
+  if (loadMembers()[body.user.id]) {
+    await ack({ response_action: 'errors', errors: { bijnaam_block: 'U bent al lid van de Kroket Illuminati. Uw dossier wordt niet opnieuw ingeschreven.' } });
+    return;
+  }
   await ack();
   try {
     const userId = body.user.id;
@@ -19100,7 +19146,9 @@ async function voerHomeCommandoUit(client, userId, tekst, triggerId) {
     if (antwoord.blocks) blokken.push(...antwoord.blocks);
     else if (antwoord.text) antwoorden.push(antwoord.text);
   };
-  const command = { text: tekst, user_id: userId, channel_id: KANAAL(), channel_name: ALLOWED_CHANNELS[0], trigger_id: triggerId };
+  // `bron: 'home'`: dit commando doet zich voor als het hoofdkanaal, maar wie het stuurt hoeft daar
+  // niet in te zitten. Waar dat verschil telt (aanmelden), kijkt de handler hiernaar.
+  const command = { text: tekst, user_id: userId, channel_id: KANAAL(), channel_name: ALLOWED_CHANNELS[0], trigger_id: triggerId, bron: 'home' };
   console.log(`🏠 Home-commando van ${loadMembers()[userId]?.bijnaam || userId}: "${tekst}"`);
   try {
     await voerKroketCommandoUit({ command, respond, client });
