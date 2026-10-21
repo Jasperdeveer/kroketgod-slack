@@ -55,7 +55,9 @@ const { commandoRegister } = require('./lib/commandoregister.js');
 const { bouwCommandoMenus, bouwMenuBlocks, bouwCommandoModal, bouwCommandoTekst, leesModalWaarden, heeftVelden } = require('./lib/homecommandos.js');
 const { hpBalk, homeTabel, homeBalken, homeVoortgang, homeVoortgangInline, ladingMeter, METER_MAX, homeKaartKop } = require('./lib/blocks.js');
 const { STANDAARD_INSTELLINGEN, loadInstellingen, instelling, saveInstellingen } = require('./lib/instellingen.js');
-const { ARCHIEF_BESTAND, laadArchief, voegToeAanArchief, zoekArchief, entriesTussen, willekeurigCitaat, archiefOmvang } = require('./lib/archief.js');
+const { ARCHIEF_BESTAND, laadArchief, voegToeAanArchief, zoekArchief, entriesTussen, willekeurigCitaat, herschrijfArchief, archiefOmvang } = require('./lib/archief.js');
+// Een anoniem gelegde vloek blijft anoniem, ook in het archief en de kroniek.
+const { vloekGelegdTekst, anonimiseerVloekRegel, anonimiseerKroniek } = require('./lib/anoniem.js');
 const { VOORRAAD_BESTAND, ruimVoorraadOp, haalUitVoorraad, vulVoorraad, voorraadStand } = require('./lib/voorraad.js');
 // koers/verkoopprijs krijgen een beurs-prefix: "koers" alleen is in dit bestand te weinig
 // zeggend tussen de tientallen andere spellen.
@@ -10133,6 +10135,61 @@ async function genereerKroniekAflevering() {
   return aflevering;
 }
 
+// ── Eenmalige migratie: de koper van een vloek verdwijnt uit archief en kroniek ──
+// Tot oktober 2026 schreef koopWinkelItem de naam van de koper in de gebeurtenis (zie
+// lib/anoniem.js). Deze functie haalt die namen weg uit wat er al lag: het Grote Archief,
+// weekgebeurtenissen.json en de al geschreven kroniekafleveringen.
+//
+// Draait bij elke opstart, vóór laadArchief(), en is idempotent op inhoud: een herschreven regel
+// staat niet meer in het oude formaat, dus een tweede ronde vindt niets. De volgorde is bewust:
+// eerst een droge ronde door het archief om de kopers te vinden, dan de kroniek en de
+// weekgebeurtenissen, en pas als laatste het archief zelf. Valt de bot halverwege om, dan vindt
+// de volgende opstart de kopers dus nog gewoon terug in het archief.
+//
+// De console krijgt alleen aantallen, nooit namen.
+function wisVloekKopersUitArchief() {
+  const kopers = []; // { ts, koper }
+  herschrijfArchief((entry) => {
+    const r = entry.soort === 'gebeurtenis' ? anonimiseerVloekRegel(entry.tekst) : null;
+    if (r) kopers.push({ ts: Number(entry.ts) || 0, koper: r.koper });
+    return null;
+  }, { schrijf: false });
+
+  const week = loadWeekgebeurtenissen();
+  let weekGewijzigd = 0;
+  for (const e of week.events || []) {
+    const r = anonimiseerVloekRegel(e.beschrijving);
+    if (!r) continue;
+    kopers.push({ ts: Number(e.ts) || 0, koper: r.koper });
+    e.beschrijving = r.tekst;
+    weekGewijzigd++;
+  }
+
+  // Een aflevering vertelt de gebeurtenissen van de zeven dagen vóór hij geschreven werd
+  // (zie genereerKroniekAflevering); alleen kopers uit dat venster kunnen erin staan.
+  const kroniek = loadKroniek();
+  let kroniekGewijzigd = 0;
+  for (const a of kroniek.afleveringen || []) {
+    const tot = Number(a.ts) || 0;
+    const namen = kopers.filter(k => k.ts <= tot && k.ts >= tot - 7 * 86_400_000 - 3_600_000).map(k => k.koper);
+    if (!namen.length || typeof a.tekst !== 'string') continue;
+    const r = anonimiseerKroniek(a.tekst, namen);
+    if (r.gewijzigd) { a.tekst = r.tekst; kroniekGewijzigd++; }
+  }
+  if (kroniekGewijzigd) saveKroniek(kroniek);
+  if (weekGewijzigd) saveWeekgebeurtenissen(week);
+
+  const { gewijzigd: archiefGewijzigd } = herschrijfArchief((entry) => {
+    const r = entry.soort === 'gebeurtenis' ? anonimiseerVloekRegel(entry.tekst) : null;
+    return r ? { ...entry, tekst: r.tekst } : null;
+  });
+  if (archiefGewijzigd || weekGewijzigd || kroniekGewijzigd) {
+    console.log(`🕶️ Vloek-anonimiteit hersteld: ${archiefGewijzigd} archiefregel(s), ` +
+      `${weekGewijzigd} weekgebeurtenis(sen), ${kroniekGewijzigd} kroniekaflevering(en).`);
+  }
+  return { archief: archiefGewijzigd, week: weekGewijzigd, kroniek: kroniekGewijzigd };
+}
+
 // Post de nieuwste ongeposte aflevering. Draait maandagochtend.
 async function postKroniekAflevering(client) {
   const kroniek = loadKroniek();
@@ -13157,7 +13214,11 @@ async function koopWinkelItem(client, userId, itemKey, doelId, channelId) {
     // dat rapport kunnen aflezen wie hem gelegd heeft, en is de anonimiteit weg. Zie ook de
     // waarschuwing in lib/weefsel.js.
     registreerWinkelAankoop(userId, 'vloek', prijs, doelId);
-    logGebeurtenis('winkel', doelId, `${koperNaam} kocht een Vloek der Slappe Korst en legde die op ${doelLid.bijnaam} (−${prijs})`, null, userId);
+    // Neutrale tekst: deze beschrijving gaat het blijvende archief in, en daaruit putten
+    // `archief vloek`, het weekoverzicht en de Kroketkroniek. Geen naam en ook geen prijs — die
+    // hangt af van de rang en verraadt zo alsnog iets. `actorId` blijft wel staan: dat is een
+    // structureel veld dat alleen het dashboard toont (achter Tailscale en een token).
+    logGebeurtenis('winkel', doelId, vloekGelegdTekst(doelLid.bijnaam), null, userId);
     // Eén regel. Dit was een kop, een alinea en een ondertekening voor een gebeurtenis die
     // meermaals per dag valt; de kop zei niets wat de regel zelf niet zegt.
     await postToChannel(client, channelId,
@@ -21770,6 +21831,10 @@ process.on('SIGINT',  () => gracefulShutdown('SIGINT'));
 (async () => {
   backfillAchievements();
   backfillRoem();
+  // Vóór laadArchief: de migratie herschrijft het archiefbestand, en de index hoort de schone
+  // versie in te lezen. Een fout hier mag de opstart nooit tegenhouden.
+  try { wisVloekKopersUitArchief(); }
+  catch (err) { console.error('⚠️ Vloek-anonimiteit herstellen mislukt:', err.message); }
   // Het Grote Archief in het geheugen indexeren. Bewust bij opstarten en niet lui bij de eerste
   // zoekopdracht: dan zou het eerste bericht van de dag de indexeertijd op zijn bord krijgen.
   laadArchief();
