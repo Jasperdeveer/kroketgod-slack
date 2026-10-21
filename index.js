@@ -64,6 +64,7 @@ const {
   MIN_KOERS, KOERS_DELER, VERKOOP_FACTOR,
   koers: beursKoers, verkoopprijs: beursVerkoopprijs,
   dividendVoorPlek, totaalAandelen, toetsAankoop, toetsVerkoop, berekenAfrekening,
+  vergrendeldVandaag, naAankoopVandaag, teTellenAankopen,
 } = require('./lib/beurs.js');
 const {
   SOORTEN, randSleutel, warmte: weefselWarmte, wrijving: weefselWrijving,
@@ -13222,13 +13223,20 @@ const saveBeurs = (data) => writeJSON('beurs.json', data);
 // andere lezer (zie lib/state.js), en de handelspaden hieronder muteren de posities voordat ze
 // opslaan — zonder kopie zou een afgebroken transactie de stand in het geheugen al hebben
 // veranderd zonder dat er iets op schijf staat.
+//
+// Naast de posities: `vandaag` (wat er vandaag per lid gekocht is — dat mag pas morgen weer weg) en
+// `geteld` (hoeveel aankopen deze week als daad telden). Zie DE DRAAIDEUR in lib/beurs.js.
 function beursDezeWeek() {
   const week = getMondayOfWeek();
   const b = loadBeurs();
-  if (b.weekStart !== week) return { weekStart: week, posities: {}, inzet: {} };
+  if (b.weekStart !== week) return { weekStart: week, posities: {}, inzet: {}, vandaag: null, geteld: {} };
   const posities = {};
   for (const [koper, bezit] of Object.entries(b.posities || {})) posities[koper] = { ...bezit };
-  return { weekStart: week, posities, inzet: { ...(b.inzet || {}) } };
+  return {
+    weekStart: week, posities, inzet: { ...(b.inzet || {}) },
+    vandaag: b.vandaag ? JSON.parse(JSON.stringify(b.vandaag)) : null,
+    geteld: { ...(b.geteld || {}) },
+  };
 }
 
 // Ligt er een portefeuille van een eerdere week die nog niet is afgerekend? Dan mag er niet
@@ -13264,7 +13272,7 @@ async function koopAandeel(client, koperId, doelId, aantal = 1) {
   if (isVerbannen(koperId)) return { ok: false, tekst: '_Een balling heeft geen handelsrecht. Toon eerst berouw met `/kroketgod beroep`._' };
   if (beursWachtOpAfrekening()) return { ok: false, tekst: '_De beurs van vorige week is nog niet afgerekend. Zodra dat gebeurd is, opent de handel weer._' };
 
-  const { posities, inzet } = beursDezeWeek();
+  const { posities, inzet, vandaag, geteld } = beursDezeWeek();
   const scores = loadScores();
   const toets = toetsAankoop({
     koperId, doelId, aantal,
@@ -13281,7 +13289,14 @@ async function koopAandeel(client, koperId, doelId, aantal = 1) {
   pasScoreAan(koperId, -toets.kosten);
   posities[koperId] = { ...(posities[koperId] || {}), [doelId]: (posities[koperId]?.[doelId] || 0) + n };
   inzet[koperId] = (inzet[koperId] || 0) + toets.kosten;
-  saveBeurs({ weekStart: getMondayOfWeek(), posities, inzet });
+  // Telt als daad tot de portefeuille één keer vol is geweest; daarna is opnieuw kopen gewoon
+  // handel. Zonder dit plafond was kopen-en-verkopen bij koers 1 een gratis daad-knop.
+  const telt = teTellenAankopen(geteld[koperId], n);
+  geteld[koperId] = (geteld[koperId] || 0) + telt;
+  saveBeurs({
+    weekStart: getMondayOfWeek(), posities, inzet, geteld,
+    vandaag: naAankoopVandaag(vandaag, koperId, doelId, n, dagSleutel()),
+  });
 
   const doelNaam = members[doelId].bijnaam;
   // Bewust in de audit-log en NIET in logGebeurtenis: dat laatste voedt de week-samenvatting en
@@ -13289,7 +13304,7 @@ async function koopAandeel(client, koperId, doelId, aantal = 1) {
   // audit-log is alleen te zien op het dashboard achter Tailscale én een token — een papieren
   // spoor voor als er ooit over een transactie gesteggeld wordt.
   logAudit('beurs_koop', `${members[koperId].bijnaam} kocht ${n}× ${doelNaam} à ${koersNu}`);
-  await telActie(client, koperId, 'beurs_koop', n);
+  if (telt) await telActie(client, koperId, 'beurs_koop', telt);
   const bezitNa = posities[koperId][doelId];
   return { ok: true, tekst:
     `📈 _${n} aandeel${n > 1 ? 'en' : ''} *${doelNaam}* gekocht à ${koersNu} — ${toets.kosten} kroketpunten betaald._\n` +
@@ -13301,9 +13316,12 @@ async function verkoopAandeel(client, koperId, doelId, aantal = 1) {
   if (!members[koperId]) return { ok: false, tekst: '_Alleen leden van de Kroket Illuminati worden op de beurs toegelaten._' };
   if (beursWachtOpAfrekening()) return { ok: false, tekst: '_De beurs van vorige week is nog niet afgerekend. Zodra dat gebeurd is, opent de handel weer._' };
 
-  const { posities, inzet } = beursDezeWeek();
+  const { posities, inzet, vandaag, geteld } = beursDezeWeek();
   const scores = loadScores();
-  const toets = toetsVerkoop({ koperId, doelId, aantal, doelScore: scores[doelId] || 0, posities });
+  // Wat vandaag gekocht is, mag pas morgen weer weg: anders was kopen-en-verkopen bij koers 1
+  // gratis, en telde elke ronde als daad.
+  const toets = toetsVerkoop({ koperId, doelId, aantal, doelScore: scores[doelId] || 0, posities,
+    vergrendeld: vergrendeldVandaag(vandaag, koperId, doelId, dagSleutel()) });
   if (!toets.ok) return { ok: false, tekst: `_${toets.reden}_` };
 
   const n = Math.floor(aantal);
@@ -13313,7 +13331,7 @@ async function verkoopAandeel(client, koperId, doelId, aantal = 1) {
   if (!Object.keys(posities[koperId]).length) delete posities[koperId];
   // Netto-inzet, dus nooit onder nul: wie met winst verkocht heeft niets meer uitstaan.
   inzet[koperId] = Math.max(0, (inzet[koperId] || 0) - toets.opbrengst);
-  saveBeurs({ weekStart: getMondayOfWeek(), posities, inzet });
+  saveBeurs({ weekStart: getMondayOfWeek(), posities, inzet, vandaag, geteld });
   // Verkopen boekt punten bij zonder dat er iets verdienstelijks gebeurde, dus expres met de
   // rauwe pasScoreAan: geen roem, geen relikwieën, geen verbondszegen. De beurs is een markt,
   // geen eerbewijs.
@@ -13356,7 +13374,7 @@ function beursOverzichtTekst(userId) {
     `${uitstaand ? `, ${uitstaand} punten uitstaand` : ''})\n${portefeuille}\n\n` +
     `_Kopen:_ \`/kroketgod beurs koop [naam] [aantal]\` · _verkopen:_ \`/kroketgod beurs verkoop [naam] [aantal]\`\n` +
     `_Zondagnacht keert elk aandeel roem uit naar de eindstand: plek 1 = ${DIVIDEND_PER_PLEK[0]}, plek 2 = ${DIVIDEND_PER_PLEK[1]}, plek 3 = ${DIVIDEND_PER_PLEK[2]} roem per aandeel. ` +
-    `Daarna vervallen alle aandelen. Hoogstens ${MAX_PER_DOELWIT} per lid, en niemand handelt in zichzelf._`;
+    `Daarna vervallen alle aandelen. Hoogstens ${MAX_PER_DOELWIT} per lid, niemand handelt in zichzelf, en wat u vandaag koopt verkoopt u op zijn vroegst morgen._`;
 }
 
 // Rekent de beurs af tegen de eindstand van de week. Wordt aangeroepen door voerWeekkampioenUit,
