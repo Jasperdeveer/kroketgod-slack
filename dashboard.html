@@ -265,16 +265,23 @@ function render(d){
   var ohtml='',shtml='',lhtml='',bhtml='',loghtml='';
   // LLM providers
   var pr=d.llm.providers.map(function(p){
-    var cls=!p.actief?'off':(p.cooldown>0?'cool':'ok');
-    var note=!p.actief?'<span class="muted">geen key</span>':(p.cooldown>0?'<span class="muted">cooldown '+dur(p.cooldown)+'</span>':'<span style="color:var(--green)">vrij</span>');
+    var cls=!p.actief?'off':(p.bank?'off':(p.cooldown>0?'cool':'ok'));
+    var note=!p.actief?'<span class="muted">geen key</span>'
+      :p.bank?'<span class="muted">bank ('+esc(String(p.bank.status||'?'))+(p.bank.trap?', trap '+p.bank.trap+'/3':'')+') nog '+dur(p.bank.restSec)+'</span>'
+      :(p.cooldown>0?'<span class="muted">cooldown '+dur(p.cooldown)+'</span>':'<span style="color:var(--green)">vrij</span>');
     return '<div class="prov"><span><span class="dot '+cls+'"></span>'+esc(p.naam)+'<span class="tier">'+p.tier+'</span></span>'+note+'</div>';
   }).join('');
-  lhtml+=card('LLM-providers'+tip('De keten van taalmodellen, van slim naar simpel. Bij een fout/limiet valt de bot door naar het volgende. Groen = vrij, goud = even in cooldown (limiet), grijs = geen key. Tier: zwaar = slim+schaars, middel = degelijk, licht = snel+dom.'),pr);
+  // Op de bank: alles wat langdurig uit de keten staat (stukke sleutel, quotum op, dagquotum).
+  var bk=(d.llm.bank||[]);
+  pr+='<div class="muted" style="margin-top:8px">Op de bank: '+(bk.length?bk.map(function(r){
+    return esc(r.label)+' — '+esc(String(r.status||'?'))+(r.reden?' '+esc(r.reden):'')+', nog '+dur(r.restSec);
+  }).join(' · '):'niets')+'</div>';
+  lhtml+=card('LLM-providers'+tip('De keten van taalmodellen, van slim naar simpel. Bij een fout/limiet valt de bot door naar het volgende. Groen = vrij, goud = even in cooldown (limiet), grijs = geen key of op de bank. De bank is voor schakels die stuk zijn (401/402/403/404): eerst 30 min, bij herhaling 2 uur en dan 24 uur; een Gemini-sleutel of het beeldquotum met het dagquotum op staat er tot middernacht Pacific-tijd. De bank overleeft een herstart; Reset cooldowns maakt hem leeg. Tier: zwaar = slim+schaars, middel = degelijk, licht = snel+dom.'),pr);
   // Gemini keys
   var gk=d.llm.geminiKeys.map(function(k){return '<div class="prov"><span><span class="dot '+(k.vrij?'ok':'cool')+'"></span>Gemini-key #'+k.nr+'</span>'+(k.vrij?'<span style="color:var(--green)">vrij</span>':'<span class="muted">vrij over '+dur(k.resetOver)+'</span>')+'</div>';}).join('')||'<span class="muted">geen keys</span>';
   var g=d.llm.groq;
   var gq='';
-  if(g){gq='<div style="margin-top:10px"><div class="muted">Groq 70B — requests '+g.reqRemaining+'/'+g.reqLimit+' (reset '+g.reqReset+')</div><div class="bar"><i style="width:'+pct(g.reqRemaining,g.reqLimit)+'%"></i></div>'
+  if(g){gq='<div style="margin-top:10px"><div class="muted">Groq — requests '+g.reqRemaining+'/'+g.reqLimit+' (reset '+g.reqReset+')</div><div class="bar"><i style="width:'+pct(g.reqRemaining,g.reqLimit)+'%"></i></div>'
     +'<div class="muted" style="margin-top:6px">tokens '+g.tokRemaining+'/'+g.tokLimit+' p/min (reset '+g.tokReset+')</div><div class="bar"><i style="width:'+pct(g.tokRemaining,g.tokLimit)+'%"></i></div></div>';}
   lhtml+=card('Gemini-keys & Groq-quota'+tip('Gemini draait op meerdere keys die roteren; bij een limiet (429) gaat een key kort in cooldown. Groq toont de live rate-limit: hoeveel requests per dag en tokens per minuut er nog over zijn voordat het vol is.'),gk+gq);
   // Ranglijst (gegroepeerde balken: kroketpunten goud + roempunten violet)

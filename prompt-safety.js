@@ -36,6 +36,10 @@ const DEFENSIEVE_INSTRUCTIE =
 // niet kan doen alsof zijn tekst een (nieuw) systeembericht of een andere rol is.
 function neutraliseerDelimiters(tekst) {
   return String(tekst == null ? '' : tekst)
+    // De markeringen van inkortbare promptblokken (lib/promptbudget.js, Unicode-privégebied)
+    // eruit: anders kan een bericht een blok openen of sluiten en zo bepalen wat er bij een krap
+    // tokenbudget uit de systeemprompt wegvalt.
+    .replace(/[\uE000\uE001]/g, '')
     // Eigen fence-tokens onbruikbaar maken (anders sluit men de fence vroegtijdig).
     .split(FENCE_START).join('⟦data⟧')
     .split(FENCE_EIND).join('⟦/data⟧')

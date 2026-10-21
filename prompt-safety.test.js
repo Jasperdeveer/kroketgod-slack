@@ -182,3 +182,9 @@ test('schoonProfielVeld haalt menties en stuurtokens uit een motto of bijnaam', 
   assert.equal(schoonProfielVeld('<@U123ABC>'), null);
   assert.equal(schoonProfielVeld('[EER:Piet|x]'), null);
 });
+
+test('wrapOnvertrouwd haalt de markeringen van inkortbare promptblokken weg', () => {
+  const uit = wrapOnvertrouwd('Bericht', 'hallo \uE0001 open en \uE001 dicht');
+  assert.ok(!/[\uE000\uE001]/.test(uit), uit);
+  assert.match(uit, /hallo 1 open en  dicht/);
+});
