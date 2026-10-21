@@ -88,6 +88,9 @@ beurs.json
 # Daglimieten (zondebok, lofzang, organische eer): wie vandaag zijn beurt al had.
 daglimieten.json
 
+# Roem die een paar per week uit vetwissels haalde (het plafond).
+wisselroem.json
+
 # Backups bevatten kopieën van alle ledengegevens
 backups/
 

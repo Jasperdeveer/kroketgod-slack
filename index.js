@@ -44,6 +44,7 @@ const {
   WISSEL_MAX, WISSEL_MAX_OPEN, BOETE_MAX, VOORSTEL_GELDIG_MS, OVERVAL_GREEP,
   teBetalen: wisselTeBetalen, boeteVan: wisselBoete, isVervallen: wisselVervallen, dagenTeLaat, naInning,
   overvalKans, magOvervallen, overval: doeOverval,
+  roemVoorKwijtschelding, roemVoorAflossing, boekWisselRoem,
   magVoorstellen, ruimVoorstellen, voorstelVan,
 } = require('./lib/vetwissel.js');
 const { dashboardAuth, logAudit, leesDashboardHtml } = require('./lib/dashboardkern.js');
@@ -11666,6 +11667,14 @@ const loadWissels = () => {
   return { open: d.open || [], voorstellen: d.voorstellen || [] };
 };
 const saveWissels = (d) => writeJSON('wissels.json', { open: d.open || [], voorstellen: d.voorstellen || [] });
+// Roem die een paar deze week al uit wissels haalde (zie roemVoorKwijtschelding in de module).
+const loadWisselRoem = () => readJSON('wisselroem.json', {});
+const saveWisselRoem = (d) => writeJSON('wisselroem.json', d);
+const wisselRoemContext = (vanId, naarId) => ({ boek: loadWisselRoem(), paar: paarSleutel(vanId, naarId), weekSleutel: getMondayOfWeek() });
+function boekWisselRoemVoor(vanId, naarId, roem) {
+  if (!roem) return;
+  saveWisselRoem(boekWisselRoem(loadWisselRoem(), paarSleutel(vanId, naarId), getMondayOfWeek(), roem));
+}
 
 // De eerstvolgende vrijdag 11:00 in Amsterdamse tijd, als timestamp.
 function volgendVervalMoment() {
@@ -11799,7 +11808,14 @@ async function losWisselAf(client, naarId, vanId = null) {
   const rest = naInning(w, betaald, nu);
   saveWissels({ open: [...data.open.filter(x => x !== w), ...(rest ? [rest] : [])], voorstellen: data.voorstellen });
   const opTijd = !wisselVervallen(w, nu);
-  if (!rest && opTijd) await pasRoemAan(client, naarId, 1);   // op tijd en volledig: dat is aanzien waard
+  // Op tijd en volledig is aanzien waard — maar niet voor een lening die geen dag liep, en
+  // hoogstens tot het weekplafond van dit paar. Anders was lenen-en-meteen-terugbetalen een
+  // gratis roemkraan.
+  const { roem, reden: geenRoem } = rest ? { roem: 0, reden: null } : roemVoorAflossing(w, nu, wisselRoemContext(w.vanId, naarId));
+  if (roem) {
+    boekWisselRoemVoor(w.vanId, naarId, roem);
+    await pasRoemAan(client, naarId, roem);
+  }
   if (!rest) await telActie(client, naarId, 'wissel_afgelost');
   const kop = rest ? 'ER IS AFBETAALD' : 'DE WISSEL IS INGELOST';
   await postToChannel(client, process.env.SLACK_CHANNEL_ID,
@@ -11808,12 +11824,16 @@ async function losWisselAf(client, naarId, vanId = null) {
     (rest
       ? `> Er staat nog *${wisselTeBetalen(rest, nu)}* open. Dat groeit vrijdag door — maar wie afbetaalt\n` +
         `> is wél een stuk moeilijker te overvallen.\n`
-      : opTijd
-        ? `> Op tijd en volledig, renteloos zoals het hoort. *+1 roem* voor wie zijn woord houdt.\n`
-        : `> De schuld is voldaan, zij het na de vervaldag. Geen roem — die was voor wie op tijd was.\n`) +
+      : !opTijd
+        ? `> De schuld is voldaan, zij het na de vervaldag. Geen roem — die was voor wie op tijd was.\n`
+        : roem
+          ? `> Op tijd en volledig, renteloos zoals het hoort. *+${roem} roem* voor wie zijn woord houdt.\n`
+          : geenRoem === 'te_kort'
+            ? `> Op tijd en volledig — maar de wissel liep nog geen dag. Geen roem: een lening die geen nacht overleefde is geen gehouden woord.\n`
+            : `> Op tijd en volledig, renteloos zoals het hoort. Geen roem meer: dit paar haalde deze week al het maximum uit wissels.\n`) +
     `\n— De Hoge Frituurraad`);
   logGebeurtenis('wissel', naarId, `${members[naarId].bijnaam} betaalde ${betaald} aan ${members[w.vanId].bijnaam}`, null, w.vanId);
-  return { ok: true, tekst: rest ? `📜 _${betaald} betaald. Nog ${wisselTeBetalen(rest, nu)} open._` : `📜 _Afgelost: ${betaald} betaald.${opTijd ? ' +1 roem.' : ''}_` };
+  return { ok: true, tekst: rest ? `📜 _${betaald} betaald. Nog ${wisselTeBetalen(rest, nu)} open._` : `📜 _Afgelost: ${betaald} betaald.${roem ? ` +${roem} roem.` : ''}_` };
 }
 
 // Kwijtschelden — het beste idee uit de Vetnota. Kost de schuldeiser zijn inleg maar levert
@@ -11823,19 +11843,33 @@ async function scheldWisselKwijt(client, vanId, naarId) {
   const members = loadMembers();
   const w = data.open.find(x => x.vanId === vanId && x.naarId === naarId);
   if (!w) return { ok: false, tekst: '_U heeft geen wissel op die naam openstaan._' };
+  const nu = Date.now();
+  const schuld = wisselTeBetalen(w, nu);
+  // Roem alleen voor een VERVALLEN wissel, en hoogstens tot het weekplafond van dit paar. Vóór
+  // de vervaldag viel er niets op te eisen en dus niets grootmoedig te laten vallen; zonder deze
+  // toets kweekten twee spelers roem met lenen-tekenen-kwijtschelden.
+  const { roem, reden: geenRoem } = roemVoorKwijtschelding(w, nu, wisselRoemContext(vanId, naarId));
   saveWissels({ open: data.open.filter(x => x !== w), voorstellen: data.voorstellen });
-  await pasRoemAan(client, vanId, 2);
+  if (roem) {
+    boekWisselRoemVoor(vanId, naarId, roem);
+    await pasRoemAan(client, vanId, roem);
+  }
   // Kwijtschelden is herstel, geen afkoopsom: het mag de bladzijde verwarmen ook als er nog
   // een claim tegen de schuldeiser openstaat.
   legRelatieVast(vanId, naarId, 'eer', 1, { ondanksClaim: true });
   await postToChannel(client, process.env.SLACK_CHANNEL_ID,
     `📜 *EEN SCHULD IS KWIJTGESCHOLDEN* 📜\n\n` +
     `> *${members[vanId].bijnaam}* scheurt de wissel van *${members[naarId].bijnaam}* doormidden.\n` +
-    `> ${wisselTeBetalen(w, Date.now())} kroketpunt${wisselTeBetalen(w, Date.now()) === 1 ? '' : 'en'}: weg, zonder tegenprestatie.\n` +
-    `> *+2 roem* — wie een schuld laat vallen die hij mocht innen, staat hoger dan wie hem int.\n\n— De Hoge Frituurraad` +
+    `> ${schuld} kroketpunt${schuld === 1 ? '' : 'en'}: weg, zonder tegenprestatie.\n` +
+    (roem
+      ? `> *+${roem} roem* — wie een schuld laat vallen die hij mocht innen, staat hoger dan wie hem int.\n`
+      : geenRoem === 'niet_vervallen'
+        ? `> Geen roem: de vervaldag was nog niet geweest. Wat nog niet opeisbaar was, is een cadeau, geen genade.\n`
+        : `> Geen roem meer: dit paar haalde deze week al het maximum uit wissels.\n`) +
+    `\n— De Hoge Frituurraad` +
     wekroep(naarId));
   logGebeurtenis('genade', naarId, `${members[vanId].bijnaam} schold de wissel van ${members[naarId].bijnaam} kwijt`, null, vanId);
-  return { ok: true, tekst: `📜 _Kwijtgescholden. +2 roem._` };
+  return { ok: true, tekst: `📜 _Kwijtgescholden.${roem ? ` +${roem} roem.` : ' Geen roem.'}_` };
 }
 
 function vervallenWisselVan(vanId, naarId) {
@@ -11973,6 +12007,7 @@ async function meldVervallenWissels(client) {
     const boete = wisselBoete(w, nu);
     const dagen = dagenTeLaat(w, nu);
     const kans = Math.round(overvalKans(w, nu) * 100);
+    const kwijtRoem = roemVoorKwijtschelding(w, nu, wisselRoemContext(w.vanId, w.naarId)).roem;
     await postToChannel(client, process.env.SLACK_CHANNEL_ID,
       `⚠️ *EEN VERVALLEN VETWISSEL* ⚠️\n\n` +
       `> *${members[w.naarId].bijnaam}* liet de wissel van *${members[w.vanId].bijnaam}* verlopen.\n` +
@@ -11981,7 +12016,7 @@ async function meldVervallenWissels(client) {
       `> · 🧾 *Innen* — veilig, pakt wat er in de kluis ligt. De rest blijft staan en groeit elke dag door.\n` +
       `> · 🥷 *Overvallen* — ${kans}% kans op de hele schuld plus ${OVERVAL_GREEP} buit. Mislukt het, dan\n` +
       `>   ligt uw recht een dag stil en houdt hij een weerwoord tegen u.\n` +
-      `> · 🕊️ *Kwijtschelden* — alles weg, *+2 roem*.\n\n— De Hoge Frituurraad` +
+      `> · 🕊️ *Kwijtschelden* — alles weg, ${kwijtRoem ? `*+${kwijtRoem} roem*` : 'geen roem meer (dit paar haalde deze week het maximum)'}.\n\n— De Hoge Frituurraad` +
       wekroep(w.vanId),
       { knoppen: [
         { type: 'button', text: { type: 'plain_text', text: '🧾 Innen', emoji: true }, action_id: `wissel_in_${w.naarId}` },
@@ -14575,7 +14610,7 @@ registreerFeature({
   naam: 'wrok',
   state: ['verlies.json', 'kerfstok.json', 'twisten.json', 'vete.json',
           'zwartekorst.json', 'weerwoorden.json', 'dubbelekorst.json', 'vonnissen.json',
-          'wissels.json', 'vetpapier.json', 'handdruk.json'],
+          'wissels.json', 'wisselroem.json', 'vetpapier.json', 'handdruk.json'],
   help: [
     { gebruik: '/kroketgod kerfstok', verwacht: 'wat er tussen u en de anderen openstaat: kerven, twisten en uw weerwoord' },
     { gebruik: '/kroketgod wissel', verwacht: 'uw vetwissels — aanbieden (de ander tekent), renteloos aflossen, of na de vervaldag innen, overvallen of kwijtschelden' },
