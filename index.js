@@ -144,12 +144,11 @@ const {
 // stonden hier alleen nog als ongebruikte import.
 const { isUitKarakter, willekeurigeInjectieAfwijzing } = require('./lib/karakter.js');
 const {
-  // Geen losse `groq`-client meer: alle Groq-verkeer loopt via roepModelAan, want dáár zit de
-  // redeneer-headroom die de gpt-oss-modellen nodig hebben (een classifier met max_tokens 5 zou anders
-  // al zijn budget aan denk-tokens kwijt zijn en leeg terugkomen).
-  GROQ_SLIM, GROQ_LICHT, geminiKeys, callGemini, callOpenAICompat, roepModelAan,
-  telLlmCall, _draaiModellen, ketenDefinitie,
-  providerCooldownTot, geminiKeyCooldownTot, geminiSleutelVrijOp, isDagquotumFout, REDENEER_HEADROOM,
+  // Geen losse `groq`-client en geen losse providercalls meer: alle tekstverkeer loopt via de keten
+  // (_draaiModellen). Dáár zitten de redeneer-headroom, het tokenbudget, de cooldowns, de bank en
+  // de telling op de LLM-meter; een rechtstreekse aanroep sloeg dat allemaal over.
+  GROQ_SLIM, geminiKeys, _draaiModellen, ketenDefinitie,
+  providerCooldownTot, geminiKeyCooldownTot, geminiSleutelVrijOp, isDagquotumFout,
 } = require('./lib/llm.js');
 const { bankLijst, bankStatus, wisBank, isGebankt, bankTot, sleutelId } = require('./lib/providerbank.js');
 const { bouwBasisPrompt } = require('./lib/systeemprompt.js');
@@ -19780,37 +19779,22 @@ Gebruik het decreet- of spoedmelding-formaat. Maximaal 5 regels hoofdtekst.`;
     return null;
   };
 
+  // Door de gewone keten, niet meer rechtstreeks Gemini en dan Groq: zo telt hij mee op de
+  // LLM-meter, slaat hij gebankte of overbelaste schakels over en heeft hij meer dan twee kansen.
+  // Een antwoord in het verkeerde formaat schuift door naar het volgende model (valideer).
+  // Geen karakterkeuring: dit is een stramien, geen uitspraak van de Kroket God.
   try {
-    const kroketRes = await callGemini({
-      model: 'gemini-2.5-flash',
-      messages: [
-        { role: 'system', content: kroketSystemBericht },
-        { role: 'user',   content: kroketInstructie },
-      ],
-      max_tokens: 350,
-      temperature: 1.1,
-    });
-    const parsed = parseerKroketOutput(kroketRes.choices[0]?.message?.content || '');
-    if (parsed) { naam = parsed.naam; beschrijving = parsed.beschrijving; }
-    else throw new Error('Ongeldig formaat van Gemini');
+    const rauw = await _draaiModellen([
+      { role: 'system', content: kroketSystemBericht },
+      { role: 'user',   content: kroketInstructie },
+    ], 350, 'slim', { keurKarakter: false, valideer: t => !!parseerKroketOutput(t) });
+    const parsed = parseerKroketOutput(rauw || '');
+    if (!parsed) throw new Error('ongeldig formaat');
+    naam = parsed.naam; beschrijving = parsed.beschrijving;
   } catch (err) {
-    console.warn('⚠️ Gemini kroket mislukt, probeer Groq:', err.message);
-    try {
-      const groqRes = await roepModelAan('groq', {
-        model: GROQ_SLIM, temperature: 1.0, max_tokens: 350,
-        messages: [
-          { role: 'system', content: kroketSystemBericht },
-          { role: 'user',   content: kroketInstructie },
-        ],
-      });
-      const parsed = parseerKroketOutput(groqRes.choices[0]?.message?.content || '');
-      if (parsed) { naam = parsed.naam; beschrijving = parsed.beschrijving; }
-      else throw new Error('Ongeldig formaat van Groq');
-    } catch (err2) {
-      console.warn('⚠️ Groq kroket mislukt, gebruik fallback:', err2.message);
-      const fb = KROKET_FALLBACKS[Math.floor(Math.random() * KROKET_FALLBACKS.length)];
-      naam = fb.naam; beschrijving = fb.beschrijving;
-    }
+    console.warn('⚠️ Kroket van de dag: geen bruikbaar antwoord uit de keten, gebruik fallback:', err.message);
+    const fb = KROKET_FALLBACKS[Math.floor(Math.random() * KROKET_FALLBACKS.length)];
+    naam = fb.naam; beschrijving = fb.beschrijving;
   }
 
   // ── Stap 3: poll-bericht plaatsen — krokant of slap korstje ───────────────
@@ -19879,21 +19863,19 @@ async function genereerEnPostQuiz(client, channelId = process.env.SLACK_CHANNEL_
   const triviaRuw = await haalTriviaVraag();
 
   let vraag = '', antwoord = '', uitleg = '';
+  // Beide calls hieronder door de keten (niveau 'licht', zonder karakterkeuring): eerst stonden
+  // ze rechtstreeks op Groq — één provider, geen terugval, niet op de LLM-meter.
+  const heeftQuizFormaat = (t) => /VRAAG:\s*\S/i.test(t) && /ANTWOORD:\s*\S/i.test(t);
+
   if (triviaRuw) {
     try {
-      const vertaalRes = await roepModelAan('groq', {
-        model: GROQ_SLIM,
-        max_tokens: 200,
-        temperature: 0.3,
-        messages: [
-          { role: 'system', content: 'Vertaal naar correct Nederlands. Geef ALLEEN het gevraagde formaat terug.' },
-          { role: 'user', content:
-            `Vertaal deze triviavraag naar het Nederlands:\nVraag: "${triviaRuw.vraag}"\nAntwoord: "${triviaRuw.juist}"\nCategorie: "${triviaRuw.categorie}"\n\n` +
-            `Geef PRECIES dit terug:\nVRAAG: [vertaalde vraag]\nANTWOORD: [vertaald antwoord, max 5 woorden]\nUITLEG: [korte uitleg waarom dit het antwoord is, 1-2 zinnen in het Nederlands]`
-          },
-        ],
-      });
-      const raw = vertaalRes.choices[0]?.message?.content || '';
+      const raw = await _draaiModellen([
+        { role: 'system', content: 'Vertaal naar correct Nederlands. Geef ALLEEN het gevraagde formaat terug.' },
+        { role: 'user', content:
+          `Vertaal deze triviavraag naar het Nederlands:\nVraag: "${triviaRuw.vraag}"\nAntwoord: "${triviaRuw.juist}"\nCategorie: "${triviaRuw.categorie}"\n\n` +
+          `Geef PRECIES dit terug:\nVRAAG: [vertaalde vraag]\nANTWOORD: [vertaald antwoord, max 5 woorden]\nUITLEG: [korte uitleg waarom dit het antwoord is, 1-2 zinnen in het Nederlands]`
+        },
+      ], 200, 'licht', { temperatuur: 0.3, keurKarakter: false, valideer: heeftQuizFormaat }) || '';
       vraag    = raw.match(/VRAAG:\s*(.+)/i)?.[1]?.trim()       || '';
       antwoord = raw.match(/ANTWOORD:\s*(.+)/i)?.[1]?.trim()    || '';
       uitleg   = raw.match(/UITLEG:\s*([\s\S]+)/i)?.[1]?.trim() || '';
@@ -19905,21 +19887,17 @@ async function genereerEnPostQuiz(client, channelId = process.env.SLACK_CHANNEL_
     }
   }
 
-  // Fallback: kroket-vraag via Groq als trivia API faalt
+  // Fallback: kroket-vraag via de keten als de trivia-API faalt
   if (!vraag || !antwoord) {
     console.warn('⚠️ Trivia API mislukt, genereer kroketvraag via AI');
     try {
-      const res = await roepModelAan('groq', {
-        model: GROQ_SLIM, max_tokens: 200, temperature: 0.95,
-        messages: [
-          { role: 'system', content: 'Je bent een quizmaster. Geef ALLEEN het gevraagde formaat terug.' },
-          { role: 'user', content:
-            `Verzin een Nederlandse triviavraag over kroketten, snackcultuur of Nederlandse eetgewoonten.\n` +
-            `VRAAG: [de vraag]\nANTWOORD: [max 5 woorden]\nUITLEG: [1-2 zinnen uitleg]`
-          },
-        ],
-      });
-      const raw = res.choices[0]?.message?.content || '';
+      const raw = await _draaiModellen([
+        { role: 'system', content: 'Je bent een quizmaster. Geef ALLEEN het gevraagde formaat terug.' },
+        { role: 'user', content:
+          `Verzin een Nederlandse triviavraag over kroketten, snackcultuur of Nederlandse eetgewoonten.\n` +
+          `VRAAG: [de vraag]\nANTWOORD: [max 5 woorden]\nUITLEG: [1-2 zinnen uitleg]`
+        },
+      ], 200, 'licht', { temperatuur: 0.95, keurKarakter: false, valideer: heeftQuizFormaat }) || '';
       vraag    = raw.match(/VRAAG:\s*(.+)/i)?.[1]?.trim()       || '';
       antwoord = raw.match(/ANTWOORD:\s*(.+)/i)?.[1]?.trim()    || '';
       uitleg   = raw.match(/UITLEG:\s*([\s\S]+)/i)?.[1]?.trim() || '';
