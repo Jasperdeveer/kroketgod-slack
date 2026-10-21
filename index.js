@@ -8768,7 +8768,12 @@ app.event('app_mention', async ({ event, client }) => {
           `gevat, in-karakter weerwoord met een vleugje droge spot — niet wegwuiven, maar inhoudelijk pareren ` +
           `en het woordenspel met klasse winnen. Geen straf, geen puntenverlies. Vermeld GEEN puntenaantal. ` +
           `Begin de inleidingszin letterlijk met: ${introStart}`;
-      } else if (sentiment === 'LOFZANG' && members[userId] && scoreKans) {
+      } else if (sentiment === 'LOFZANG' && members[userId] && scoreKans
+                 && magNogVandaag(loadDaglimieten(), 'lofzang', userId, dagSleutel())) {
+        // Hoogstens twee lofzangpunten per lid per dag (zie lib/limieten.js). Zonder plafond was
+        // elk prijzend bericht een munt op een punt — met roem en verbondszegen erbij via
+        // pasScoreAanMetCheck. Daarboven valt de lofzang door naar de zegen zonder punt hieronder.
+        saveDaglimieten(boekDaglimiet(loadDaglimieten(), 'lofzang', userId, dagSleutel()));
         await pasScoreAanMetCheck(client, userId, 1, { channelId: event.channel, uitgesteldeZegens });
         logGebeurtenis('lofzang', userId, `${bijnaam} prees de Kroket God en verdiende een punt`, input);
         prompt = `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} heeft zich respectvol uitgelaten: "${input}". Zegen hen plechtig. Het systeem heeft al 1 kroketpunt toegekend — bevestig dit. Begin de inleidingszin letterlijk met: ${introStart}`;
