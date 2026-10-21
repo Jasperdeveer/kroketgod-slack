@@ -1,3 +1,13 @@
+// ── Tijdzone: dit proces rekent in UTC, wat de Pi ook zegt ──────────────────────
+// De code rekent overal expliciet in Europe/Amsterdam (Intl met timeZone, cron-opties) en ging
+// ervan uit dat de host op UTC staat. De Pi staat echter op Europe/Amsterdam, en dan raakt
+// node-cron (4.2.1) van de wijs bij de zomertijdwissels: in het herhaalde uur van eind oktober
+// berekent hij een volgende uitvoering die een uur in het verleden ligt, waardoor elke minuut-cron
+// twee uur lang in een strakke lus vuurt (CPU vol, de log loopt vol met "missed execution"); eind
+// maart slaat hij twee uur over. Onder UTC bestaan die uren niet. Deze regel moet vóór alles staan
+// dat met datums rekent. Zie lib/tijdzone.test.js.
+process.env.TZ = 'UTC';
+
 const { App } = require('@slack/bolt');
 const Bottleneck = require('bottleneck');
 const cron = require('node-cron');
@@ -5807,7 +5817,7 @@ async function voerKroketCommandoUit({ command, respond, client }) {
       const bank = loadKennisbank();
       if (bank.length === 0) { await respond({ text: 'De kennisbank is leeg.', response_type: 'ephemeral' }); return; }
       const regels = [...bank].reverse().slice(0, 30).map(e => {
-        const datum = new Date(e.ts).toLocaleDateString('nl-NL');
+        const datum = new Date(e.ts).toLocaleDateString('nl-NL', { timeZone: 'Europe/Amsterdam' });
         return `• [${e.type}] ${e.onderwerp ? '*' + e.onderwerp + '*: ' : ''}${e.inhoud} _(${datum})_`;
       });
       await respond({ text: `📚 *Kennisbank (laatste ${regels.length} van ${bank.length})*\n${regels.join('\n')}`, response_type: 'ephemeral' });
@@ -20861,7 +20871,7 @@ async function bouwDashboardData() {
   const perDag = [0, 0, 0, 0, 0, 0, 0];
   const perType = {};
   for (const e of (week.events || [])) {
-    const dow = (new Date(e.ts).getDay() + 6) % 7; // ma = 0 … zo = 6
+    const dow = amsWeekdag(new Date(e.ts)) - 1; // ma = 0 … zo = 6, in Amsterdamse tijd (het proces draait op UTC)
     perDag[dow]++;
     perType[e.type] = (perType[e.type] || 0) + 1;
   }
