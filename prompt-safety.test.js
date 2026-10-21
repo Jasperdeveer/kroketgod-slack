@@ -152,3 +152,9 @@ test('detecteerInjectie rapporteert score en categorieën', () => {
   assert.ok(r.score >= 2);
   assert.ok(r.categorieen.length >= 1);
 });
+
+test('wrapOnvertrouwd haalt de markeringen van inkortbare promptblokken weg', () => {
+  const uit = wrapOnvertrouwd('Bericht', 'hallo \uE0001 open en \uE001 dicht');
+  assert.ok(!/[\uE000\uE001]/.test(uit), uit);
+  assert.match(uit, /hallo 1 open en  dicht/);
+});
