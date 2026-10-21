@@ -90,6 +90,8 @@ const {
 const {
   IEDEREEN: LIMIET_IEDEREEN, magNog: magNogVandaag, boekIn: boekDaglimiet, zondebokStraf,
 } = require('./lib/limieten.js');
+// Een tikfout in de geheime fortuin-code mag niet als vrije tekst bij de LLM belanden.
+const { lijktOpCode } = require('./lib/geheim.js');
 // Wie mag lid worden: niet opnieuw, en alleen vanuit het besloten kanaal.
 const { magAanmelden } = require('./lib/toegang.js');
 const loadDaglimieten = () => readJSON('daglimieten.json', {});
@@ -3774,6 +3776,18 @@ function alleCommandos() {
   return [...COMMANDO_LIJST, ...FEATURES.flatMap(f => f.help || [])];
 }
 
+// De eerste woorden van alle bekende commando's, uit het register en de help. Voor de bijna-code-
+// toets (lib/geheim.js): een bestaand commando is nooit een tikfout in de fortuin-code.
+function bekendeCommandoWoorden(userId) {
+  const sjablonen = [
+    ...geheimeCommandos(userId).filter(i => i.cmd).map(i => i.cmd),
+    ...alleCommandos().map(c => c.gebruik),
+  ];
+  return new Set(sjablonen
+    .map(s => String(s).replace(/^\/kroketgod\s*/, '').trim().toLowerCase().split(/\s+/)[0])
+    .filter(w => w && !w.startsWith('[')));
+}
+
 function buildHelpText() {
   const regels = alleCommandos()
     .map(c => `\`${c.gebruik}\` — _${c.verwacht}_`)
@@ -5695,6 +5709,15 @@ async function voerKroketCommandoUit({ command, respond, client }) {
         // Code goed, staart onbekend: stilhouden en niets doen, zodat een typefout niet alsnog
         // als vrije tekst bij de LLM belandt.
         await respond({ text: '🕯️ _Het vet begrijpt u niet._', response_type: 'ephemeral' });
+        return;
+      }
+      // Code BIJNA goed: een tikfout in de code zelf. Die viel hier doorheen, geen tak herkende
+      // hem, en dan kwam hij als vrije tekst bij de LLM — die hem in een PUBLIEK antwoord kon
+      // terugkaatsen. Nu een kaal, efemeer "onbekend commando", zonder kaars: niets in dit
+      // antwoord mag verraden dat het om de code ging. Bestaande commando's blijven werken, ook
+      // als ze met dezelfde letters beginnen (zie lib/geheim.js).
+      if (lijktOpCode(ruw, FORTUIN_CODE, { bekendeWoorden: () => bekendeCommandoWoorden(command.user_id) })) {
+        await respond({ text: '_Onbekend commando._', response_type: 'ephemeral' });
         return;
       }
     }
@@ -19136,7 +19159,10 @@ function homeCommandoMenus(userId) {
   return bouwCommandoMenus(geheimeCommandos(userId), extra, userId === OPPERKROKET_ID);
 }
 
-async function voerHomeCommandoUit(client, userId, tekst, triggerId) {
+// `sjabloon` is het commando zoals het in het menu staat (bv. `eer [namen] (voor [reden])`). Alleen
+// dát gaat de log in, nooit de ingevulde tekst: die kan van alles bevatten, tot en met een tikfout
+// in de geheime fortuin-code, en de console op de Pi is geen plek voor vrije invoer.
+async function voerHomeCommandoUit(client, userId, tekst, triggerId, sjabloon = null) {
   const antwoorden = [];
   const blokken = [];
   // Opvang voor respond(): een ephemeral in het kanaal ziet wie in de Home-tab kijkt niet, dus
@@ -19149,7 +19175,7 @@ async function voerHomeCommandoUit(client, userId, tekst, triggerId) {
   // `bron: 'home'`: dit commando doet zich voor als het hoofdkanaal, maar wie het stuurt hoeft daar
   // niet in te zitten. Waar dat verschil telt (aanmelden), kijkt de handler hiernaar.
   const command = { text: tekst, user_id: userId, channel_id: KANAAL(), channel_name: ALLOWED_CHANNELS[0], trigger_id: triggerId, bron: 'home' };
-  console.log(`🏠 Home-commando van ${loadMembers()[userId]?.bijnaam || userId}: "${tekst}"`);
+  console.log(`🏠 Home-commando van ${loadMembers()[userId]?.bijnaam || userId}: "${sjabloon || '(formulier)'}"`);
   try {
     await voerKroketCommandoUit({ command, respond, client });
   } catch (err) {
@@ -19174,7 +19200,7 @@ app.action(/^home_cmd_kies_\d+$/, async ({ ack, body, client }) => {
       return;
     }
     if (!heeftVelden(sjabloon)) {
-      await voerHomeCommandoUit(client, userId, sjabloon, body.trigger_id);
+      await voerHomeCommandoUit(client, userId, sjabloon, body.trigger_id, sjabloon);
       return;
     }
     const maxLeden = /^eer\b/.test(sjabloon) ? Math.max(1, eerLimiet(userId) - telEerVandaag(userId)) : 10;
@@ -19193,7 +19219,7 @@ app.view('home_cmd_modal', async ({ ack, body, view, client }) => {
   try {
     const members = loadMembers();
     const waarden = leesModalWaarden(view.private_metadata, view.state.values, id => members[id]?.bijnaam || id);
-    await voerHomeCommandoUit(client, body.user.id, bouwCommandoTekst(view.private_metadata, waarden), body.trigger_id);
+    await voerHomeCommandoUit(client, body.user.id, bouwCommandoTekst(view.private_metadata, waarden), body.trigger_id, view.private_metadata);
   } catch (err) { console.error('Fout bij Home-commandoformulier:', err); }
 });
 
