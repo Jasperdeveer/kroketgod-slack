@@ -48,7 +48,7 @@ const {
 } = require('./lib/vetwissel.js');
 const { dashboardAuth, logAudit, leesDashboardHtml } = require('./lib/dashboardkern.js');
 const { readJSON, writeJSON } = require('./lib/state.js');
-const { isWeekendAms, getAmsOffsetMs, getMondayOfWeek, secondenTotVrijdagMiddag } = require('./lib/tijd.js');
+const { isWeekendAms, getAmsOffsetMs, getMondayOfWeek, secondenTotVrijdagMiddag, volgendeMiddernachtPacific } = require('./lib/tijd.js');
 const { normaliseerOndertekening, splitsVoorBlokken, kiesKlasse } = require('./lib/tekst.js');
 const { commandoRegister } = require('./lib/commandoregister.js');
 const { bouwCommandoMenus, bouwMenuBlocks, bouwCommandoModal, bouwCommandoTekst, leesModalWaarden, heeftVelden } = require('./lib/homecommandos.js');
@@ -149,9 +149,9 @@ const {
   // al zijn budget aan denk-tokens kwijt zijn en leeg terugkomen).
   GROQ_SLIM, GROQ_LICHT, geminiKeys, callGemini, callOpenAICompat, roepModelAan,
   telLlmCall, _draaiModellen, ketenDefinitie,
-  providerCooldownTot, geminiKeyCooldownTot, geminiSleutelVrijOp, REDENEER_HEADROOM,
+  providerCooldownTot, geminiKeyCooldownTot, geminiSleutelVrijOp, isDagquotumFout, REDENEER_HEADROOM,
 } = require('./lib/llm.js');
-const { bankLijst, bankStatus, wisBank } = require('./lib/providerbank.js');
+const { bankLijst, bankStatus, wisBank, isGebankt, bankTot, sleutelId } = require('./lib/providerbank.js');
 const { bouwBasisPrompt } = require('./lib/systeemprompt.js');
 const { inkortbaar } = require('./lib/promptbudget.js');
 const { rijkDigest } = require('./lib/rijk.js');
@@ -4768,13 +4768,28 @@ async function maakBeeldBytes(beeldPrompt, { portret = null, vangnetPrompt = bee
   ];
   if (metReferentie) console.log(`🖼️ Kroket-referentie meegestuurd (${KROKET_REFERENTIE.bestand}, ${KROKET_REFERENTIE.kb} KB).`);
 
-  for (const key of geminiKeys()) {
+  // Het beeldquotum is een DAGquotum per sleutel (per Google-project). Was het op, dan probeerde elk
+  // visioen toch eerst alle drie de sleutels (3 × 429, productielog: 45 keer) voordat het vangnet aan
+  // de beurt kwam. Een sleutel met zijn beeldquotum op gaat nu tot middernacht Pacific-tijd op de
+  // persistente bank (lib/providerbank.js), en staan ze er allemaal op, dan meteen naar het vangnet.
+  const alleSleutels = geminiKeys();
+  const beeldBankSleutel = (key) => `gemini-beeld:${sleutelId(key)}`;
+  const beeldSleutels = alleSleutels.filter(key => !isGebankt(beeldBankSleutel(key)));
+  if (alleSleutels.length && !beeldSleutels.length) {
+    quotaOp = true;
+    console.log('🖼️ Beeldquotum van alle Gemini-sleutels is op (bank) — meteen naar het vangnet.');
+  }
+
+  for (const key of beeldSleutels) {
     if (buffer) break;
+    const nr = alleSleutels.indexOf(key) + 1;
     try {
-      const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${geminiBeeldModel}:generateContent?key=${key}`;
+      // De sleutel in een header en niet als ?key= in de URL: node-fetch zet de URL in zijn
+      // foutmeldingen, en die gaan zo de pm2-log in.
+      const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${geminiBeeldModel}:generateContent`;
       const resp = await fetch(geminiUrl, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
         body: JSON.stringify({
           // Gemini volgt instructies, dus hier kan het negatieve deel als zin — een losse opsomming
           // van "text, watermark" zoals bij de diffusiemodellen zou het juist die dingen oproepen.
@@ -4798,10 +4813,15 @@ async function maakBeeldBytes(beeldPrompt, { portret = null, vangnetPrompt = bee
         }
       } else {
         const errText = await resp.text();
-        console.warn(`⚠️ Gemini image ${resp.status}: ${errText.substring(0, 200)}`);
+        console.warn(`⚠️ Gemini image ${resp.status} (sleutel #${nr}): ${errText.substring(0, 200)}`);
         if (resp.status === 429) quotaOp = true; // dagquota van deze sleutel is op
-        // Alleen bij quota/rate-limit of serverfout de volgende key proberen; anders stoppen.
-        if (!(resp.status === 429 || resp.status >= 500)) break;
+        // Dagquotum (of een model zonder gratis quotum, "limit: 0"): tot middernacht Pacific op de bank.
+        if (resp.status === 429 && isDagquotumFout(errText)) {
+          bankTot(beeldBankSleutel(key), volgendeMiddernachtPacific(), { status: 429, reden: 'beeldquotum op', label: `Gemini-beeld #${nr}` });
+        }
+        // Alleen bij quota/rate-limit de volgende key proberen. Een serverfout (503: model
+        // overbelast) geldt voor alle sleutels tegelijk — dan meteen door naar het vangnet.
+        if (resp.status !== 429) break;
       }
     } catch (err) {
       console.warn('⚠️ Gemini image fout:', err.message);
@@ -4846,6 +4866,9 @@ async function maakBeeldBytes(beeldPrompt, { portret = null, vangnetPrompt = bee
         }
       } catch (err) {
         console.warn(`HuggingFace poging ${poging} faalde:`, err.message);
+        // Een timeout van 60 s nog eens over doen kost de speler nog een minuut voor een dienst
+        // die net liet zien dat hij niet levert. Alleen een 503 (model laadt) krijgt een herkansing.
+        if (/timeout|aborted/i.test(err.message)) break;
       }
       if (poging < 2) await new Promise(r => setTimeout(r, 6000));
     }
