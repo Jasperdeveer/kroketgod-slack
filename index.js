@@ -20650,7 +20650,7 @@ planCron('40 3 * * *', async () => {
 }, { timezone: 'Europe/Amsterdam' });
 
 // ── Quota-monitor ────────────────────────────────────────────────────────────
-// Logt elke 15 min hoe vol de providers zitten, zodat je in de pm2-logs ziet wanneer limieten
+// Logt elk uur hoe vol de providers zitten, zodat je in de pm2-logs ziet wanneer limieten
 // vollopen/resetten i.p.v. te gokken. Groq via een minimale probe (eigen dag-quota is enorm, dit
 // is verwaarloosbaar); Gemini via de cooldown-state (verbruikt zelf geen quota).
 let laatsteGroqQuota = null; // laatste Groq rate-limit-snapshot (voor het dashboard)
@@ -20689,7 +20689,10 @@ async function logQuotaStatus() {
     console.log(`📊 Op de bank — ${bank.map(r => `${r.label} (${r.status ?? '?'}${r.reden ? `, ${r.reden}` : ''}) nog ${Math.round(r.restMs / 60_000)} min`).join(' · ')}`);
   }
 }
-planCron('*/15 * * * *', logQuotaStatus, { timezone: 'Europe/Amsterdam' });
+// Elk uur, niet elk kwartier: de Groq-meting is een echt verzoek aan gpt-oss-120b, en 96 per dag
+// was bijna een tiende van zijn gratis daglimiet aan verzoeken — juist het model waar de keten op
+// leunt als Gemini op is. Het dashboard ververst zelf als zijn meting ouder is dan 5 minuten.
+planCron('7 * * * *', logQuotaStatus, { timezone: 'Europe/Amsterdam' });
 // Eén keer kort na opstart, zodat je meteen een meting hebt (en bij elke herstart).
 setTimeout(() => logQuotaStatus().catch(() => {}), 15000);
 
