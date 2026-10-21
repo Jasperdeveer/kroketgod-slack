@@ -11928,7 +11928,9 @@ async function overvalWissel(client, vanId, naarId) {
   const w = data.open.find(x => x.vanId === vanId && x.naarId === naarId);
   const mag = magOvervallen(w, nu);
   if (!mag.ok) return { ok: false, tekst: `_${mag.reden}_` };
-  const uitkomst = doeOverval(w, nu, loadScores()[naarId] || 0, Math.random());
+  // Het zakgeld is tot en met woensdag tegen roof beschermd (lib/zakgeld.js). Dat geldt voor de
+  // greep bovenop de schuld, niet voor de schuld zelf — zie overval() in lib/vetwissel.js.
+  const uitkomst = doeOverval(w, nu, loadScores()[naarId] || 0, Math.random(), { greepBodem: tegenRoofBeschermd(naarId) });
   const over = [...data.open.filter(x => x !== w), ...(uitkomst.wissel ? [uitkomst.wissel] : [])];
   saveWissels({ open: over, voorstellen: data.voorstellen });
   const pct = Math.round(uitkomst.kans * 100);
@@ -11961,6 +11963,7 @@ async function overvalWissel(client, vanId, naarId) {
     `🥷 *DE OVERVAL IS GESLAAGD* 🥷\n\n` +
     `> *${members[vanId].bijnaam}* gaat de schuld bij *${members[naarId].bijnaam}* zélf halen. Kans was ${pct}%.\n` +
     `> Schuld ingelost: *${uitkomst.geind}*${uitkomst.buit > 0 ? `, en nog *${uitkomst.buit}* meegenomen als buit` : ''}.\n` +
+    (uitkomst.buitBeschermd > 0 ? `> Het zakgeld van ${members[naarId].bijnaam} is tot en met woensdag onaantastbaar: de greep bleef${uitkomst.buit > 0 ? ' deels' : ''} leeg.\n` : '') +
     (uitkomst.wissel
       ? `> De kluis was te mager: er staat nog *${wisselTeBetalen(uitkomst.wissel, nu)}* open.\n`
       : `> De wissel is daarmee gesloten.\n`) +
