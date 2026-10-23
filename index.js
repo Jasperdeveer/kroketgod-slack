@@ -170,6 +170,7 @@ const {
   BESCHRIJVING_MAX: GAST_BESCHRIJVING_MAX, normaliseer: normaliseerGastnaam,
   toetsNieuweGast, bekendeGasten, toetsBekendeGast,
 } = require('./lib/gasten.js');
+const { FUNCTIES, uitlichtPrompt, bouwUitlichting } = require('./lib/nieuwtjes.js');
 const {
   DECREET_MAX, HEFTIGHEDEN, HEFTIGHEID_STANDAARD, heftigheidLabel,
   kandidatenVoor, staatVoorDag, keuzeVan: handKeuzeVan, magSchrijven, magUitnodigen, naUitnodiging,
@@ -512,6 +513,69 @@ const app = new App({
           logAudit('persona', `${naam} (${id}) opgeslagen`);
           res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
           res.end(JSON.stringify({ ok: true, bericht: `${naam} opgeslagen.`, id }));
+        } catch (err) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, error: err.message }));
+        }
+      },
+    },
+    {
+      // Een gast uitnodigen vanuit het dashboard: hetzelfde als `/kroketgod invite`, zonder punten.
+      // Body: { naam, trefwoorden, beschrijving, link?, afbeelding? (data-URL, in de browser al
+      // verkleind tot 512 px, want leesBody kapt af bij 1 MB) }. Antwoordt pas als de gast er is.
+      path: '/api/gast',
+      method: ['POST'],
+      handler: async (req, res) => {
+        if (!dashboardAuth(req, res)) return;
+        let sleutel = null;
+        try {
+          const body = await leesBody(req);
+          const invoer = {
+            naam: body.naam, trefwoorden: body.trefwoorden, beschrijving: body.beschrijving,
+            verdacht: (t) => detecteerInjectie(t).verdacht,
+          };
+          const toets = toetsNieuweGast({ ...invoer, personas: loadPersonas(), saldo: GAST_KOSTEN_NIEUW });
+          if (!toets.ok) throw new Error(Object.values(toets.fouten).join(' '));
+          const kandidaat = normaliseerGastnaam(toets.naam);
+          if (_gastenOnderweg.has(kandidaat)) throw new Error('Deze gast is al onderweg.');
+          const afbeelding = leesDashboardAfbeelding(body.afbeelding);
+          sleutel = kandidaat;
+          _gastenOnderweg.add(sleutel);
+          const { gast, avatar } = await maakGast(app.client, {
+            invoer, toets, afbeelding, link: String(body.link || '').trim() || null, door: 'dashboard',
+          });
+          logAudit('persona', `${gast.naam} (${gast.id}) uitgenodigd via het dashboard — gezicht: ${avatar.bron}`);
+          laatGastBinnenkomen(app.client, gast, 'de Hoge Frituurraad', true)
+            .catch(err => console.error(`Entree van ${gast.naam} mislukt:`, err.message));
+          res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+          res.end(JSON.stringify({ ok: true, bericht: `${gast.naam} is binnen. ${AVATAR_NOOT[avatar.bron]}`, id: gast.id }));
+        } catch (err) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, error: err.reden || err.message }));
+        } finally {
+          if (sleutel) _gastenOnderweg.delete(sleutel);
+        }
+      },
+    },
+    {
+      // Een bekende gast terughalen vanuit het dashboard: weer actief, met een rentree in het
+      // kanaal. ("zet aan" in de lijst doet hetzelfde zonder rentree.) Body: { id }.
+      path: '/api/gast/bekend',
+      method: ['POST'],
+      handler: async (req, res) => {
+        if (!dashboardAuth(req, res)) return;
+        try {
+          const { id } = await leesBody(req);
+          const personas = loadPersonas();
+          const toets = toetsBekendeGast({ id, personas, saldo: GAST_KOSTEN_BESTAAND });
+          if (!toets.ok) throw new Error(toets.reden);
+          personas[id] = { ...personas[id], actief: true, uitgenodigdDoor: 'dashboard', uitgenodigdOp: Date.now() };
+          savePersonas(personas);
+          logAudit('persona', `${personas[id].naam} (${id}) teruggehaald via het dashboard`);
+          laatGastBinnenkomen(app.client, { id, ...personas[id] }, 'de Hoge Frituurraad', false)
+            .catch(err => console.error(`Rentree van ${personas[id].naam} mislukt:`, err.message));
+          res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+          res.end(JSON.stringify({ ok: true, bericht: `${personas[id].naam} is onderweg naar het kanaal.` }));
         } catch (err) {
           res.writeHead(500, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ ok: false, error: err.message }));
@@ -4617,7 +4681,12 @@ async function zetAvatarOnline(client, bestand, naam) {
   });
   // Zonder geldige rechten geeft Slack een inlogpagina (HTML) met status 200.
   if (!res.ok || !(res.headers.get('content-type') || '').startsWith('image/')) throw new Error(`downloaden gaf ${res.status}`);
-  const buf = await res.buffer();
+  return zetOpImgbb(await res.buffer(), naam);
+}
+
+// Een plaatje openbaar zetten op imgbb; geeft de directe link terug.
+async function zetOpImgbb(buf, naam) {
+  if (!process.env.IMGBB_API_KEY) throw new Error('geen IMGBB_API_KEY');
   if (buf.length > GAST_AVATAR_MAX_BYTES) throw new Error('te groot');
   const form = new URLSearchParams({ image: buf.toString('base64'), name: slugifyPersonaId(naam, new Set()) });
   const up = await fetch(`https://api.imgbb.com/1/upload?key=${encodeURIComponent(process.env.IMGBB_API_KEY)}`, {
@@ -4640,6 +4709,16 @@ function isVeiligeAvatarLink(link) {
   return !/^(localhost|\[.*\]|\d{1,3}(\.\d{1,3}){3})$/.test(host) && !/\.(local|lan|internal|ts\.net)$/.test(host);
 }
 
+// Een plaatje uit het dashboard: een data-URL die de browser al verkleinde. Geeft een Buffer of null.
+function leesDashboardAfbeelding(dataUrl) {
+  if (!dataUrl) return null;
+  const m = /^data:image\/(png|jpe?g|gif|webp);base64,([A-Za-z0-9+/=]+)$/.exec(String(dataUrl));
+  if (!m) throw Object.assign(new Error('geen plaatje'), { reden: 'Dat bestand is geen plaatje (png, jpg, gif of webp).' });
+  const buf = Buffer.from(m[2], 'base64');
+  if (buf.length > GAST_AVATAR_MAX_BYTES) throw Object.assign(new Error('te groot'), { reden: 'Dat plaatje is te groot.' });
+  return buf;
+}
+
 function gastPortretUrl(naam) {
   const seed = fnvHash(normaliseerGastnaam(naam)) % 100000;
   for (const prompt of [`${naam}, cartoon portrait, colorful`, naam]) {
@@ -4649,10 +4728,13 @@ function gastPortretUrl(naam) {
   return null;
 }
 
-async function bepaalGastAvatar(client, { bestand, link, naam, emoji }) {
-  if (bestand) {
-    try { return { icoon: await zetAvatarOnline(client, bestand, naam), bron: 'upload' }; }
-    catch (err) { console.warn(`⚠️ Avatar-upload voor ${naam} mislukt:`, err.data?.error || err.message); }
+// `bestand`: een upload in het Slack-venster. `afbeelding`: een Buffer uit het dashboard.
+async function bepaalGastAvatar(client, { bestand = null, afbeelding = null, link, naam, emoji }) {
+  if (bestand || afbeelding) {
+    try {
+      const url = bestand ? await zetAvatarOnline(client, bestand, naam) : await zetOpImgbb(afbeelding, naam);
+      return { icoon: url, bron: 'upload' };
+    } catch (err) { console.warn(`⚠️ Avatar-upload voor ${naam} mislukt:`, err.data?.error || err.message); }
   }
   if (link && isVeiligeAvatarLink(link) && await warmAvatarOp(link)) return { icoon: link, bron: 'link' };
   const portret = gastPortretUrl(naam);
@@ -6045,6 +6127,23 @@ async function voerKroketCommandoUit({ command, respond, client }) {
       return;
     }
 
+    // Een nieuwe functie uitlichten (admin) — de Kroket God kondigt aan in het kanaal waar het
+    // getypt wordt, dus eerst in het testkanaal proberen kan gewoon.
+    if (/^uitlichten(\s|$)/i.test(input) && command.user_id === BEHEERDER_ID) {
+      const key = (input.split(/\s+/)[1] || '').toLowerCase();
+      const functie = FUNCTIES[key];
+      if (!functie) {
+        await respond({ text: `_Welke functie? Kies uit: ${Object.keys(FUNCTIES).map(k => `\`${k}\``).join(', ')}._`, response_type: 'ephemeral' });
+        return;
+      }
+      try {
+        const vanDeKeten = await lichtFunctieUit(client, functie, command.channel_id);
+        console.log(`📣 ${functie.naam} uitgelicht in ${command.channel_id}${vanDeKeten ? '' : ' (vangnet)'}`);
+        if (!vanDeKeten) await respond({ text: '_De keten gaf geen decreet; het vaste vangnet staat erin._', response_type: 'ephemeral' });
+      } catch (err) { await respond({ text: `❌ Fout: ${err.message}`, response_type: 'ephemeral' }); }
+      return;
+    }
+
     if (input.startsWith('onthoud ') && command.user_id === 'U08ALFNQB1V') {
       const tekst = input.replace(/^onthoud\s+/i, '').trim();
       if (!tekst) { await respond({ text: 'Geef een tekst mee na `onthoud`.', response_type: 'ephemeral' }); return; }
@@ -6168,13 +6267,9 @@ async function voerKroketCommandoUit({ command, respond, client }) {
     // ── Gasten uitnodigen. Vóór de ontvangstbevestiging hieronder: een trigger_id is maar drie
     //    seconden geldig, en het venster moet open zijn voordat die verloopt.
     if (/^(invite|uitnodigen)( bekend| bestaand)?$/i.test(input)) {
-      if (!members[command.user_id]) {
-        await respond({ text: '_Alleen volgelingen kunnen gasten uitnodigen. Meld u eerst aan met `/kroketgod aanmelden`._', response_type: 'ephemeral' });
-        return;
-      }
-      const saldo = loadScores()[command.user_id] || 0;
-      if (saldo < GAST_KOSTEN_BESTAAND) {
-        await respond({ text: `_Een gast uitnodigen kost ${GAST_KOSTEN_NIEUW} kroketpunten, een bekende terughalen ${GAST_KOSTEN_BESTAAND}. U heeft er ${saldo}._`, response_type: 'ephemeral' });
+      const reden = gastToegangReden(command.user_id);
+      if (reden) {
+        await respond({ text: `_${reden}_`, response_type: 'ephemeral' });
         return;
       }
       if (/ (bekend|bestaand)$/i.test(input)) await toonBekendeGasten(client, command.trigger_id, command.user_id);
@@ -8475,6 +8570,18 @@ app.view('intake_modal', async ({ ack, view, body, client }) => {
 // Regels: lib/gasten.js. Karakter en gezicht: schrijfGastUit en bepaalGastAvatar.
 
 const GAST_TITEL = { type: 'plain_text', text: 'Gast uitnodigen' };
+
+// Wie mag een gast uitnodigen? Geeft de reden van "nee" terug, of null. Eén toets voor het
+// commando en voor de knoppen onder de mededeling, die de toetsen van het commando niet passeren.
+function gastToegangReden(userId) {
+  if (!loadMembers()[userId]) return 'Alleen volgelingen kunnen gasten uitnodigen. Meld u eerst aan met `/kroketgod aanmelden`.';
+  if (isVerbannen(userId)) return 'Vanuit het ballingschap nodigt niemand gasten uit.';
+  const saldo = loadScores()[userId] || 0;
+  if (saldo < GAST_KOSTEN_BESTAAND) {
+    return `Een gast uitnodigen kost ${GAST_KOSTEN_NIEUW} kroketpunten, een bekende terughalen ${GAST_KOSTEN_BESTAAND}. U heeft er ${saldo}.`;
+  }
+  return null;
+}
 const ontsnapMrkdwn = (t) => String(t ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const puntenWoord = (n) => `${n} ${n === 1 ? 'punt' : 'punten'}`;
 
@@ -8592,6 +8699,32 @@ const AVATAR_NOOT = {
 
 const _gastenOnderweg = new Set(); // genormaliseerde namen waarvan het karakter nog wordt uitgeschreven
 
+// Schrijft het karakter uit, regelt een gezicht en zet de gast in personas.json. Gedeeld door het
+// Slack-venster en het dashboard; punten en meldingen regelt de aanroeper. `invoer` en `toets`
+// zijn wat toetsNieuweGast al goedkeurde. Mislukt het, dan staat er niets opgeslagen en draagt de
+// fout een `reden` die een mens kan lezen. `door`: het lid, of 'dashboard'.
+async function maakGast(client, { invoer, toets, bestand = null, link = null, afbeelding = null, door }) {
+  let profiel;
+  try { profiel = await schrijfGastUit(toets.naam, toets.trefwoorden, toets.beschrijving); }
+  catch (err) {
+    err.reden = 'De Hoge Frituurraad kreeg zijn karakter niet op papier. Probeer het straks nog eens, eventueel met een andere beschrijving.';
+    throw err;
+  }
+  const avatar = await bepaalGastAvatar(client, { bestand, link, afbeelding, naam: toets.naam, emoji: profiel.icoon });
+  // Opnieuw tegen de lijst van NU: tijdens het schrijven kan het dashboard of een lid een gast met
+  // dezelfde naam of trefwoorden hebben toegevoegd. Betaald is er (in Slack) al.
+  const personas = loadPersonas();
+  const nogSteeds = toetsNieuweGast({ ...invoer, personas, saldo: GAST_KOSTEN_NIEUW });
+  if (!nogSteeds.ok) throw Object.assign(new Error('lijst gewijzigd'), { reden: Object.values(nogSteeds.fouten)[0] });
+  const id = slugifyPersonaId(toets.naam, new Set(Object.keys(personas)));
+  personas[id] = {
+    naam: toets.naam, icoon: avatar.icoon, trefwoord: toets.trefwoorden.join(', '), systemPrompt: profiel.systemPrompt,
+    ongevraagd: true, actief: true, aangemaakt: Date.now(), uitgenodigdDoor: door, uitgenodigdOp: Date.now(),
+  };
+  savePersonas(personas);
+  return { gast: { id, ...personas[id] }, avatar, profiel };
+}
+
 app.view('modal_gast_nieuw', async ({ ack, body, view, client }) => {
   const userId = body.user.id;
   const waarden = view.state.values;
@@ -8623,26 +8756,9 @@ app.view('modal_gast_nieuw', async ({ ack, body, view, client }) => {
   const gastheer = loadMembers()[userId]?.bijnaam || 'een volgeling';
   let gast = null;
   try {
-    let profiel;
-    try { profiel = await schrijfGastUit(toets.naam, toets.trefwoorden, toets.beschrijving); }
-    catch (err) {
-      err.reden = 'De Hoge Frituurraad kreeg zijn karakter niet op papier. Probeer het straks nog eens, eventueel met een andere beschrijving.';
-      throw err;
-    }
-    const avatar = await bepaalGastAvatar(client, { bestand, link, naam: toets.naam, emoji: profiel.icoon });
-    // Opnieuw tegen de lijst van NU: tijdens het schrijven kan het dashboard of een ander lid
-    // een gast met dezelfde naam of trefwoorden hebben toegevoegd. Betaald is er al.
-    const personas = loadPersonas();
-    const nogSteeds = toetsNieuweGast({ ...invoer, personas, saldo: GAST_KOSTEN_NIEUW });
-    if (!nogSteeds.ok) throw Object.assign(new Error('lijst gewijzigd'), { reden: Object.values(nogSteeds.fouten)[0] });
-    const id = slugifyPersonaId(toets.naam, new Set(Object.keys(personas)));
-    personas[id] = {
-      naam: toets.naam, icoon: avatar.icoon, trefwoord: toets.trefwoorden.join(', '), systemPrompt: profiel.systemPrompt,
-      ongevraagd: true, actief: true, aangemaakt: Date.now(), uitgenodigdDoor: userId, uitgenodigdOp: Date.now(),
-    };
-    savePersonas(personas);
-    gast = { id, ...personas[id] };
-    logAudit('persona', `${toets.naam} (${id}) uitgenodigd door ${gastheer} — gezicht: ${avatar.bron}`);
+    let avatar, profiel;
+    ({ gast, avatar, profiel } = await maakGast(client, { invoer, toets, bestand, link, door: userId }));
+    logAudit('persona', `${toets.naam} (${gast.id}) uitgenodigd door ${gastheer} — gezicht: ${avatar.bron}`);
     const opening = profiel.systemPrompt.split(/\n\s*\n/)[0].replace(/^#+\s*/, '').slice(0, 500);
     await meldGastUitslag(client, view.id, userId,
       `✅ *${naamMd} is binnen.* ${AVATAR_NOOT[avatar.bron]}\nHij reageert op: ${ontsnapMrkdwn(toets.trefwoorden.join(', '))}.\n` +
@@ -8664,10 +8780,31 @@ app.view('modal_gast_nieuw', async ({ ack, body, view, client }) => {
   }
 });
 
+// De knoppen staan in het nieuwe-gastvenster én onder de mededeling in het kanaal (lib/nieuwtjes.js).
+// Vanuit een venster schuift de lijst erbovenop (views.push); vanuit een bericht opent er een nieuw.
 app.action('gast_bekend_open', async ({ ack, body, client }) => {
   await ack();
-  try { await toonBekendeGasten(client, body.trigger_id, body.user.id, { push: true }); }
-  catch (err) { console.error('Fout bij openen bekende gasten:', err.data?.error || err.message); }
+  try {
+    const inVenster = body.view?.type === 'modal';
+    const reden = inVenster ? null : gastToegangReden(body.user.id);
+    if (reden) {
+      await postEphemeral(client, body.channel?.id || KANAAL(), body.user.id, `_${reden}_`);
+      return;
+    }
+    await toonBekendeGasten(client, body.trigger_id, body.user.id, { push: inVenster });
+  } catch (err) { console.error('Fout bij openen bekende gasten:', err.data?.error || err.message); }
+});
+
+app.action('gast_nieuw_open', async ({ ack, body, client }) => {
+  await ack();
+  try {
+    const reden = gastToegangReden(body.user.id);
+    if (reden) {
+      await postEphemeral(client, body.channel?.id || KANAAL(), body.user.id, `_${reden}_`);
+      return;
+    }
+    await client.views.open({ trigger_id: body.trigger_id, view: bouwGastVenster(body.user.id, { upload: kanAvatarUploaden(client) }) });
+  } catch (err) { console.error('Fout bij openen gastvenster:', err.data?.error || err.message); }
 });
 
 app.action('gast_bekend_kies', async ({ ack, body, client }) => {
@@ -21849,6 +21986,22 @@ async function plaatsVerkondiging(tekst, kanaalKeuze) {
     : process.env.SLACK_CHANNEL_ID;
   await postToChannel(app.client, kanaal, schoon);
   return kanaalKeuze === 'test' ? 'Verkondigd in het testkanaal.' : 'Verkondigd in het hoofdkanaal.';
+}
+
+// Licht een nieuwe functie uit (lib/nieuwtjes.js): een decreet van de Kroket God, daaronder vast
+// hoe het werkt en wat het kost, en knoppen om meteen te beginnen. Beheercommando `uitlichten`.
+// Geeft true terug als het decreet van de keten kwam, false bij het vaste vangnet.
+async function lichtFunctieUit(client, functie, kanaal) {
+  // fallback: null — lukt het decreet niet, dan het vaste vangnet van de functie in plaats van
+  // een losse Kroket God-spreuk die niets met de functie te maken heeft.
+  const berichten = [
+    { role: 'system', content: buildSystemPrompt() },
+    { role: 'user', content: uitlichtPrompt(functie) },
+  ];
+  const decreet = await _draaiModellen(berichten, 400, 'slim', { fallback: null }).catch(() => null);
+  const { tekst, knoppen } = bouwUitlichting(functie, decreet);
+  await postToChannel(client, kanaal, tekst, { knoppen });
+  return !!decreet;
 }
 
 // Plant een (al in tone-of-voice geschreven) verkondiging in voor een toekomstig tijdstip.

@@ -430,6 +430,19 @@ var _personas={};
 function renderPersonaForm(){
   var html='<div class="card"><h2>👥 Personas <span id="p_status" class="muted" style="font-weight:400;text-transform:none;margin-left:8px"></span></h2>'
     +'<div id="persona_lijst" class="muted">Laden…</div>'
+    +'<div class="lbl" style="margin-top:14px;border-top:1px solid var(--line);padding-top:13px">🚪 Gast uitnodigen'+tip('Hetzelfde als /kroketgod invite in Slack, maar zonder punten. Geef een naam, een gezicht, trefwoorden en een beschrijving; Gemini schrijft het karakter uit in het stramien van de andere persona\'s. De gast is meteen actief en maakt zijn entree in het hoofdkanaal, op uitnodiging van de Hoge Frituurraad. Duurt zo\'n 15 seconden. Een bekende gast terughalen doe je met 🚪 nodig uit in de lijst hierboven.')+'</div>'
+    +'<div class="setgrid">'
+    +'<div><div class="lbl">Naam</div><input type="text" id="g_naam" maxlength="60" placeholder="bv. Tante Truus uit Zwolle"></div>'
+    +'<div><div class="lbl">Avatar'+tip('Kies een plaatje van je computer: het wordt verkleind en op imgbb gezet. Of plak een directe https-link. Leeg gelaten: er wordt een portret geschilderd.')+'</div>'
+      +'<div style="display:flex;align-items:center;gap:8px"><input type="file" id="g_bestand" accept="image/png,image/jpeg,image/gif,image/webp" style="flex:1">'
+      +'<img id="g_preview" style="display:none;width:32px;height:32px;border-radius:6px;object-fit:cover;border:1px solid var(--line)"></div>'
+      +'<input type="text" id="g_link" maxlength="240" placeholder="of https://…/gezicht.png" style="margin-top:6px;width:100%"></div>'
+    +'</div>'
+    +'<div class="lbl" style="margin-top:10px">Trefwoorden'+tip('Kommagescheiden. Noemt iemand een van deze woorden, dan reageert de gast. Woorden die in bijna elk bericht vallen (kroket, wat) of al van een andere persona zijn, worden geweigerd.')+'</div>'
+    +'<input type="text" id="g_trefwoord" maxlength="300" placeholder="bv. truus, tante truus" style="width:100%">'
+    +'<div class="lbl" style="margin-top:10px">Prompt / tone of voice</div>'
+    +'<textarea id="g_beschrijving" rows="5" maxlength="3000" placeholder="Wie is het, hoe praat hij, waar is hij door bezeten, wat vindt hij van de kroket? Stopwoordjes en voorbeeldzinnen helpen." style="width:100%"></textarea>'
+    +'<div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap"><button class="btn gold" id="g_knop" data-gast-uitnodigen>🚪 Nodig uit</button><span id="g_status" class="muted"></span></div>'
     +'<div class="lbl" style="margin-top:14px;border-top:1px solid var(--line);padding-top:13px">Nieuwe persona toevoegen / bewerken'+tip('Een persona is een nevenentiteit die net als de Kroket God in het kanaal post, maar onder een eigen naam en avatar — bv. een rivaliserende snackgod. Ze reageren als iemand hun trefwoord noemt, en optioneel af en toe ongevraagd.')+'</div>'
     +'<div class="setgrid">'
     +'<div><div class="lbl">Naam</div><input type="text" id="p_naam" placeholder="bv. De Heilige Mr. Satébal" maxlength="60"></div>'
@@ -454,8 +467,60 @@ function renderPersonaForm(){
     +'</div>';
   var host=document.getElementById('personas');
   host.innerHTML=html;
-  host.onclick=function(e){var b=e.target.closest('button');if(!b)return;if(b.hasAttribute('data-persona-save'))personaOpslaan();else if(b.hasAttribute('data-persona-cancel'))personaAnnuleer();else if(b.hasAttribute('data-persona-vragen'))personaVragen();else if(b.hasAttribute('data-persona-genereer'))personaGenereer();};
+  host.onclick=function(e){var b=e.target.closest('button');if(!b)return;if(b.hasAttribute('data-persona-save'))personaOpslaan();else if(b.hasAttribute('data-persona-cancel'))personaAnnuleer();else if(b.hasAttribute('data-persona-vragen'))personaVragen();else if(b.hasAttribute('data-persona-genereer'))personaGenereer();else if(b.hasAttribute('data-gast-uitnodigen'))gastUitnodigen();};
   host.oninput=function(e){if(e.target.id==='p_icoon')updateIconPreview();};
+  host.onchange=function(e){if(e.target.id==='g_bestand')gastBestandGekozen();};
+}
+// ── Gast uitnodigen (zelfde als /kroketgod invite, zonder punten) ──
+// Het plaatje wordt hier al verkleind tot 512 px (JPEG): de server leest hoogstens 1 MB per verzoek.
+var _gastAfbeelding=null;
+function verkleinAfbeelding(bestand,klaar){
+  var r=new FileReader();
+  r.onload=function(){
+    var img=new Image();
+    img.onload=function(){
+      var s=Math.min(1,512/Math.max(img.width,img.height));
+      var c=document.createElement('canvas');c.width=Math.max(1,Math.round(img.width*s));c.height=Math.max(1,Math.round(img.height*s));
+      var ctx=c.getContext('2d');ctx.fillStyle='#fff';ctx.fillRect(0,0,c.width,c.height);ctx.drawImage(img,0,0,c.width,c.height);
+      klaar(c.toDataURL('image/jpeg',0.85));
+    };
+    img.onerror=function(){klaar(null);};
+    img.src=r.result;
+  };
+  r.onerror=function(){klaar(null);};
+  r.readAsDataURL(bestand);
+}
+function gastBestandGekozen(){
+  var f=document.getElementById('g_bestand').files[0],pv=document.getElementById('g_preview'),st=document.getElementById('g_status');
+  _gastAfbeelding=null;pv.style.display='none';
+  if(!f)return;
+  verkleinAfbeelding(f,function(d){_gastAfbeelding=d;if(d){pv.src=d;pv.style.display='';if(st)st.textContent='';}else if(st)st.textContent='Dat plaatje kon ik niet lezen.';});
+}
+function gastUitnodigen(){
+  var st=document.getElementById('g_status'),knop=document.getElementById('g_knop');
+  function v(id){return document.getElementById(id).value.trim();}
+  var body={naam:v('g_naam'),trefwoorden:v('g_trefwoord'),beschrijving:v('g_beschrijving'),link:v('g_link'),afbeelding:_gastAfbeelding};
+  if(!body.naam||!body.trefwoorden||!body.beschrijving){st.textContent='Naam, trefwoorden en tone of voice zijn verplicht.';return;}
+  st.textContent='De Raad schrijft het karakter uit… (± 15 s)';knop.disabled=true;
+  var tok=getToken();
+  fetch('/api/gast',{method:'POST',headers:{'Content-Type':'application/json','Authorization':tok?'Bearer '+tok:''},body:JSON.stringify(body)})
+    .then(function(r){return r.json();})
+    .then(function(j){
+      knop.disabled=false;
+      if(j.error&&j.error.indexOf('DASHBOARD_TOKEN')!==-1){showLogin();st.textContent='';return;}
+      if(!j.ok){st.textContent='Fout: '+(j.error||'');return;}
+      st.textContent=j.bericht+' ✓';
+      ['g_naam','g_trefwoord','g_beschrijving','g_link','g_bestand'].forEach(function(id){document.getElementById(id).value='';});
+      _gastAfbeelding=null;document.getElementById('g_preview').style.display='none';
+      setTimeout(tick,800);
+    })
+    .catch(function(){knop.disabled=false;st.textContent='Fout';});
+}
+function gastTerug(id){
+  var p=_personas[id];if(!p)return;
+  if(!confirm(p.naam+' terughalen? Hij maakt zijn rentree in het hoofdkanaal.'))return;
+  post('/api/gast/bekend',{id:id},'Teruggehaald','p_status');
+  setTimeout(tick,1200);
 }
 var _wizardVragen=[];
 function personaVragen(){
@@ -518,7 +583,8 @@ function renderPersonaLijst(d){
       : esc(p.icoon||'');
     return '<tr><td>'+avatar+' '+esc(p.naam)+'</td><td class="muted">'+esc(p.trefwoord||'—')+'</td>'
       +'<td>'+(p.actief!==false?'actief':'uit')+(p.ongevraagd?' · spontaan':'')+'</td>'
-      +'<td><button class="btn" onclick="personaBewerk(\''+esc(p.id)+'\')">bewerk</button> '
+      +'<td>'+(p.actief===false&&!p.alleenVoorLid?'<button class="btn gold" onclick="gastTerug(\''+esc(p.id)+'\')">🚪 nodig uit</button> ':'')
+      +'<button class="btn" onclick="personaBewerk(\''+esc(p.id)+'\')">bewerk</button> '
       +'<button class="btn" onclick="personaSchakel(\''+esc(p.id)+'\')">'+(p.actief!==false?'zet uit':'zet aan')+'</button> '
       +'<button class="btn" onclick="personaVerwijder(\''+esc(p.id)+'\')">verwijder</button></td></tr>';
   }).join('');
