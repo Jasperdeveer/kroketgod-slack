@@ -9821,10 +9821,13 @@ app.event('message', async ({ event, client }) => {
     if (persona && !isPromptInjectie(event.text)) {
       try {
         const thread_ts = event.thread_ts || undefined;
+        // Een directe vraag aan een gast: het zware niveau (Gemini eerst). Op het lichte schreef
+        // gpt-oss-20b bij schreeuwers soms onzin in hoofdletters; de eigenaar ruilt dat liever in
+        // voor dagquotum. Ongevraagde steken en entrees blijven op het lichte niveau.
         const tekst = await personaResponse(
           persona,
           `${bijnaam} zei in het kanaal: "${event.text}". Je naam is genoemd — reageer kort en droog, in karakter. Geen inleidingszin.`,
-          150
+          150, 'slim'
         );
         await postAlsPersona(client, event.channel, persona, tekst, { thread_ts });
       } catch (err) {
