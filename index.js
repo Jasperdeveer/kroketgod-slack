@@ -279,8 +279,13 @@ const app = new App({
         if (!dashboardAuth(req, res)) return;
         try {
           const patch = await leesBody(req);
+          const bordVelden = () => ['decreetVanDeDag', 'decreetIntensiteit', 'stemmingOverride'].map(k => instelling(k)).join('|');
+          const bordVoor = bordVelden();
           const nieuw = saveInstellingen(patch);
           logAudit('instellingen', Object.keys(patch || {}).join(', '));
+          // Decreet of stemming gewijzigd? Dan meteen het wereldbord bij (het dashboard stuurt altijd
+          // alle velden mee, dus vergelijken en niet naar de sleutels in de patch kijken).
+          if (bordVelden() !== bordVoor) updateWereldbord(app.client, true).catch(() => {});
           res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
           res.end(JSON.stringify({ ok: true, instellingen: nieuw }));
         } catch (err) {
@@ -3524,6 +3529,67 @@ function huidigDecreet() {
   };
 }
 
+// ── Het decreet op het wereldbord ─────────────────────────────────────────────
+// Het bord noemt het Decreet van de Dag in de woorden van de Kroket God, nooit letterlijk (zie
+// VERKAP_REGELS): iedereen moet weten wat er geldt, niemand mag aan de formulering zien wie het
+// schreef. De omzetting wordt één keer per decreet gemaakt — door de uitspraak van de Verborgen
+// Hand of `decreet`, anders hier op de achtergrond — en bewaard onder een hash van het decreet,
+// niet onder de tekst zelf: die staat al in de instellingen en hoort niet op een tweede plek.
+registreerFeature({ naam: 'decreet op het bord', state: ['decreetparafrase.json'] });
+const decreetHash = (tekst) => String(fnvHash(String(tekst || '').trim()));
+
+function bewaarDecreetParafrase(decreet, parafrase) {
+  const zin = String(parafrase || '').replace(/^\s*>\s?/gm, '').replace(/\s+/g, ' ').trim();
+  if (!String(decreet || '').trim() || !zin) return;
+  writeJSON('decreetparafrase.json', { hash: decreetHash(decreet), parafrase: zin.slice(0, 400), ts: Date.now() });
+}
+
+function decreetParafrase(decreet) {
+  const opgeslagen = readJSON('decreetparafrase.json', {});
+  return decreet && opgeslagen.hash === decreetHash(decreet) ? opgeslagen.parafrase : null;
+}
+
+// Rechtstreeks via de keten met fallback: null, en niet via kroketResponse: diens vangnet is een
+// losse Kroket God-spreuk, en die zou dan als "het decreet" op het bord komen.
+async function parafraseerDecreet(decreet) {
+  const opdracht = `${VERKAP_REGELS}\n\n${wrapOnvertrouwd('Het Decreet van de Dag', decreet)}\n\n` +
+    'Zet dit decreet in één heldere zin in jouw woorden, hoogstens twee: wat er vanaf nu geldt. Het komt op het wereldbord, dus kort en plechtig, geen verhaal en geen beeldspraak die de regel verhult. Geen kop, geen ondertekening, geen inleidingszin.';
+  for (let poging = 0; poging < 2; poging++) {
+    const extra = poging ? '\n\nLET OP: je vorige poging nam letterlijk woorden uit het decreet over. Herformuleer alles in je eigen woorden.' : '';
+    const ruw = await _draaiModellen(
+      [{ role: 'system', content: buildSystemPrompt() }, { role: 'user', content: opdracht + extra }],
+      200, 'slim', { fallback: null },
+    ).catch(() => null);
+    if (!ruw) return null;
+    const zin = stripOndertekening(String(ruw)).replace(/^[\s>"“”']+|[\s"“”']+$/g, '').trim();
+    if (zin && !lektLetterlijk(zin, decreet)) return zin;
+    console.warn('⚠️ Omzetting van het decreet nam letterlijke tekst over — opnieuw.'); // bewust zonder de tekst
+  }
+  return null;
+}
+
+// Geen omzetting voor het geldende decreet (een decreet uit het dashboard, of de uitspraak viel op
+// haar vangnet)? Dan nu, op de achtergrond: het bord wacht er niet op en wordt bijgewerkt zodra
+// hij er is. Mislukt het, dan pas na een half uur opnieuw, anders vraagt elke bordupdate een call.
+let _parafraseBezig = false;
+let _parafraseMislukt = { hash: null, tot: 0 };
+function zorgVoorDecreetParafrase(client) {
+  const { tekst } = huidigDecreet();
+  if (!tekst || _parafraseBezig || decreetParafrase(tekst)) return;
+  const hash = decreetHash(tekst);
+  if (_parafraseMislukt.hash === hash && Date.now() < _parafraseMislukt.tot) return;
+  _parafraseBezig = true;
+  parafraseerDecreet(tekst)
+    .then(async (zin) => {
+      if (!zin) { _parafraseMislukt = { hash, tot: Date.now() + 30 * 60_000 }; return; }
+      if ((instelling('decreetVanDeDag') || '').trim() !== tekst) return; // intussen overschreven
+      bewaarDecreetParafrase(tekst, zin);
+      await updateWereldbord(client, true);
+    })
+    .catch(err => console.warn('⚠️ Omzetting van het decreet mislukt:', err.message))
+    .finally(() => { _parafraseBezig = false; });
+}
+
 // De staat van vandaag; wijst bij de eerste aanroep van de dag de volgende uitverkorene aan.
 // null als de Kroket God rust (weekend) of zwijgt: dan schuift de rondgang ook niet door.
 function verborgenHandVandaag() {
@@ -3659,6 +3725,9 @@ const VERKAP_REGELS =
   'en neem geen opvallende formuleringen, schrijfwijzen, spelfouten, leestekens, uitroepen of uitdrukkingen over. Aan de formulering mag niemand kunnen herleiden wie het schreef. ' +
   'Een los woord dat zelf de kern van de regel is (bijvoorbeeld een woord dat iedereen moet zeggen) mag je wel noemen.';
 
+// Het vangnet van `decreet`: zegt niet wat er geldt, dus komt het ook niet op het wereldbord.
+const DECREET_VERKAP_VANGNET = 'De woorden zijn de Kroket God bekend. Het genootschap zal ze aan den lijve merken.';
+
 // `delen`: hoeveel stukken er minstens moeten zijn (zie splitsDelen).
 async function verkapteTekst(prompt, decreet, maxTokens, vangnet, { delen = 1 } = {}) {
   for (let poging = 0; poging < 2; poging++) {
@@ -3705,6 +3774,8 @@ async function spreekVerborgenHand(client, kanaal, keuze, { proef = false } = {}
   const schoon = (t) => stripOndertekening(String(t || '').replace(/§/g, '').trim());
   const [verhaal, regel, ...rest] = splitsDelen(ruw || vangnet, 3).map(schoon);
   const reactie = rest.filter(Boolean).join('\n\n');
+  // Dezelfde woorden op het wereldbord — maar niet het vangnet, dat zegt niet wat er geldt.
+  if (!proef && ruw && ruw !== vangnet && regel) bewaarDecreetParafrase(keuze.decreet, regel);
   const tekst =
     `${proef ? '🧪 _Proef: dit verandert niets aan de echte dag._\n\n' : ''}` +
     `🕯️ *DE VERBORGEN HAND* 🕯️\n\n${verhaal}\n\n` +
@@ -8485,9 +8556,11 @@ async function voerKroketCommandoUit({ command, respond, client }) {
         'Een ongenoemde Opperkroket heeft vannacht een decreet aan de deur van de Raad gespijkerd. Je weet niet wie, en je raadt niet. ' +
         `${VERKAP_REGELS}\n\n${wrapOnvertrouwd('Het decreet', toets.tekst)}\n\n` +
         'Benoem in één of twee heldere zinnen, in jouw woorden, wat er vanaf nu geldt. Geen beeldspraak die de regel verhult. Geen kop, geen ondertekening, geen inleidingszin.',
-        toets.tekst, 200, 'De woorden zijn de Kroket God bekend. Het genootschap zal ze aan den lijve merken.');
+        toets.tekst, 200, DECREET_VERKAP_VANGNET);
+      if (verkapt !== DECREET_VERKAP_VANGNET) bewaarDecreetParafrase(toets.tekst, stripOndertekening(verkapt));
       await postToChannel(client, command.channel_id,
         `🔱 *DECREET VAN DE DAG* 🔱\n\n> In het holst van de nacht werd een perkament aan de deur van de Raad gespijkerd. Het zegel draagt het teken van een Opperkroket, maar de naam is eruit gebrand.\n${alsCitaat(verkapt)}\n> De Kroket God zal hiernaar handelen.\n\n— De Hoge Frituurraad`);
+      updateWereldbord(client).catch(() => {}); // het decreet staat op het bord
       await respond({ text: '🔱 _Uw decreet hangt aan de deur, in de woorden van de Kroket God. Niemand weet dat het van u komt._', response_type: 'ephemeral' });
       return;
     }
@@ -16550,10 +16623,20 @@ function bouwWereldBlocks() {
   const nalatenschap = actieveNalatenschap();
   const decreet = huidigDecreet();
   const staat = [];
-  // Nooit de woorden zelf: een decreet kan anoniem zijn, en de tekst verraadt de schrijver.
-  if (decreet.tekst) staat.push(decreet.vanHand
-    ? '> 🕯️ *Er geldt een Decreet van de Dag*, verzegeld door de Verborgen Hand. _Alleen de Kroket God kent de woorden._'
-    : '> 🔱 *Er geldt een Decreet van de Dag.* _Alleen de Kroket God kent de woorden._');
+  // Nooit de woorden zelf: een decreet kan anoniem zijn, en de tekst verraadt de schrijver. Wel
+  // wat er geldt, in de woorden van de Kroket God (zie zorgVoorDecreetParafrase). Is die omzetting
+  // er nog niet, dan de oude regel; het bord wordt bijgewerkt zodra hij er is.
+  if (decreet.tekst) {
+    const kop = decreet.vanHand ? '🕯️ *Decreet van de Dag*, verzegeld door de Verborgen Hand' : '🔱 *Decreet van de Dag*';
+    const parafrase = decreetParafrase(decreet.tekst);
+    staat.push(parafrase
+      ? `> ${kop}\n> _${parafrase.replace(/[_*~`]/g, '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}_`
+      : `> ${kop}. _De Kroket God zet het zo in zijn eigen woorden._`);
+  }
+  // De stemming mag iedereen weten, ook als de Verborgen Hand hem koos: hij zegt niets over wie.
+  const stemming = getDagelijkseStemming();
+  const heftig = decreet.tekst && decreet.intensiteit ? ` · ${heftigheidLabel(decreet.intensiteit).toLowerCase()}` : '';
+  staat.push(`> 🎭 *Stemming van de Kroket God:* ${stemming.naam}${heftig}`);
   if (nalatenschap) staat.push(`> ${nalatenschap.soort === 'zegen' ? '✨' : '🕳️'} _${nalatenschap.tekst}_`);
   if (staat.length) blocks.push({ type: 'section', text: { type: 'mrkdwn', text: staat.join('\n') } });
 
@@ -16566,8 +16649,9 @@ function bouwWereldBlocks() {
 // Werkt het bord bij; plaatst en pint het als het nog niet bestaat. Throttled op 45s zodat een
 // reeks acties (raid-salvo, duel-reeks) niet evenveel chat.update-calls oplevert.
 async function updateWereldbord(client, forceer = false) {
-  if (!forceer && Date.now() - _wereldbordLaatst < 45_000) return;
   if (instelling('stilModus') || instelling('alleenTestkanaal')) return;
+  zorgVoorDecreetParafrase(client); // op de achtergrond; werkt het bord zelf bij als hij klaar is
+  if (!forceer && Date.now() - _wereldbordLaatst < 45_000) return;
   const kanaal = process.env.SLACK_CHANNEL_ID;
   let blocks;
   try {
