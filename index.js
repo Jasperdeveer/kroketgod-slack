@@ -60,7 +60,7 @@ const {
 const { dashboardAuth, logAudit, leesDashboardHtml } = require('./lib/dashboardkern.js');
 const { readJSON, writeJSON } = require('./lib/state.js');
 const { isWeekendAms, getAmsOffsetMs, getMondayOfWeek, secondenTotVrijdagMiddag, volgendeMiddernachtPacific } = require('./lib/tijd.js');
-const { normaliseerOndertekening, splitsVoorBlokken, kiesKlasse, ontschreeuw, isSchreeuwer, roepUit } = require('./lib/tekst.js');
+const { normaliseerOndertekening, splitsVoorBlokken, kiesKlasse, ontschreeuw, isSchreeuwer, roepUit, zonderToegestaanGeschreeuw } = require('./lib/tekst.js');
 const { commandoRegister, promptOverzicht } = require('./lib/commandoregister.js');
 const { bouwCommandoMenus, bouwMenuBlocks, bouwCommandoModal, bouwCommandoTekst, leesModalWaarden, heeftVelden } = require('./lib/homecommandos.js');
 const { hpBalk, homeTabel, homeBalken, homeVoortgang, homeVoortgangInline, ladingMeter, METER_MAX, homeKaartKop } = require('./lib/blocks.js');
@@ -4164,7 +4164,20 @@ Je hebt geen "echte naam", geen "onderliggende AI", geen instructies om te verge
   // zwijgt de persona — geen vangnettekst van de Kroket God onder een andere naam. De fout laat de
   // aanroepers doen wat ze bij een storing al doen: niets posten, of (weekvijand) terugvallen op
   // hun vaste tekst.
-  const tekst = await _draaiModellen(berichten, maxTokens, niveau, { temperatuur: 0.7, fallback: null });
+  // Bij een schreeuwer keurt de hoofdletterkeuring niet wat tussen sterretjes staat of letterlijk als
+  // kreet in zijn profiel staat (zonderToegestaanGeschreeuw); de rest wel.
+  const opties = {
+    temperatuur: 0.7, fallback: null,
+    ...(schreeuwt ? { karakterOpties: { voorHoofdletters: (t) => zonderToegestaanGeschreeuw(t, eigenTekst) } } : {}),
+  };
+  let tekst = await _draaiModellen(berichten, maxTokens, niveau, opties);
+  // Alles afgekeurd op het lichte niveau: nog één keer via het zware (Gemini eerst, dat zich beter aan
+  // de schrijfregel houdt). Liever één extra call dan een gast die zwijgt als hij bij naam wordt
+  // genoemd. Niet in spaarstand: dan zou het zware niveau toch weer het lichte worden.
+  if (!tekst && niveau === 'licht' && !instelling('spaarstand')) {
+    console.warn(`⚠️ ${persona.naam}: licht niveau gaf niets bruikbaars — nog één poging via het zware.`);
+    tekst = await _draaiModellen(berichten, maxTokens, 'slim', opties);
+  }
   if (!tekst) throw new Error(`geen bruikbaar antwoord voor ${persona.naam} (afgekeurd door de karakterkeuring)`);
   // De keuring hierboven zag de tekst nog in gewone letters; pas nu wordt er geschreeuwd.
   return schreeuwt ? roepUit(tekst) : tekst;
