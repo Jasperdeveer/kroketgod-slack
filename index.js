@@ -172,6 +172,10 @@ const {
 } = require('./lib/gasten.js');
 const { FUNCTIES, uitlichtPrompt, bouwUitlichting } = require('./lib/nieuwtjes.js');
 const {
+  SLIM_PALET, SLIM_KLASSEN, frequentie: emojiFrequentie, kiesRegel: kiesEmojiRegel,
+  magReageren: magEmojiReageren, naReactie: naEmojiReactie,
+} = require('./lib/emojireacties.js');
+const {
   DECREET_MAX, HEFTIGHEDEN, HEFTIGHEID_STANDAARD, heftigheidLabel,
   kandidatenVoor, staatVoorDag, keuzeVan: handKeuzeVan, magSchrijven, magUitnodigen, naUitnodiging,
   toetsDecreet, lektLetterlijk, splitsDelen,
@@ -9764,6 +9768,64 @@ function lijktOpVerklikking(rawText, speakerId) {
   return false;
 }
 
+// ── Emoji-reacties (regels en remmen: lib/emojireacties.js) ────────────────────
+// Stil: geen bericht, alleen één emoji op het bericht van een lid. Niet op een bericht aan de
+// Kroket God (dat beantwoordt hij al), niet als de Duitse vlag er al op staat, en niet in
+// weekendrust of stilmodus. De log van het laatste uur staat alleen in het geheugen: na een
+// herstart begint de rem opnieuw, en dat is hooguit één uur iets ruimer.
+let _emojiLog = [];
+const _ongeldigeEmoji = new Set(); // namen die Slack weigerde (bv. een verdwenen custom emoji)
+
+function amsUur(nu = new Date()) {
+  return Number(new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Amsterdam', hour: '2-digit', hourCycle: 'h23' }).format(nu));
+}
+
+// De slimme laag: een klein model kiest uit het vaste palet, of "geen" (meestal het juiste antwoord).
+async function slimmeEmoji(tekst) {
+  const palet = Object.entries(SLIM_PALET).map(([klasse, p]) => `- ${klasse}: ${p.betekenis}`).join('\n');
+  const recent = getRecenteContext(4);
+  const systeem = `${DEFENSIEVE_INSTRUCTIE}\n\nJe beoordeelt één bericht uit de Slack-groep van een vriendengroep. ` +
+    `Kies welke reactie erbij past:\n${palet}\n- geen: niets hiervan is duidelijk het geval\n\n` +
+    'Kies "geen", tenzij een van de andere overduidelijk klopt. Antwoord met precies één woord uit deze lijst, zonder uitleg.';
+  const vraag = `${recent ? `${wrapOnvertrouwd('Het gesprek van zojuist', recent)}\n\n` : ''}` +
+    `${wrapOnvertrouwd('Het bericht', tekst)}\n\nWelke reactie? Eén woord.`;
+  const klasse = await classificeer(systeem, vraag, { klassen: SLIM_KLASSEN, vangnet: 'geen' });
+  return SLIM_PALET[klasse]?.emoji || null;
+}
+
+async function overwegEmojiReactie(client, event, { isTestKanaalMsg = false } = {}) {
+  const regelsAan = instelling('emojiRegels') !== false;
+  const slimAan = instelling('emojiSlim') !== false;
+  if ((!regelsAan && !slimAan) || !event.user || !event.text?.trim()) return;
+  if (!isTestKanaalMsg && (instelling('stilModus') || instelling('alleenTestkanaal'))) return;
+  if (!isTestKanaalMsg && isWeekendAms() && instelling('weekendRust')) return;
+  if (BOT_USER_ID && event.text.includes(`<@${BOT_USER_ID}>`)) return;
+  if (!loadMembers()[event.user]) return;
+  const freq = emojiFrequentie(instelling('emojiFrequentie'));
+  if (!magEmojiReageren(_emojiLog, event.user, Date.now(), freq)) return;
+
+  const tekst = event.text.replace(/<@[A-Z0-9]+>/g, ' ');
+  const ctx = { uur: amsUur(), weekdag: amsWeekdag(), noemtKroketGodZonderMentie: /kroket ?god/i.test(tekst) };
+  const regel = regelsAan ? kiesEmojiRegel(tekst, ctx, { factor: freq.regelFactor }) : null;
+  let emoji = regel?.emoji || null;
+  // Een regel die raak was maar wiens worp misliep, laat het bericht met rust: geen slimme laag.
+  if (!regel && slimAan && tekst.trim().split(/\s+/).length >= 4 && Math.random() < freq.slimKans) {
+    emoji = await slimmeEmoji(tekst);
+  }
+  if (!emoji || _ongeldigeEmoji.has(emoji)) return;
+  // Opnieuw toetsen: tijdens de slimme laag kan een ander bericht de ruimte al hebben genomen.
+  if (!magEmojiReageren(_emojiLog, event.user, Date.now(), freq)) return;
+  _emojiLog = naEmojiReactie(_emojiLog, event.user, Date.now());
+  try {
+    await slackLimiter.schedule(() => client.reactions.add({ channel: event.channel, timestamp: event.ts, name: emoji }));
+    console.log(`🙂 Emoji :${emoji}: op een bericht (${regel ? `regel ${regel.key}` : 'slimme laag'})`);
+  } catch (err) {
+    const fout = err.data?.error || err.message;
+    if (fout === 'invalid_name') _ongeldigeEmoji.add(emoji);
+    if (fout !== 'already_reacted') console.warn(`⚠️ Emoji :${emoji}: zetten mislukt:`, fout);
+  }
+}
+
 app.event('message', async ({ event, client }) => {
   // Deduplicatie: Slack herverzendt events bij timeout — niet dubbel verwerken. Prefix per
   // handler-type (zie app_mention): zelfde client_msg_id komt óók binnen als mention-event.
@@ -9811,8 +9873,9 @@ app.event('message', async ({ event, client }) => {
 
     // 🇩🇪 Verklikker-markering: wie een ander lid probeert te beschuldigen of een straf aan te
     // naaien, krijgt stilletjes een Duitse vlag (passieve emoji-reactie, geen LLM, altijd actief).
+    let vlagGezet = false;
     if (event.user && event.text?.trim() && lijktOpVerklikking(event.text, event.user)) {
-      try { await client.reactions.add({ channel: event.channel, timestamp: event.ts, name: 'flag-de' }); } catch (_) {}
+      try { await client.reactions.add({ channel: event.channel, timestamp: event.ts, name: 'flag-de' }); vlagGezet = true; } catch (_) {}
     }
 
     // Weekend: geen geautomatiseerde berichtreacties — testkanaal uitgezonderd, uitschakelbaar.
@@ -9834,6 +9897,13 @@ app.event('message', async ({ event, client }) => {
 
     if (!event.text?.trim()) return;
     if (!isTestKanaalMsg) logBericht(bijnaam, event.text, { soort: 'lid', sprekerId: event.user });
+
+    // Een emoji van de Kroket God (zie overwegEmojiReactie). Niet awaiten: het bericht wacht niet
+    // op de slimme laag. Op een verklikking staat de Duitse vlag al; daar komt niets bij.
+    if (!vlagGezet && !event.subtype) {
+      overwegEmojiReactie(client, event, { isTestKanaalMsg })
+        .catch(err => console.warn('⚠️ Emoji-reactie mislukt:', err.message));
+    }
 
     // ── Stille Missie detectie ────────────────────────────────────────────────
     if (!isTestKanaalMsg && event.channel === process.env.SLACK_CHANNEL_ID) {
@@ -9940,6 +10010,9 @@ app.event('reaction_added', async ({ event, client }) => {
   // Dedup: Slack herverzendt events bij trage acks — zonder dit kan de 40%-kans-zegen
   // dubbel vuren. event_ts + user + reactie is per reactie-plaatsing uniek.
   if (isHerhaaldEvent(`react:${event.event_ts}:${event.user}:${event.reaction}`)) return;
+  // De emoji van de Kroket God zelf (overwegEmojiReactie, de vlag, poll-zaadjes) tellen nergens
+  // mee: anders levert zijn :lekker_kroketje: op een bericht een zegen op "van een vreemdeling".
+  if (BOT_USER_ID && event.user === BOT_USER_ID) return;
   try {
     // ── Gouden Kroket: de eerste :lekker_kroketje: op het schatbericht wint +3 ─
     // Vóór de kanaal-guard, zodat een admin-test in een testkanaal ook werkt (het
