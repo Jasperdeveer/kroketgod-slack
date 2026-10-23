@@ -160,6 +160,11 @@ const {
   jackpotVrij, beslisUitkomst, vetbadDelta, potInleg, naInleg, dubbelOfNiksDelta, toetsDubbel, ruimKansen,
 } = require('./lib/vetbad.js');
 const {
+  VERBOND_MAX, VERZOEK_GELDIG_MS, groepen: verbondGroepen, naarOpslag: verbondNaarOpslag,
+  groepVan: verbondGroepVan, bondgenotenVan, verlaat: verlaatVerbond, sluitPaar: sluitVerbondsPaar,
+  beoordeelVerbond, toetsVerzoek: toetsVerbondsverzoek, sluitAan: sluitAanBijVerbond, kiesEen, namenLijst,
+} = require('./lib/verbond.js');
+const {
   DECREET_MAX, HEFTIGHEDEN, HEFTIGHEID_STANDAARD, heftigheidLabel,
   kandidatenVoor, staatVoorDag, keuzeVan: handKeuzeVan, magSchrijven, magUitnodigen, naUitnodiging,
   toetsDecreet, lektLetterlijk,
@@ -1500,14 +1505,17 @@ async function pasScoreAanMetCheck(client, userId, delta, opties = {}) {
 // De markering staat VÓÓR de kansworp: precies één worp per actie, of hij lukt of niet.
 async function kenAlliantiePuntenBonus(client, userId, opties = {}) {
   try {
-    const partnerId = getAlliantiePartner(userId);
-    if (!partnerId || isVerbannen(partnerId)) return;
-    if (opties.geverId && partnerId === opties.geverId) return; // gever niet via eigen partner bevoordelen
+    // In een verbond van drie krijgt per actie ÉÉN willekeurige bondgenoot de kans, niet elk van
+    // beiden: anders levert een groter verbond meer gratis punten op dan een paar. De hele groep
+    // telt daarna als "had zijn kans", om dezelfde reden.
     const naspel = opties.naspel;
-    if (naspel?.zegenGehad) {
-      if (naspel.zegenGehad.has(partnerId)) return;
-      naspel.zegenGehad.add(partnerId);
-    }
+    const kandidaten = getBondgenoten(userId)
+      .filter(id => !isVerbannen(id))
+      .filter(id => !(opties.geverId && id === opties.geverId)) // gever niet via eigen bondgenoot bevoordelen
+      .filter(id => !naspel?.zegenGehad?.has(id));
+    const partnerId = kiesEen(kandidaten, Math.random());
+    if (!partnerId) return;
+    if (naspel?.zegenGehad) for (const id of getBondgenoten(userId)) naspel.zegenGehad.add(id);
     if (Math.random() >= 0.80) return;                          // 80% kans
     const bonus = naspel ? 1 + Math.floor(Math.random() * 3) : (Math.random() < 0.30 ? 2 : 1);
     const voor = loadScores()[partnerId] || 0;
@@ -1799,16 +1807,8 @@ function bouwLedenStatus() {
     }).join('\n') || '- Niemand momenteel verbannen';
 
   // Allianties toevoegen aan de statusstring
-  const allianties = loadAllianties();
-  const gezien = new Set();
-  const alliantieRegels = [];
-  for (const [uid1, uid2] of Object.entries(allianties)) {
-    if (gezien.has(uid1) || gezien.has(uid2)) continue;
-    gezien.add(uid1); gezien.add(uid2);
-    const n1 = members[uid1]?.bijnaam || uid1;
-    const n2 = members[uid2]?.bijnaam || uid2;
-    alliantieRegels.push(`- ${n1} ↔ ${n2}`);
-  }
+  const alliantieRegels = alleVerbonden()
+    .map(g => `- ${g.map(id => members[id]?.bijnaam || id).join(' ↔ ')}`);
   const alliantieInfo = alliantieRegels.length > 0
     ? `\n\nACTIEVE ALLIANTIES (heilige verbonden — gedeelde eer en wederzijdse bescherming):\n${alliantieRegels.join('\n')}`
     : '\n\nACTIEVE ALLIANTIES:\n- Geen actieve allianties';
@@ -2704,10 +2704,17 @@ const loadVerbanning = () => readJSON('verbanning.json', {});
 const saveVerbanning = (data) => schrijfEnMarkeerHomes('verbanning.json', data);
 
 // ── Allianties ─────────────────────────────────────────────────────────────────
-// Opgeslagen als { userId1: userId2, userId2: userId1 } — altijd bidirectioneel.
+// Een verbond telt twee of drie leden (regels en waarom: lib/verbond.js). Opgeslagen als
+// { userId: [bondgenootIds…] }, altijd symmetrisch; het oude formaat { a: 'b', b: 'a' } leest
+// lib/verbond.js gewoon mee, dus bestaande paren blijven staan tot er iets aan verandert.
+// Lees en schrijf allianties.json ALLEEN via de functies hieronder: een losse
+// `loadAllianties()[id]` geeft in het nieuwe formaat een lijst, niet één partner.
 
 const loadAllianties  = () => readJSON('allianties.json', {});
 const saveAllianties  = (data) => writeJSON('allianties.json', data);
+const loadVerbondsverzoeken = () => readJSON('alliantieverzoeken.json', {});
+const saveVerbondsverzoeken = (data) => writeJSON('alliantieverzoeken.json', data);
+registreerFeature({ naam: 'verbondsverzoeken', state: ['alliantieverzoeken.json'] });
 
 // Staat het alliantie-stelsel aan? Uit = PAUZE. De verbonden blijven in allianties.json staan,
 // maar geven niets en kosten niets zolang de pauze duurt.
@@ -2724,38 +2731,133 @@ function alliantiesActief() {
 // gedeelde bevrijding — én de beschermingen: tijdens de pauze mág u uw bondgenoot duelleren en
 // beroven. Dat laatste is een bewuste keuze: een verbond dat niets meer geeft, hoort ook niets
 // meer te verbieden. Half pauzeren (bonussen weg, verboden blijven) is niet uit te leggen.
-function getAlliantiePartner(userId) {
-  if (!alliantiesActief()) return null;
-  return loadAllianties()[userId] || null;
+// Geeft een LIJST (leeg zonder verbond of tijdens een pauze).
+function getBondgenoten(userId) {
+  if (!alliantiesActief()) return [];
+  return bondgenotenVan(loadAllianties(), userId);
+}
+
+function isBondgenoot(userId, anderId) {
+  return getBondgenoten(userId).includes(anderId);
 }
 
 // DE ADMINISTRATIEVE toegang: negeert de pauze. Voor weergave (het dossier, de Home-tab, het
 // overzicht, het dashboard) en voor opruimen — want een lid dat het genootschap verlaat moet
 // zijn verbond kwijtraken, óók tijdens een pauze, anders blijft er een band naar een niet-bestaand
 // lid achter die bij het hervatten opeens weer meedoet.
-function getAlliantiePartnerRuw(userId) {
-  return loadAllianties()[userId] || null;
+function getBondgenotenRuw(userId) {
+  return bondgenotenVan(loadAllianties(), userId);
 }
 
+// Alle verbonden als lijst van id-groepen (voor overzichten).
+function alleVerbonden() {
+  return verbondGroepen(loadAllianties());
+}
+
+// Een nieuw paar. Beide partijen verlaten eerst hun eigen verbond, zoals het altijd ging.
 function sluitAlliantie(userId1, userId2) {
-  const allianties = loadAllianties();
-  // Verbreek eventuele bestaande allianties van beide partijen
-  const oudePart1 = allianties[userId1];
-  const oudePart2 = allianties[userId2];
-  if (oudePart1 && oudePart1 !== userId2) delete allianties[oudePart1];
-  if (oudePart2 && oudePart2 !== userId1) delete allianties[oudePart2];
-  allianties[userId1] = userId2;
-  allianties[userId2] = userId1;
-  saveAllianties(allianties);
+  saveAllianties(sluitVerbondsPaar(loadAllianties(), userId1, userId2));
 }
 
+// `userId` verlaat zijn verbond; een verbond van drie blijft dan een paar.
 function verbreekAlliantie(userId) {
-  const allianties = loadAllianties();
-  const partner = allianties[userId];
-  if (partner) delete allianties[partner];
-  delete allianties[userId];
-  saveAllianties(allianties);
+  saveAllianties(verlaatVerbond(loadAllianties(), userId));
 }
+
+// Bijnamen van een lijst ids als "A", "A en B" of "A, B en C".
+function bijnamenVan(ids, members = loadMembers()) {
+  return namenLijst(ids.map(id => members[id]?.bijnaam || 'een bondgenoot'));
+}
+
+// ── Aansluiten bij een verbond van twee ───────────────────────────────────────
+// Een verzoek met twee knoppen in het kanaal. Eén van de huidige leden beslist; de aanvrager zelf
+// niet. Eén open verzoek per aanvrager: een nieuw verzoek vervangt het vorige.
+async function vraagAansluiting(client, vanId, doelId, groep, channelId) {
+  const nu = Date.now();
+  const bewaar = 7 * 24 * 60 * 60 * 1000;
+  const verzoeken = Object.fromEntries(Object.entries(loadVerbondsverzoeken()).filter(([, v]) => nu - (v?.ts || 0) < bewaar));
+  for (const v of Object.values(verzoeken)) if (v.vanId === vanId && !v.gesloten) v.gesloten = 'vervangen';
+  const id = `${nu.toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+  verzoeken[id] = { vanId, doelId, groep, ts: nu, gesloten: false };
+  saveVerbondsverzoeken(verzoeken);
+  const members = loadMembers();
+  await postToChannel(client, channelId,
+    `⚔️ *EEN VERZOEK TOT AANSLUITING* ⚔️\n\n` +
+    `> *${members[vanId]?.bijnaam || 'Een volgeling'}* wil zich aansluiten bij het heilige verbond van *${bijnamenVan(groep, members)}*.\n` +
+    `> Eén van hen beslist, binnen ${Math.round(VERZOEK_GELDIG_MS / 3_600_000)} uur. Een verbond telt hoogstens ${VERBOND_MAX} leden ` +
+    `en deelt glorie én val: wordt één lid verbannen, dan gaan de anderen mee.\n\n— De Hoge Frituurraad` +
+    wekroep(...groep),
+    { knoppen: [
+      { type: 'button', text: { type: 'plain_text', text: '⚔️ Accepteren', emoji: true }, action_id: 'verbond_accepteer', value: id, style: 'primary' },
+      { type: 'button', text: { type: 'plain_text', text: '✋ Weigeren', emoji: true }, action_id: 'verbond_weiger', value: id },
+    ] });
+}
+
+const VERBONDSVERZOEK_WEIGERING = {
+  onbekend: '_Dit verzoek bestaat niet meer._',
+  gesloten: '_Over dit verzoek is al beslist._',
+  verlopen: '_Dit verzoek is verlopen: er werd niet binnen 24 uur beslist._',
+  opgeheven: '_Het verbond waar dit verzoek bij hoorde, bestaat niet meer._',
+  niet_lid: '_Alleen de leden van dit verbond beslissen over een aansluiting._',
+  al_verbonden: '_Deze volgeling hoort al bij het verbond._',
+  vol: `_Het verbond is intussen vol: hoogstens ${VERBOND_MAX} leden._`,
+};
+
+app.action(/^verbond_(accepteer|weiger)$/, async ({ ack, body, client }) => {
+  await ack();
+  try {
+    const accepteer = body.actions?.[0]?.action_id === 'verbond_accepteer';
+    const id = body.actions?.[0]?.value;
+    const klikker = body.user.id;
+    if (!alliantiesActief()) {
+      await meldKnopTerug(client, body, '_De heilige verbonden zijn gepauzeerd. Er wordt nu niets gesloten._');
+      return;
+    }
+    // Lezen, toetsen en als beslist markeren zonder await ertussen: twee leden die tegelijk
+    // klikken, of één dubbelklik, beslissen anders twee keer.
+    const verzoeken = loadVerbondsverzoeken();
+    const v = verzoeken[id];
+    const raw = loadAllianties();
+    const toets = toetsVerbondsverzoek(v, raw, klikker, Date.now());
+    if (!toets.ok) {
+      // Wie niet mag beslissen, laat de knoppen staan; een verzoek dat niet meer kan, sluiten we af.
+      if (toets.reden !== 'niet_lid') {
+        if (v && !v.gesloten) { v.gesloten = toets.reden; saveVerbondsverzoeken(verzoeken); }
+        await haalDubbelKnopWeg(client, body, '⚔️ _Dit verzoek is niet meer open._');
+      }
+      await meldKnopTerug(client, body, VERBONDSVERZOEK_WEIGERING[toets.reden] || '_Dat kan nu niet._');
+      return;
+    }
+    v.gesloten = accepteer ? 'geaccepteerd' : 'geweigerd';
+    v.door = klikker;
+    v.beslist = Date.now();
+    saveVerbondsverzoeken(verzoeken);
+    const members = loadMembers();
+    const vanNaam = members[v.vanId]?.bijnaam || 'een volgeling';
+    const klikNaam = members[klikker]?.bijnaam || 'een bondgenoot';
+    if (!accepteer) {
+      await haalDubbelKnopWeg(client, body, `✋ _Geweigerd door ${klikNaam}._`);
+      await meldKnopTerug(client, body, `_U heeft het verzoek van ${vanNaam} geweigerd._`);
+      return;
+    }
+    const oudeBondgenoten = bondgenotenVan(raw, v.vanId);
+    saveAllianties(sluitAanBijVerbond(raw, v.vanId, v.doelId));
+    const nieuweGroep = verbondGroepVan(loadAllianties(), v.vanId) || [];
+    const vorigeGroepNamen = bijnamenVan(toets.groep, members);
+    logGebeurtenis('alliantie', v.vanId, `${vanNaam} sloot zich aan bij het verbond van ${vorigeGroepNamen}`);
+    await haalDubbelKnopWeg(client, body, `✅ _Geaccepteerd door ${klikNaam}._`);
+    const oudeZin = oudeBondgenoten.length ? `${vanNaam} verlaat daarmee het verbond met ${bijnamenVan(oudeBondgenoten, members)}. ` : '';
+    const tekst = await kroketResponseMetVangnet(
+      `[VERBOND UITGEBREID: ${bijnamenVan(nieuweGroep, members)}] ${oudeZin}` +
+      `${vanNaam} is opgenomen in het heilige verbond van ${vorigeGroepNamen}; het verbond telt nu ${nieuweGroep.length} leden. ` +
+      `Richt de aankondiging tot de groep. Kondig plechtig aan dat het verbond is gegroeid en wat dat verplicht: ` +
+      `gedeelde glorie én gedeelde val. Noem alle leden bij naam. Geen inleidingszin.`,
+      400, false,
+      `⚔️ *HET VERBOND GROEIT* ⚔️\n\n> *${vanNaam}* is opgenomen in het heilige verbond van *${vorigeGroepNamen}*. ${oudeZin}\n` +
+      `> Glorie en val worden voortaan door ${nieuweGroep.length} gedragen.\n\n— De Hoge Frituurraad`);
+    await postToChannel(client, body.channel?.id || process.env.SLACK_CHANNEL_ID, tekst);
+  } catch (err) { console.error('Fout bij verbondsverzoek:', err); }
+});
 
 // ── Gele kaarten ──────────────────────────────────────────────────────────────
 // Formele waarschuwingen (gele kaart). Tweede overtreding deze week = directe ban.
@@ -2834,71 +2936,84 @@ async function legGeleKaartBanOp(client, channelId, userId, bijnaam, reden, cita
   await verbanAlliantiePartnerMee(client, userId, bijnaam, channelId);
 }
 
-// Sleep de alliantie-partner mee als een lid verbannen wordt: een verbond deelt glorie én val.
-// De partner krijgt dezelfde einddatum als het zojuist verbannen lid. Als de partner al verbannen
-// is → gezamenlijk vonnis (geen tweede ban). Wordt na elke ban aangeroepen.
+// Sleep de bondgenoten mee als een lid verbannen wordt: een verbond deelt glorie én val. Wie nog
+// vrij is, krijgt dezelfde einddatum als het zojuist verbannen lid. Zijn alle bondgenoten al
+// verbannen → gezamenlijk vonnis (geen tweede ban). Wordt na elke ban aangeroepen.
 async function verbanAlliantiePartnerMee(client, userId, bijnaam, channelId) {
   try {
-    const partnerId = getAlliantiePartner(userId);
-    if (!partnerId) return;
+    const bondgenoten = getBondgenoten(userId);
+    if (!bondgenoten.length) return;
     const members = loadMembers();
-    const partnerBijnaam = members[partnerId]?.bijnaam || 'uw bondgenoot';
+    const vrij = bondgenoten.filter(id => !isVerbannen(id));
 
-    // Alliantie-vonnis: partner is al verbannen → gezamenlijk decreet, geen nieuwe ban.
-    if (isVerbannen(partnerId)) {
+    // Alliantie-vonnis: iedereen in het verbond is al verbannen → gezamenlijk decreet, geen nieuwe ban.
+    if (!vrij.length) {
+      const namen = bijnamenVan(bondgenoten, members);
       const tekst = await kroketResponse(
-        `Ongekend: ${bijnaam} én ${partnerBijnaam} zijn tegelijkertijd verbannen. ` +
+        `Ongekend: ${bijnaam} én ${namen} zijn tegelijkertijd verbannen. ` +
         `Zij zijn verbonden door een heilig verbond — en nu delen zij dezelfde schande. ` +
         `Spreek een gezamenlijk alliantie-vonnis uit: de Hoge Frituurraad noteert dit als een collectieve mislukking van het pact. ` +
-        `Gebruik het decreet-formaat. Noem beiden bij naam. Geen inleidingszin.`,
+        `Gebruik het decreet-formaat. Noem iedereen bij naam. Geen inleidingszin.`,
         450, false
       );
-      await postToChannel(client, channelId, `<@${userId}> <@${partnerId}>\n\n${tekst}`);
+      await postToChannel(client, channelId, `${[userId, ...bondgenoten].map(id => `<@${id}>`).join(' ')}\n\n${tekst}`);
       return;
     }
 
-    // Partner is vrij → mee-verbannen met dezelfde einddatum als ${bijnaam}.
+    // Wie vrij is → mee-verbannen met dezelfde einddatum als ${bijnaam}.
     const verbanning = loadVerbanning();
     const eigenBan = verbanning[userId];
     const eindeUtc = eigenBan?.tot ? new Date(eigenBan.tot) : new Date(Date.now() + 4 * 3_600_000);
-    verbanning[partnerId] = {
-      tot: eindeUtc.toISOString(),
-      reden: `meegesleept in de val van bondgenoot ${bijnaam}`,
-      citaat: null,
-      dagen: null,
-      opgelegd: new Date().toISOString(),
-    };
+    for (const id of vrij) {
+      verbanning[id] = {
+        tot: eindeUtc.toISOString(),
+        reden: `meegesleept in de val van bondgenoot ${bijnaam}`,
+        citaat: null,
+        dagen: null,
+        opgelegd: new Date().toISOString(),
+      };
+    }
     saveVerbanning(verbanning);
-    logGebeurtenis('verbanning', partnerId, `${partnerBijnaam} mee-verbannen als bondgenoot van ${bijnaam}`);
+    for (const id of vrij) {
+      logGebeurtenis('verbanning', id, `${members[id]?.bijnaam || 'een bondgenoot'} mee-verbannen als bondgenoot van ${bijnaam}`);
+    }
 
     const terugTijd = eindeUtc.toLocaleTimeString('nl-NL', {
       timeZone: 'Europe/Amsterdam', hour: '2-digit', minute: '2-digit',
     });
+    const namen = bijnamenVan(vrij, members);
+    const meer = vrij.length > 1;
     const tekst = await kroketResponse(
-      `${bijnaam} is zojuist verbannen. Door het heilige verbond deelt hun bondgenoot ${partnerBijnaam} hetzelfde lot: ` +
-      `ook ${partnerBijnaam} wordt NU verbannen — een alliantie deelt de glorie én de val. ` +
-      `Spreek dit uit als een streng, onverbiddelijk gezamenlijk vonnis. Noem beiden bij naam. Geen inleidingszin.`,
+      `${bijnaam} is zojuist verbannen. Door het heilige verbond ${meer ? 'delen de bondgenoten' : 'deelt de bondgenoot'} ${namen} hetzelfde lot: ` +
+      `ook ${namen} ${meer ? 'worden' : 'wordt'} NU verbannen — een alliantie deelt de glorie én de val. ` +
+      `Spreek dit uit als een streng, onverbiddelijk gezamenlijk vonnis. Noem iedereen bij naam. Geen inleidingszin.`,
       400, false
     );
-    await postEphemeral(client, channelId, partnerId, `${tekst}\n\n_De poorten heropenen zich om ${terugTijd}._`);
+    for (const id of vrij) {
+      await postEphemeral(client, channelId, id, `${tekst}\n\n_De poorten heropenen zich om ${terugTijd}._`);
+    }
   } catch (_) {}
 }
 
 // Komt een lid vrij (via uitbreken of beroep), dan komt zijn alliantie-partner mee vrij —
-// een verbond deelt ook de bevrijding. Geeft de partner-naam terug als die is bevrijd, anders null.
+// een verbond deelt ook de bevrijding. Geeft de namen van wie er is bevrijd terug ("A" of "A en B"),
+// of null als er niemand vastzat.
 function bevrijdAlliantiePartnerMee(userId, bijnaam, resetVergrijpenOok = false) {
   try {
-    const partnerId = getAlliantiePartner(userId);
-    if (!partnerId) return null;
+    const bondgenoten = getBondgenoten(userId);
+    if (!bondgenoten.length) return null;
     const verb = loadVerbanning();
-    const pb = verb[partnerId];
-    if (!pb || Date.now() > new Date(pb.tot).getTime()) return null; // partner niet (actief) verbannen
-    delete verb[partnerId];
+    const nu = Date.now();
+    const vast = bondgenoten.filter(id => verb[id] && nu <= new Date(verb[id].tot).getTime());
+    if (!vast.length) return null; // niemand (actief) verbannen
+    for (const id of vast) delete verb[id];
     saveVerbanning(verb);
-    if (resetVergrijpenOok) resetVergrijpen(partnerId);
-    const partnerNaam = loadMembers()[partnerId]?.bijnaam || 'de bondgenoot';
-    logGebeurtenis('genade', partnerId, `${partnerNaam} kwam mee vrij door het verbond met ${bijnaam}`);
-    return partnerNaam;
+    const members = loadMembers();
+    for (const id of vast) {
+      if (resetVergrijpenOok) resetVergrijpen(id);
+      logGebeurtenis('genade', id, `${members[id]?.bijnaam || 'de bondgenoot'} kwam mee vrij door het verbond met ${bijnaam}`);
+    }
+    return bijnamenVan(vast, members);
   } catch (_) { return null; }
 }
 
@@ -3109,8 +3224,11 @@ async function controleerAchievements(client, userId, oudeScore, nieuweScore, op
         // ketst de bonus heen en weer: A verdient een relikwie → B krijgt +1 → B passeert een
         // drempel → A krijgt +1 → A passeert een drempel → …
         try {
-          const partnerId = opties.alliantieBonus === false ? null : getAlliantiePartner(userId);
-          if (partnerId && !isVerbannen(partnerId)) {
+          // Eén willekeurige vrije bondgenoot, net als bij de Verbondszegen: een verbond van drie
+          // levert geen dubbele solidariteit op.
+          const partnerId = opties.alliantieBonus === false ? null
+            : kiesEen(getBondgenoten(userId).filter(id => !isVerbannen(id)), Math.random());
+          if (partnerId) {
             const partnerBijnaam = members[partnerId]?.bijnaam || 'de bondgenoot';
             const voorSolid = loadScores()[partnerId] || 0;
             await pasScoreAanMetCheck(client, partnerId, 1, { alliantieBonus: false, naspel });
@@ -6120,10 +6238,8 @@ async function voerKroketCommandoUit({ command, respond, client }) {
       const [doelwitId, doelwitLid] = kandidaten[Math.floor(Math.random() * kandidaten.length)];
       const missieData = genereerMissie();
 
-      // Bepaal alle deelnemers: doelwit + eventuele alliantie-partner
-      const deelnemers = [doelwitId];
-      const partnerId = getAlliantiePartner(doelwitId);
-      if (partnerId && !isVerbannen(partnerId)) deelnemers.push(partnerId);
+      // Bepaal alle deelnemers: doelwit + eventuele vrije bondgenoten
+      const deelnemers = [doelwitId, ...getBondgenoten(doelwitId).filter(id => !isVerbannen(id))];
 
       const nieuweM = {
         userId: doelwitId,
@@ -6341,8 +6457,8 @@ async function voerKroketCommandoUit({ command, respond, client }) {
       await postToChannel(client, command.channel_id, beroepPubliek);
 
       // Pact-bescherming: actieve alliantie-partner verhoogt kans van 20% naar 35%
-      const beroepPartnerId = getAlliantiePartner(command.user_id);
-      const pactActief = beroepPartnerId && !isVerbannen(beroepPartnerId);
+      const vrijeBondgenoten = getBondgenoten(command.user_id).filter(id => !isVerbannen(id));
+      const pactActief = vrijeBondgenoten.length > 0;
       // Het Gefluisterde Voorrecht (zie pakFortuin) maakt het beroep gegrond, ongeacht de kans.
       const kansOpGenade = pakFortuin(command.user_id, 'beroep vanuit het ballingschap')
         || Math.random() < (pactActief ? 0.35 : 0.20);
@@ -6355,7 +6471,7 @@ async function voerKroketCommandoUit({ command, respond, client }) {
         // Het beroep geldt voor het hele verbond: de alliantie-partner komt mee vrij.
         const beroepPartnerVrij = bevrijdAlliantiePartnerMee(command.user_id, aanvrager, false);
         const pactZin = pactActief
-          ? ` Het heilige verbond van ${aanvrager} met ${loadMembers()[beroepPartnerId]?.bijnaam || 'een bondgenoot'} heeft de weegschaal doen doorslaan — een pact verplicht de Hoge Frituurraad tot extra aandacht.`
+          ? ` Het heilige verbond van ${aanvrager} met ${bijnamenVan(vrijeBondgenoten)} heeft de weegschaal doen doorslaan — een pact verplicht de Hoge Frituurraad tot extra aandacht.`
           : '';
         const tekst = await kroketResponse(
           `${aanvrager} heeft het volgende beroepschrift ingediend: "${smoes || '(leeg — geen onderbouwing)'}". ` +
@@ -7284,36 +7400,30 @@ async function voerKroketCommandoUit({ command, respond, client }) {
       return;
     }
 
-    // ── Alliantie sluiten / verbreken / overzicht
+    // ── Alliantie sluiten / aansluiten / verlaten / overzicht
+    // Een verbond telt twee of drie leden (zie lib/verbond.js). "alliantie [naam]" sluit een paar
+    // met wie nog geen verbond heeft, en vraagt aan te sluiten bij wie al in een verbond van twee zit.
     if (input.startsWith('alliantie')) {
       const invoer = input.replace(/^alliantie\s*/i, '').trim();
 
       // Overzicht van alle actieve allianties
       if (!invoer || invoer === 'overzicht') {
-        const allianties = loadAllianties();
         const allMembers = loadMembers();
-        const gezien = new Set();
-        const regels = [];
-        for (const [uid1, uid2] of Object.entries(allianties)) {
-          if (gezien.has(uid1) || gezien.has(uid2)) continue;
-          gezien.add(uid1); gezien.add(uid2);
-          const n1 = allMembers[uid1]?.bijnaam || uid1;
-          const n2 = allMembers[uid2]?.bijnaam || uid2;
-          regels.push(`⚔️ ${n1} ↔ ${n2}`);
-        }
+        const regels = alleVerbonden()
+          .map(g => `⚔️ ${g.map(id => allMembers[id]?.bijnaam || id).join(' ↔ ')}`);
         // De pauze staat er expliciet bij: de verbonden bestaan nog en verschijnen in deze
         // lijst, maar ze doen op dit moment niets. Zonder die regel leest het overzicht als een
         // lijst werkende verbonden.
         const pauzeRegel = alliantiesActief() ? ''
           : '\n\n> ⏸️ _De Hoge Frituurraad heeft alle verbonden GEPAUZEERD. Zij blijven bestaan en vervallen niet, maar geven en kosten voorlopig niets. Er kunnen geen verbonden worden gesloten of verbroken._';
         const overzicht = regels.length > 0
-          ? `⚜️ *HEILIGE VERBONDEN* ⚜️\n\n${regels.join('\n')}${pauzeRegel}\n\n— De Hoge Frituurraad`
+          ? `⚜️ *HEILIGE VERBONDEN* ⚜️\n\n${regels.join('\n')}${pauzeRegel}\n\n_Een verbond telt hoogstens ${VERBOND_MAX} leden. Bij een verbond van twee kunt u vragen aan te sluiten: \`/kroketgod alliantie [naam]\`._\n\n— De Hoge Frituurraad`
           : `⚜️ _Er zijn momenteel geen actieve allianties binnen de Illuminati._${pauzeRegel}`;
         await postToChannel(client, command.channel_id, overzicht);
         return;
       }
 
-      // Verbreek eigen alliantie
+      // Verlaat het eigen verbond. Bij een verbond van drie blijven de andere twee verbonden.
       if (invoer === 'verbreek') {
         // Tijdens een pauze ligt het register stil: niets sluiten, niets verbreken. Anders zou
         // iemand zijn verbond nu kunnen laten vallen zonder de gebruikelijke prijs — het kost op
@@ -7322,16 +7432,19 @@ async function voerKroketCommandoUit({ command, respond, client }) {
           await respond('_De heilige verbonden zijn gepauzeerd. Het register ligt stil: er wordt niets gesloten en niets verbroken. Uw verbond blijft staan zoals het was._');
           return;
         }
-        const partnerId = getAlliantiePartner(command.user_id);
-        if (!partnerId) {
+        const bondgenoten = getBondgenoten(command.user_id);
+        if (!bondgenoten.length) {
           await respond('_U heeft geen actieve alliantie te verbreken._');
           return;
         }
-        const partnerBijnaam = loadMembers()[partnerId]?.bijnaam || 'uw bondgenoot';
+        const namen = bijnamenVan(bondgenoten);
         verbreekAlliantie(command.user_id);
+        const blijftZin = bondgenoten.length > 1
+          ? `${namen} blijven samen verbonden; alleen ${aanvrager} treedt uit. `
+          : '';
         const tekst = await kroketResponse(
-          `[VERBOND VERBROKEN door ${aanvrager} met ${partnerBijnaam}] ` +
-          `${aanvrager} heeft het heilige verbond met ${partnerBijnaam} verbroken. ` +
+          `[VERBOND VERBROKEN door ${aanvrager} met ${namen}] ` +
+          `${aanvrager} heeft het heilige verbond met ${namen} verbroken. ${blijftZin}` +
           `Richt de aankondiging tot de groep — niet tot één persoon. ` +
           `Een alliantie verbreken is geen kleinigheid — spreek dit uit als een moment van rouw. Geen inleidingszin.`,
           300, false
@@ -7340,7 +7453,7 @@ async function voerKroketCommandoUit({ command, respond, client }) {
         return;
       }
 
-      // Sluit nieuwe alliantie
+      // Sluit een nieuw verbond, of vraag aan te sluiten bij een bestaand verbond
       if (!alliantiesActief()) {
         await respond('_De heilige verbonden zijn gepauzeerd. De Hoge Frituurraad sluit voorlopig geen nieuwe verbonden. Bestaande verbonden blijven bestaan en vervallen niet._');
         return;
@@ -7351,18 +7464,32 @@ async function voerKroketCommandoUit({ command, respond, client }) {
         return;
       }
       const [partnerId, partnerLid] = gevonden;
-      if (partnerId === command.user_id) {
+      const oordeel = beoordeelVerbond(loadAllianties(), command.user_id, partnerId);
+      if (oordeel.soort === 'zelf') {
         await respond('_Een alliantie met uzelf is geen alliantie — het is eenzaamheid met een mooi woord ervoor._');
         return;
       }
+      if (oordeel.soort === 'al_verbonden') {
+        await respond(`_U bent al verbonden met ${bijnamenVan(oordeel.groep.filter(id => id !== command.user_id))}._`);
+        return;
+      }
+      if (oordeel.soort === 'vol') {
+        await respond(`_Het verbond van ${bijnamenVan(oordeel.groep)} is vol: een heilig verbond telt hoogstens ${VERBOND_MAX} leden._`);
+        return;
+      }
+      if (oordeel.soort === 'verzoek') {
+        await vraagAansluiting(client, command.user_id, partnerId, oordeel.groep, command.channel_id);
+        await respond({ text: `_Uw verzoek ligt bij ${bijnamenVan(oordeel.groep)}. Eén van hen beslist binnen 24 uur._`, response_type: 'ephemeral' });
+        return;
+      }
 
-      const oudePartner = getAlliantiePartner(command.user_id);
-      const oudePartnerBijnaam = oudePartner ? loadMembers()[oudePartner]?.bijnaam : null;
+      // Een nieuw paar: zoals het altijd ging, en wie in een verbond zat, verlaat dat.
+      const oudeBondgenoten = getBondgenoten(command.user_id);
       sluitAlliantie(command.user_id, partnerId);
       logGebeurtenis('alliantie', command.user_id, `${aanvrager} sloot een alliantie met ${partnerLid.bijnaam}`);
 
-      const oudeZin = oudePartnerBijnaam
-        ? `De vorige alliantie van ${aanvrager} met ${oudePartnerBijnaam} is hiermee verbroken. `
+      const oudeZin = oudeBondgenoten.length
+        ? `${aanvrager} verlaat hiermee het verbond met ${bijnamenVan(oudeBondgenoten)}. `
         : '';
       const tekst = await kroketResponse(
         `[NIEUW VERBOND: ${aanvrager} ↔ ${partnerLid.bijnaam}] ` +
@@ -8877,9 +9004,9 @@ app.event('app_mention', async ({ event, client }) => {
 
     // Allianties krijgen een grotere rol: noem het verbond van de spreker vaker (40%) in de reactie.
     if (members[userId]) {
-      const bondId = getAlliantiePartner(userId);
-      if (bondId && Math.random() < 0.40) {
-        const bondNaam = members[bondId]?.bijnaam || 'hun bondgenoot';
+      const bondIds = getBondgenoten(userId);
+      if (bondIds.length && Math.random() < 0.40) {
+        const bondNaam = bijnamenVan(bondIds, members);
         prompt += `\n\n${bijnaam} is door een heilig verbond (alliantie) verbonden met ${bondNaam}. ` +
           `Verweef dit bondgenootschap op een natuurlijke, passende manier in je reactie — een toespeling op hun ` +
           `gedeelde lotsbestemming, wederzijdse trouw of de macht van hun verbond. Forceer het niet als het totaal niet past.`;
@@ -11177,7 +11304,7 @@ async function voerDuel(client, userId, doelId, channelId, wapenId = null) {
   if (isVerbannen(doelId)) return { ok: false, tekst: `_${doelLid.bijnaam} is verbannen — een duel met een balling levert geen eer op._` };
   if (doelId === userId) return { ok: false, tekst: '_Een duel met uzelf is een spiegelgevecht. De Kroket God weigert dit te aanschouwen._' };
   // Bondgenoten vechten niet onderling — een heilig verbond keert zich niet tegen zichzelf.
-  if (getAlliantiePartner(userId) === doelId) {
+  if (isBondgenoot(userId, doelId)) {
     return { ok: false, tekst: `_${doelLid.bijnaam} is uw bondgenoot. Een heilig verbond keert zich niet tegen zichzelf — de Kroket God verbiedt dit broederduel._` };
   }
   // Duels per dag: 1, plus wat de rang toestaat (Frituurridder krijgt een tweede).
@@ -11384,7 +11511,7 @@ async function voerRoof(client, userId, doelId, channelId) {
   const doelLid = members[doelId];
   if (!doelLid) return { ok: false, tekst: 'De Kroket God kent die volgeling niet.' };
   if (doelId === userId) return { ok: false, tekst: '_Uzelf beroven is boekhoudkundig gezien niets en spiritueel gezien treurig._' };
-  if (getAlliantiePartner(userId) === doelId) {
+  if (isBondgenoot(userId, doelId)) {
     return { ok: false, tekst: `_${doelLid.bijnaam} is uw bondgenoot. Wie zijn eigen verbond berooft, berooft zichzelf — de Kroket God verbiedt dit._` };
   }
   if (isVerbannen(doelId)) {
@@ -12750,11 +12877,12 @@ async function voerEer(client, geverId, ontvangerIds, reden, channelId, opties =
   if (!vanGod) await telActie(client, geverId, 'eer_gegeven', ontvangers.length, naspel);
 
   // Alliantie-terugslag: wie zijn eigen bondgenoot eert krijgt precies één punt terug — nooit
-  // meer, ook niet bij een legendarische reden en ook niet bij meerdere ontvangers (een lid
-  // heeft hoogstens één partner). Alleen als de eer werkelijk iets opleverde: een eerbewijs dat
-  // op 0 uitkwam is geen daad van trouw om te belonen.
-  const partnerId = vanGod ? null : getAlliantiePartner(geverId);
-  const terugslagVoor = partnerId && ontvangers.includes(partnerId) && eerPunten[partnerId] > 0 ? partnerId : null;
+  // meer, ook niet bij een legendarische reden en ook niet als beide bondgenoten uit een verbond
+  // van drie onder de ontvangers staan. Alleen als de eer werkelijk iets opleverde: een eerbewijs
+  // dat op 0 uitkwam is geen daad van trouw om te belonen.
+  const bondgenotenGever = vanGod ? [] : getBondgenoten(geverId);
+  const terugslagVoor = ontvangers.find(id => bondgenotenGever.includes(id) && eerPunten[id] > 0) || null;
+  const partnerId = terugslagVoor;
   let terugslag = 0;
   if (terugslagVoor) {
     const voor = loadScores()[geverId] || 0;
@@ -16008,9 +16136,9 @@ function bouwDossierBlok(userId) {
       regels.push(`draagt de titel${titels.length > 1 ? 's' : ''}: ${titels.map(t => `${t.naam}${t.verdedigingen ? ` (${t.verdedigingen}× verdedigd)` : ''}`).join(', ')}`);
     }
 
-    const bondgenoot = getAlliantiePartnerRuw(userId);
-    if (bondgenoot && members[bondgenoot]) {
-      regels.push(`heilig verbond met ${members[bondgenoot].bijnaam}${alliantiesActief() ? '' : ' (gepauzeerd)'}`);
+    const bondgenoten = getBondgenotenRuw(userId).filter(id => members[id]);
+    if (bondgenoten.length) {
+      regels.push(`heilig verbond met ${bijnamenVan(bondgenoten, members)}${alliantiesActief() ? '' : ' (gepauzeerd)'}`);
     }
 
     const nemesis = getNemesis(userId);
@@ -16511,15 +16639,11 @@ function groepsStatusTekst(vragerId = null) {
     ? `_${ballingen.length} van de ${gesorteerd.length} leden zit vast._`
     : '_Niemand is verbannen. De frituur is in vrede._');
 
-  // Allianties: elk paar één keer.
-  const allianties = loadAllianties();
-  const gezien = new Set();
-  const paren = [];
-  for (const [a, b] of Object.entries(allianties)) {
-    if (gezien.has(a) || gezien.has(b) || !members[a] || !members[b]) continue;
-    gezien.add(a); gezien.add(b);
-    paren.push(`> ${members[a].bijnaam} ⚔️ ${members[b].bijnaam}`);
-  }
+  // Allianties: elk verbond één keer.
+  const paren = alleVerbonden()
+    .map(g => g.filter(id => members[id]))
+    .filter(g => g.length >= 2)
+    .map(g => `> ${g.map(id => members[id].bijnaam).join(' ⚔️ ')}`);
   regels.push('');
   regels.push('*⚔️ HEILIGE VERBONDEN*');
   regels.push(paren.length ? paren.join('\n') : '> _Geen actieve verbonden._');
@@ -16653,7 +16777,7 @@ async function startGeleKaartPoll(client, doelwitId, aanklagerId, reden, channel
     actief: true, doelwitId, aanklagerId, reden: schoonReden(reden), hadAlKaart,
     godStem: Math.random() < GELEKAART_GOD_KANS ? 'terecht' : 'onterecht',
     // Alleen relevant als een toekenning tot een verbanning leidt: dan valt de bondgenoot mee.
-    bondgenootId: hadAlKaart ? (getAlliantiePartner(doelwitId) || null) : null,
+    bondgenootIds: hadAlKaart ? getBondgenoten(doelwitId) : [],
     gestart: Date.now(), sluitTs, kanaal: channelId || process.env.SLACK_CHANNEL_ID,
   };
 
@@ -16705,9 +16829,14 @@ function bouwGeleKaartPollBlocks(poll) {
           // Het heilige verbond sleept de bondgenoot mee in een verbanning (bestaand gedrag).
           // Dat moet vóór de stemming op het bord staan: wie niet weet dat er twee mensen vallen,
           // kan daar niet eerlijk over stemmen — en de bondgenoot is zelf nooit voorgedragen.
-          (poll.bondgenootId && members[poll.bondgenootId]
-            ? `\n⚔️ *Let op:* door het heilige verbond wordt *${members[poll.bondgenootId].bijnaam}* dan mee verbannen, met dezelfde einddatum. Weeg dat mee.`
-            : '')
+          (() => {
+            // bondgenootId (één) is het formaat van vóór de verbonden van drie; een poll die toen
+            // al liep, leest nog gewoon.
+            const ids = (poll.bondgenootIds || (poll.bondgenootId ? [poll.bondgenootId] : [])).filter(id => members[id]);
+            if (!ids.length) return '';
+            const meer = ids.length > 1;
+            return `\n⚔️ *Let op:* door het heilige verbond ${meer ? 'worden' : 'wordt'} *${bijnamenVan(ids, members)}* dan mee verbannen, met dezelfde einddatum. Weeg dat mee.`;
+          })()
         : `\nWordt de voordracht toegekend, dan volgt een formele waarschuwing.`) } },
   ];
   if (poll.actief) {
@@ -17458,10 +17587,10 @@ function archiveerLid(userId, reden) {
     saveMembers(members);
     // Het heilige verbond wordt verbroken: de bondgenoot blijft lid en mag niet vastzitten aan
     // iemand die het genootschap heeft verlaten. `verbreekAlliantie` ruimt beide richtingen op.
-    if (getAlliantiePartnerRuw(userId)) {
-      const partner = getAlliantiePartnerRuw(userId);
+    const bondgenotenVoorArchief = getBondgenotenRuw(userId);
+    if (bondgenotenVoorArchief.length) {
       verbreekAlliantie(userId);
-      console.log(`⚔️ Verbond van ${lid.bijnaam} met ${loadMembers()[partner]?.bijnaam || partner} verbroken door archivering.`);
+      console.log(`⚔️ ${lid.bijnaam} verliet door archivering het verbond met ${bijnamenVan(bondgenotenVoorArchief)}.`);
     }
     // Titels van een gearchiveerd lid worden vacant (titelHouder filtert al op lidmaatschap,
     // maar de state opruimen houdt het bord eerlijk).
@@ -17824,7 +17953,7 @@ const NASLAG = {
       const duelsVandaag = duels[userId]?.datum === vandaagKey ? (duels[userId].aantal ?? 1) : 0;
       if (!isVerbannen(userId) && duelsVandaag < duelLimiet(userId)) {
         const uitdaagbaar = gesorteerd
-          .filter(([id]) => id !== userId && !isVerbannen(id) && getAlliantiePartner(userId) !== id && (scores[id] || 0) >= 1)
+          .filter(([id]) => id !== userId && !isVerbannen(id) && !isBondgenoot(userId, id) && (scores[id] || 0) >= 1)
           .slice(0, 4);
         if (uitdaagbaar.length) {
           blocks.push({ type: 'actions', elements: uitdaagbaar.map(([id]) => ({
@@ -17985,7 +18114,7 @@ function bouwAppHomeBlocks(userId, melding = '', extraBlocks = []) {
   for (const t of titelsVan(userId)) {
     eretitels.push(`${t.icoon} ${t.naam}${t.verdedigingen ? ` — ${t.verdedigingen}× verdedigd` : ''}`);
   }
-  const bondgenoot = getAlliantiePartnerRuw(userId);
+  const bondgenoten = getBondgenotenRuw(userId).filter(id => members[id]);
   const verbannen = isVerbannen(userId);
   const eigenRoem = roem[userId] || 0;
   const volgende = volgendeDrempel(eigenRoem);
@@ -18007,7 +18136,7 @@ function bouwAppHomeBlocks(userId, melding = '', extraBlocks = []) {
   blocks.push({ type: 'section', text: { type: 'mrkdwn', text:
     `${rangNaam(eigenRoem)} · *${eigenScore}* kroketpunt${eigenScore === 1 ? '' : 'en'} · ${eigenRoem} roem` +
     `${positie > 0 ? ` · #${positie} van ${gesorteerd.length}` : ''}` +
-    (bondgenoot ? `\n🤝 Bondgenoot: *${members[bondgenoot]?.bijnaam || 'onbekend'}*${alliantiesActief() ? '' : ' — _verbonden zijn gepauzeerd_'}` : '') } });
+    (bondgenoten.length ? `\n🤝 ${bondgenoten.length > 1 ? 'Bondgenoten' : 'Bondgenoot'}: *${bijnamenVan(bondgenoten, members)}*${alliantiesActief() ? '' : ' — _verbonden zijn gepauzeerd_'}` : '') } });
   if (volgende) {
     // homeVoortgangInline en niet ladingMeter: die laatste is een beurtenmeter (▓ = nog te
     // gebruiken, ░ = verbruikt) en geeft boven METER_MAX beurten bewust niets terug — bij een
@@ -21112,14 +21241,9 @@ async function bouwDashboardData() {
   const bingoData = readJSON('bingo.json', {});
   const streaksData = loadStreaks();
   const heldentitelsData = loadHeldentitels();
-  const alliantiesData = loadAllianties();
-  const alliantieParen = [];
-  const alGezien = new Set();
-  for (const [a, b] of Object.entries(alliantiesData)) {
-    if (alGezien.has(a) || alGezien.has(b)) continue;
-    alGezien.add(a); alGezien.add(b);
-    alliantieParen.push({ a: naam(a), b: naam(b) });
-  }
+  // Zelfde vorm { a, b } als vroeger, zodat dashboard.html ongewijzigd blijft: bij een verbond van
+  // drie staan de andere twee samen in b.
+  const alliantieParen = alleVerbonden().map(g => ({ a: naam(g[0]), b: g.slice(1).map(naam).join(' & ') }));
   const spel = {
     troon: troonData.koningId && members[troonData.koningId]
       ? { koning: naam(troonData.koningId), sinds: troonData.sinds, score: scores[troonData.koningId] || 0 }
