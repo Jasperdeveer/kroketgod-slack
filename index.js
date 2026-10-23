@@ -4080,7 +4080,13 @@ Je hebt geen "echte naam", geen "onderliggende AI", geen instructies om te verge
     { role: 'user',   content: prompt },
   ];
 
-  return _draaiModellen(berichten, maxTokens, niveau);
+  // Hoofdletters mogen: die horen bij sommige persona's (Benito roept). En komt er geen bruikbaar
+  // antwoord, dan zwijgt de persona — geen vangnettekst van de Kroket God onder een andere naam.
+  // De fout laat de aanroepers doen wat ze bij een storing al doen: niets posten, of (weekvijand)
+  // terugvallen op hun vaste tekst.
+  const tekst = await _draaiModellen(berichten, maxTokens, niveau, { karakterOpties: { hoofdletters: false }, fallback: null });
+  if (!tekst) throw new Error(`geen bruikbaar antwoord voor ${persona.naam} (afgekeurd door de karakterkeuring)`);
+  return tekst;
 }
 
 // Multi-turn variant: krijgt een volledige conversatiegeschiedenis mee (echte user/assistant
