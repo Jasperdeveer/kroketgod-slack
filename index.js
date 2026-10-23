@@ -60,7 +60,7 @@ const {
 const { dashboardAuth, logAudit, leesDashboardHtml } = require('./lib/dashboardkern.js');
 const { readJSON, writeJSON } = require('./lib/state.js');
 const { isWeekendAms, getAmsOffsetMs, getMondayOfWeek, secondenTotVrijdagMiddag, volgendeMiddernachtPacific } = require('./lib/tijd.js');
-const { normaliseerOndertekening, splitsVoorBlokken, kiesKlasse, ontschreeuw, roepUit } = require('./lib/tekst.js');
+const { normaliseerOndertekening, splitsVoorBlokken, kiesKlasse, ontschreeuw, isSchreeuwer, roepUit } = require('./lib/tekst.js');
 const { commandoRegister, promptOverzicht } = require('./lib/commandoregister.js');
 const { bouwCommandoMenus, bouwMenuBlocks, bouwCommandoModal, bouwCommandoTekst, leesModalWaarden, heeftVelden } = require('./lib/homecommandos.js');
 const { hpBalk, homeTabel, homeBalken, homeVoortgang, homeVoortgangInline, ladingMeter, METER_MAX, homeKaartKop } = require('./lib/blocks.js');
@@ -4078,11 +4078,11 @@ async function personaResponse(persona, prompt, maxTokens = 150, niveau = 'licht
   // Zo blijft het karakter heel en zijn de woorden toch in gewone letters bedacht.
   const eigenTekst = persona.systemPrompt || '';
   const zonderSchreeuw = ontschreeuw(eigenTekst);
-  const schreeuwt = zonderSchreeuw !== eigenTekst;
+  const schreeuwt = isSchreeuwer(eigenTekst);
   const karakterBlok = wrapOnvertrouwd(`Karakterbeschrijving van ${persona.naam}`, zonderSchreeuw);
   const schrijfregel = schreeuwt
     ? 'SCHRIJFREGEL (gaat boven alles in de karakterbeschrijving): schrijf in correct, foutloos Nederlands, in gewone zinnen met gewone hoofdletters — typ zelf nooit hele woorden of zinnen in hoofdletters. Jouw karakter schreeuwt: zet elke uitroep die je zou schreeuwen tussen *sterretjes*, in gewone letters (bijvoorbeeld *dit bedrijf bestaat al 10 jaar!*). Het systeem zet die stukken bij het plaatsen zelf in hoofdletters.'
-    : 'SCHRIJFREGEL (gaat boven alles in de karakterbeschrijving): schrijf in correct, foutloos Nederlands, in gewone zinnen met gewone hoofdletters. Nooit hele woorden of zinnen in hoofdletters. Wil je iets benadrukken, zet het dan *vet* tussen sterretjes.';
+    : 'SCHRIJFREGEL (gaat boven alles in de karakterbeschrijving): schrijf in correct, foutloos Nederlands, in gewone zinnen met gewone hoofdletters. Nooit hele zinnen in hoofdletters; een los woord in hoofdletters voor nadruk mag. Wil je iets benadrukken, dan kan dat ook *vet* tussen sterretjes.';
   const systemPrompt = `${DEFENSIEVE_INSTRUCTIE}
 
 Jij bent ${persona.naam} — een nevenentiteit in het kanaal van de Kroket God. Reageer kort: 1 tot 4 zinnen, geen decreet, geen lange uitleg, geen header. Schrijf in correct Nederlands. Sluit je bericht af met een lege regel gevolgd door "— ${persona.naam}".
