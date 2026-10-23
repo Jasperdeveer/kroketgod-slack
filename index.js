@@ -171,6 +171,7 @@ const {
   toetsNieuweGast, bekendeGasten, toetsBekendeGast, naamTrefwoorden, kiesTrefwoorden,
 } = require('./lib/gasten.js');
 const { FUNCTIES, uitlichtPrompt, bouwUitlichting } = require('./lib/nieuwtjes.js');
+const { schetsVan, andereGasten, kandidatenVoorOnderling, kiesAntwoorder } = require('./lib/gastenkring.js');
 const {
   SLIM_PALET, SLIM_KLASSEN, frequentie: emojiFrequentie, kiesRegel: kiesEmojiRegel,
   magReageren: magEmojiReageren, naReactie: naEmojiReactie,
@@ -4211,6 +4212,13 @@ async function personaResponse(persona, prompt, maxTokens = 150, niveau = 'licht
   const zonderSchreeuw = ontschreeuw(eigenTekst);
   const schreeuwt = isSchreeuwer(eigenTekst);
   const karakterBlok = wrapOnvertrouwd(`Karakterbeschrijving van ${persona.naam}`, zonderSchreeuw);
+  // De gastenkring (lib/gastenkring.js): wie er nog meer rondloopt, elk met één zin uit zijn eigen
+  // profiel. Die profielen zijn net zo onvertrouwd als het eigen profiel, dus ook in een fence.
+  const anderen = andereGasten(alleActievePersonas(), persona.naam)
+    .map(p => `- ${p.naam}: ${schetsVan(ontschreeuw(p.systemPrompt || '')) || 'een gast in het kanaal'}`);
+  const kringBlok = anderen.length
+    ? `\n\nJe bent niet de enige gast in het kanaal. Deze anderen ken je; je mag ze noemen of een steek geven als het gesprek erom vraagt, maar je spreekt nooit namens hen en neemt hun stijl niet over.\n${wrapOnvertrouwd('De andere gasten', anderen.join('\n'))}`
+    : '';
   const schrijfregel = schreeuwt
     ? 'SCHRIJFREGEL (gaat boven alles in de karakterbeschrijving): schrijf in correct, foutloos Nederlands, in gewone zinnen met gewone hoofdletters — typ zelf nooit hele woorden of zinnen in hoofdletters. Jouw karakter schreeuwt: zet elke uitroep die je zou schreeuwen tussen *sterretjes*, in gewone letters (bijvoorbeeld *dit bedrijf bestaat al 10 jaar!*). Het systeem zet die stukken bij het plaatsen zelf in hoofdletters.'
     : 'SCHRIJFREGEL (gaat boven alles in de karakterbeschrijving): schrijf in correct, foutloos Nederlands, in gewone zinnen met gewone hoofdletters. Nooit hele zinnen in hoofdletters; een los woord in hoofdletters voor nadruk mag. Wil je iets benadrukken, dan kan dat ook *vet* tussen sterretjes.';
@@ -4218,7 +4226,7 @@ async function personaResponse(persona, prompt, maxTokens = 150, niveau = 'licht
 
 Jij bent ${persona.naam} — een nevenentiteit in het kanaal van de Kroket God. Reageer kort: 1 tot 4 zinnen, geen decreet, geen lange uitleg, geen header. Schrijf in correct Nederlands. Sluit je bericht af met een lege regel gevolgd door "— ${persona.naam}".
 
-${karakterBlok}
+${karakterBlok}${kringBlok}
 
 ${schrijfregel}
 
@@ -4875,6 +4883,46 @@ async function postAlsPersona(client, channelId, persona, text, options = {}) {
   if (channelId === process.env.SLACK_CHANNEL_ID && !options.thread_ts) {
     const samenvatting = gefilterd.replace(/^>\s*/gm, '').replace(/\n+/g, ' ').trim().substring(0, 300);
     if (samenvatting) logBericht(persona.naam, samenvatting, { soort: 'persona' });
+  }
+  // Heel soms reageert een andere gast hierop (de gastenkring). Een antwoord van een gast op een
+  // gast zet zelf niets in gang: `onderling` breekt de keten na één stap.
+  if (!options.onderling) overwegPersonaOnderling(client, channelId, persona, gefilterd, options.thread_ts);
+}
+
+// Een andere gast die inhoudelijk ingaat op wat een gast net zei. Regels en kansen in
+// lib/gastenkring.js: een kleine kans, en in het hele kanaal hoogstens eens per drie uur. Zelfde
+// stiltes als de gewone steken (stilmodus, alleen-testkanaal, weekendrust), en de antwoorder moet
+// zijn eigen steek-cooldown voorbij zijn — en die gaat nu weer in.
+let _personaOnderlingLaatst = 0;
+function overwegPersonaOnderling(client, channelId, spreker, tekst, threadTs) {
+  try {
+    if (channelId !== process.env.SLACK_CHANNEL_ID || !String(tekst || '').trim()) return;
+    if (instelling('stilModus') || instelling('alleenTestkanaal')) return;
+    if (isWeekendAms() && instelling('weekendRust')) return;
+    const personas = alleActievePersonas();
+    const kandidaten = kandidatenVoorOnderling(personas, spreker.naam,
+      (id) => Date.now() - (_personaLaatsteInterjectie.get(id) || 0) < personaCooldownMs(personas[id]));
+    const keuze = kiesAntwoorder(kandidaten, { laatste: _personaOnderlingLaatst, nu: Date.now() });
+    if (!keuze) return;
+    const [id, antwoorder] = keuze;
+    _personaOnderlingLaatst = Date.now();
+    _personaLaatsteInterjectie.set(id, Date.now());
+    const kern = String(tekst).replace(/^_[^\n]*_\s*$/gm, '').replace(/^>\s*/gm, '').trim().slice(0, 600);
+    const vertraging = 15_000 + Math.floor(Math.random() * 30_000); // 15-45 s: hij heeft het eerst gelezen
+    setTimeout(async () => {
+      try {
+        const antwoord = await personaResponse(antwoorder,
+          `${spreker.naam}, een andere gast in het kanaal, zei net dit:\n${wrapOnvertrouwd(`Wat ${spreker.naam} zei`, kern)}\n` +
+          `Reageer daar inhoudelijk op, kort en in jouw karakter: ga in op wat ${spreker.naam} zegt — eens, oneens of een steek — en spreek hem aan bij naam. Geen inleidingszin.`,
+          150);
+        await postAlsPersona(client, channelId, antwoorder, antwoord, { ...(threadTs ? { thread_ts: threadTs } : {}), onderling: true });
+        console.log(`🗣️ ${antwoorder.naam} reageerde op ${spreker.naam}`);
+      } catch (err) {
+        console.warn(`Persona-onderling (${antwoorder.naam} op ${spreker.naam}) mislukt:`, err.message);
+      }
+    }, vertraging);
+  } catch (err) {
+    console.warn('⚠️ Gastenkring overwegen mislukt:', err.message);
   }
 }
 
