@@ -438,8 +438,8 @@ function renderPersonaForm(){
       +'<img id="g_preview" style="display:none;width:32px;height:32px;border-radius:6px;object-fit:cover;border:1px solid var(--line)"></div>'
       +'<input type="text" id="g_link" maxlength="240" placeholder="of https://…/gezicht.png" style="margin-top:6px;width:100%"></div>'
     +'</div>'
-    +'<div class="lbl" style="margin-top:10px">Trefwoorden'+tip('Kommagescheiden. Noemt iemand een van deze woorden, dan reageert de gast. Woorden die in bijna elk bericht vallen (kroket, wat) of al van een andere persona zijn, worden geweigerd.')+'</div>'
-    +'<input type="text" id="g_trefwoord" maxlength="300" placeholder="bv. truus, tante truus" style="width:100%">'
+    +'<div class="lbl" style="margin-top:10px">Trefwoorden'+tip('Leeg laten: de Raad kiest ze zelf bij het uitschrijven, en zeeft wat te algemeen of al van een andere persona is. Wil je ze zelf bepalen, geef ze dan kommagescheiden. Noemt iemand een van deze woorden, dan reageert de gast.')+'</div>'
+    +'<input type="text" id="g_trefwoord" maxlength="300" placeholder="leeg = de Raad kiest" style="width:100%">'
     +'<div class="lbl" style="margin-top:10px">Prompt / tone of voice</div>'
     +'<textarea id="g_beschrijving" rows="5" maxlength="3000" placeholder="Wie is het, hoe praat hij, waar is hij door bezeten, wat vindt hij van de kroket? Stopwoordjes en voorbeeldzinnen helpen." style="width:100%"></textarea>'
     +'<div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap"><button class="btn gold" id="g_knop" data-gast-uitnodigen>🚪 Nodig uit</button><span id="g_status" class="muted"></span></div>'
@@ -500,7 +500,7 @@ function gastUitnodigen(){
   var st=document.getElementById('g_status'),knop=document.getElementById('g_knop');
   function v(id){return document.getElementById(id).value.trim();}
   var body={naam:v('g_naam'),trefwoorden:v('g_trefwoord'),beschrijving:v('g_beschrijving'),link:v('g_link'),afbeelding:_gastAfbeelding};
-  if(!body.naam||!body.trefwoorden||!body.beschrijving){st.textContent='Naam, trefwoorden en tone of voice zijn verplicht.';return;}
+  if(!body.naam||!body.beschrijving){st.textContent='Naam en tone of voice zijn verplicht.';return;}
   st.textContent='De Raad schrijft het karakter uit… (± 15 s)';knop.disabled=true;
   var tok=getToken();
   fetch('/api/gast',{method:'POST',headers:{'Content-Type':'application/json','Authorization':tok?'Bearer '+tok:''},body:JSON.stringify(body)})

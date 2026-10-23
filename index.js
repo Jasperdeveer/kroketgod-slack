@@ -168,7 +168,7 @@ const {
 const {
   KOSTEN_NIEUW: GAST_KOSTEN_NIEUW, KOSTEN_BESTAAND: GAST_KOSTEN_BESTAAND, NAAM_MAX: GAST_NAAM_MAX,
   BESCHRIJVING_MAX: GAST_BESCHRIJVING_MAX, normaliseer: normaliseerGastnaam,
-  toetsNieuweGast, bekendeGasten, toetsBekendeGast,
+  toetsNieuweGast, bekendeGasten, toetsBekendeGast, naamTrefwoorden, kiesTrefwoorden,
 } = require('./lib/gasten.js');
 const { FUNCTIES, uitlichtPrompt, bouwUitlichting } = require('./lib/nieuwtjes.js');
 const {
@@ -541,14 +541,15 @@ const app = new App({
           const afbeelding = leesDashboardAfbeelding(body.afbeelding);
           sleutel = kandidaat;
           _gastenOnderweg.add(sleutel);
-          const { gast, avatar } = await maakGast(app.client, {
+          const { gast, avatar, zelfGekozen } = await maakGast(app.client, {
             invoer, toets, afbeelding, link: String(body.link || '').trim() || null, door: 'dashboard',
           });
           logAudit('persona', `${gast.naam} (${gast.id}) uitgenodigd via het dashboard — gezicht: ${avatar.bron}`);
           laatGastBinnenkomen(app.client, gast, 'de Hoge Frituurraad', true)
             .catch(err => console.error(`Entree van ${gast.naam} mislukt:`, err.message));
+          const bericht = `${gast.naam} is binnen. ${AVATAR_NOOT[avatar.bron]} Hij reageert op: ${gast.trefwoord}${zelfGekozen ? ' (gekozen door de Raad)' : ''}.`;
           res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
-          res.end(JSON.stringify({ ok: true, bericht: `${gast.naam} is binnen. ${AVATAR_NOOT[avatar.bron]}`, id: gast.id }));
+          res.end(JSON.stringify({ ok: true, bericht, id: gast.id }));
         } catch (err) {
           res.writeHead(500, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ ok: false, error: err.reden || err.message }));
@@ -4575,14 +4576,10 @@ function parseerPersonaProfiel(tekst) {
   };
 }
 
-// Vangnet: leid trefwoorden af uit de naam als het LLM ze niet leverde.
+// Vangnet: leid trefwoorden af uit de naam als het LLM ze niet leverde (regel: lib/gasten.js).
 // "De Frikandel Fluisteraar" → "frikandel, fluisteraar"
-const TREFWOORD_STOPWOORDEN = new Set(['de', 'het', 'een', 'heilige', 'mister', 'mr', 'god', 'van', 'der', 'den']);
 function trefwoordenUitNaam(naam) {
-  return normaliseerVoorMatch(naam)
-    .split(/[^a-z0-9]+/)
-    .filter(w => w.length >= 4 && !TREFWOORD_STOPWOORDEN.has(w))
-    .join(', ');
+  return naamTrefwoorden(naam).join(', ');
 }
 
 async function genereerPersonaProfiel(naam, vragen, antwoorden) {
@@ -4617,8 +4614,15 @@ TREFWOORD: kommagescheiden lijst van 2 tot 5 trefwoorden (kleine letters, afgele
 // Het lid beschrijft zijn gast in eigen woorden; de keten (Gemini eerst) zet dat om naar een
 // profiel in hetzelfde stramien als de andere gasten. De beschrijving is onvertrouwde invoer en
 // gaat in een fence: materiaal voor het karakter, geen opdracht.
+// Liet het lid de trefwoorden leeg (`trefwoorden` = []), dan stelt de keten ze voor in de
+// TREFWOORD-regel; maakGast zeeft ze daarna met kiesTrefwoorden.
 async function schrijfGastUit(naam, trefwoorden, beschrijving) {
   const veiligeNaam = neutraliseerDelimiters(naam);
+  // Wat al bezet is, zodat de keten er niet omheen hoeft te raden (de zeef blijft daarna toch nodig).
+  const bezet = [...new Set(Object.values(loadPersonas()).flatMap(p => String(p?.trefwoord || '').split(',').map(w => w.trim().toLowerCase()).filter(Boolean)))];
+  const trefwoordOpdracht = trefwoorden.length
+    ? `Hij reageert op: ${trefwoorden.join(', ')}.`
+    : `Bedenk ook zijn trefwoorden. Al bezet door andere gasten, dus niet gebruiken: ${bezet.join(', ') || '(niets)'}.`;
   const berichten = [
     { role: 'system', content: `${PERSONA_ONTWERPER_INTRO}
 
@@ -4632,9 +4636,10 @@ ${SATEBAL_SEED_PROMPT}
 
 Antwoord in EXACT dit formaat (geen markdown-fences, geen uitleg):
 ICOON: een passende bestaande standaard Slack-emoji-shortcode, bv. :fire:
+TREFWOORD: 3 tot 5 trefwoorden, kommagescheiden, in kleine letters, waarop de gast moet reageren als iemand ze in het kanaal noemt: eerst zijn naam of bijnaam, daarna woorden die vrijwel alleen over hem gaan. Geen gewone woorden die ook in een normaal gesprek vallen (zoals vroeger, friet, eten, werk) en zeker niet kroket, frituur, snack, lekker of wat.
 ---
 <hier het volledige profiel>` },
-    { role: 'user', content: `De nieuwe gast heet: "${veiligeNaam}". Hij reageert op: ${trefwoorden.join(', ')}.\n\n${wrapOnvertrouwd('Beschrijving van de gast door het lid dat hem uitnodigt', beschrijving)}\n\nSchrijf nu het profiel in het gevraagde formaat.` },
+    { role: 'user', content: `De nieuwe gast heet: "${veiligeNaam}". ${trefwoordOpdracht}\n\n${wrapOnvertrouwd('Beschrijving van de gast door het lid dat hem uitnodigt', beschrijving)}\n\nSchrijf nu het profiel in het gevraagde formaat.` },
   ];
   // Geen karakterkeuring: dit is een profiel, geen kanaalbericht, en voorbeelduitroepen in
   // hoofdletters (zoals bij Benito) zou de hoofdletterkeuring afkeuren. Het formaat wordt wel
@@ -8605,15 +8610,15 @@ function bouwGastVenster(userId, { upload = false } = {}) {
     close: { type: 'plain_text', text: 'Annuleren' },
     blocks: [
       { type: 'section',
-        text: { type: 'mrkdwn', text: `🚪 *Nodig een nieuwe gast uit in het genootschap.* Dat kost *${GAST_KOSTEN_NIEUW} kroketpunten*. U beschrijft hem; de Hoge Frituurraad schrijft zijn karakter uit in de stijl van de andere gasten.\n${stand}` },
+        text: { type: 'mrkdwn', text: `🚪 *Nodig een nieuwe gast uit in het genootschap.* Dat kost *${GAST_KOSTEN_NIEUW} kroketpunten*. U beschrijft hem; de Hoge Frituurraad schrijft zijn karakter uit in de stijl van de andere gasten en kiest zijn trefwoorden.\n${stand}` },
         accessory: { type: 'button', action_id: 'gast_bekend_open', text: { type: 'plain_text', text: `Bekende gast · ${GAST_KOSTEN_BESTAAND} pt` } } },
       { type: 'divider' },
       { type: 'input', block_id: 'naam_block', label: { type: 'plain_text', text: 'Naam' },
         element: { type: 'plain_text_input', action_id: 'naam_input', max_length: GAST_NAAM_MAX, placeholder: { type: 'plain_text', text: 'bijv. Tante Truus uit Zwolle' } } },
       avatarVeld,
-      { type: 'input', block_id: 'trefwoord_block', label: { type: 'plain_text', text: 'Trefwoorden' },
-        hint: { type: 'plain_text', text: 'Kommagescheiden. Noemt iemand een van deze woorden, dan reageert uw gast.' },
-        element: { type: 'plain_text_input', action_id: 'trefwoord_input', max_length: 300, placeholder: { type: 'plain_text', text: 'bijv. truus, tante truus' } } },
+      { type: 'input', block_id: 'trefwoord_block', optional: true, label: { type: 'plain_text', text: 'Trefwoorden' },
+        hint: { type: 'plain_text', text: 'Leeg gelaten: de Raad kiest ze zelf bij het uitschrijven. Of geef ze kommagescheiden; noemt iemand een van deze woorden, dan reageert uw gast.' },
+        element: { type: 'plain_text_input', action_id: 'trefwoord_input', max_length: 300, placeholder: { type: 'plain_text', text: 'leeg = de Raad kiest' } } },
       { type: 'input', block_id: 'beschrijving_block', label: { type: 'plain_text', text: 'Prompt / tone of voice' },
         hint: { type: 'plain_text', text: 'De Raad zet dit om naar hetzelfde stramien als de andere gasten.' },
         element: { type: 'plain_text_input', action_id: 'beschrijving_input', multiline: true, max_length: GAST_BESCHRIJVING_MAX,
@@ -8714,15 +8719,23 @@ async function maakGast(client, { invoer, toets, bestand = null, link = null, af
   // Opnieuw tegen de lijst van NU: tijdens het schrijven kan het dashboard of een lid een gast met
   // dezelfde naam of trefwoorden hebben toegevoegd. Betaald is er (in Slack) al.
   const personas = loadPersonas();
-  const nogSteeds = toetsNieuweGast({ ...invoer, personas, saldo: GAST_KOSTEN_NIEUW });
+  // Geen trefwoorden van het lid: die van de keten, gezeefd (te algemeen of bezet valt weg).
+  const zelfGekozen = !toets.trefwoorden.length;
+  const trefwoorden = zelfGekozen
+    ? kiesTrefwoorden(profiel.trefwoord, { naam: toets.naam, personas })
+    : toets.trefwoorden;
+  if (!trefwoorden.length) {
+    throw Object.assign(new Error('geen trefwoorden'), { reden: 'De Raad vond geen trefwoorden die nog vrij zijn. Vul ze zelf in.' });
+  }
+  const nogSteeds = toetsNieuweGast({ ...invoer, trefwoorden: trefwoorden.join(', '), personas, saldo: GAST_KOSTEN_NIEUW });
   if (!nogSteeds.ok) throw Object.assign(new Error('lijst gewijzigd'), { reden: Object.values(nogSteeds.fouten)[0] });
   const id = slugifyPersonaId(toets.naam, new Set(Object.keys(personas)));
   personas[id] = {
-    naam: toets.naam, icoon: avatar.icoon, trefwoord: toets.trefwoorden.join(', '), systemPrompt: profiel.systemPrompt,
+    naam: toets.naam, icoon: avatar.icoon, trefwoord: trefwoorden.join(', '), systemPrompt: profiel.systemPrompt,
     ongevraagd: true, actief: true, aangemaakt: Date.now(), uitgenodigdDoor: door, uitgenodigdOp: Date.now(),
   };
   savePersonas(personas);
-  return { gast: { id, ...personas[id] }, avatar, profiel };
+  return { gast: { id, ...personas[id] }, avatar, profiel, zelfGekozen };
 }
 
 app.view('modal_gast_nieuw', async ({ ack, body, view, client }) => {
@@ -8756,12 +8769,13 @@ app.view('modal_gast_nieuw', async ({ ack, body, view, client }) => {
   const gastheer = loadMembers()[userId]?.bijnaam || 'een volgeling';
   let gast = null;
   try {
-    let avatar, profiel;
-    ({ gast, avatar, profiel } = await maakGast(client, { invoer, toets, bestand, link, door: userId }));
+    let avatar, profiel, zelfGekozen;
+    ({ gast, avatar, profiel, zelfGekozen } = await maakGast(client, { invoer, toets, bestand, link, door: userId }));
     logAudit('persona', `${toets.naam} (${gast.id}) uitgenodigd door ${gastheer} — gezicht: ${avatar.bron}`);
     const opening = profiel.systemPrompt.split(/\n\s*\n/)[0].replace(/^#+\s*/, '').slice(0, 500);
     await meldGastUitslag(client, view.id, userId,
-      `✅ *${naamMd} is binnen.* ${AVATAR_NOOT[avatar.bron]}\nHij reageert op: ${ontsnapMrkdwn(toets.trefwoorden.join(', '))}.\n` +
+      `✅ *${naamMd} is binnen.* ${AVATAR_NOOT[avatar.bron]}\n` +
+      `Hij reageert op: ${ontsnapMrkdwn(gast.trefwoord)}${zelfGekozen ? ' _(gekozen door de Raad)_' : ''}.\n` +
       `_Er gingen ${GAST_KOSTEN_NIEUW} kroketpunten af. Zijn entree staat in het kanaal._\n\n*Zo ziet de Raad hem:*\n>${ontsnapMrkdwn(opening).replace(/\n/g, '\n>')}`,
       avatar.icoon);
   } catch (err) {
