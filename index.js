@@ -9823,6 +9823,10 @@ function lijktOpVerklikking(rawText, speakerId) {
 // herstart begint de rem opnieuw, en dat is hooguit één uur iets ruimer.
 let _emojiLog = [];
 const _ongeldigeEmoji = new Set(); // namen die Slack weigerde (bv. een verdwenen custom emoji)
+// Vijf seconden na het bericht, niet meteen (verzoek van de eigenaar): direct erop voelt als een
+// automaat, even later als iemand die het las. Geldt ook voor de Duitse vlag. De omgevings-
+// variabele is er voor de test.
+const EMOJI_VERTRAGING_MS = Number(process.env.KROKET_EMOJI_VERTRAGING_MS ?? 5000);
 
 function amsUur(nu = new Date()) {
   return Number(new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Amsterdam', hour: '2-digit', hourCycle: 'h23' }).format(nu));
@@ -9842,6 +9846,7 @@ async function slimmeEmoji(tekst) {
 }
 
 async function overwegEmojiReactie(client, event, { isTestKanaalMsg = false } = {}) {
+  const binnen = Date.now();
   const regelsAan = instelling('emojiRegels') !== false;
   const slimAan = instelling('emojiSlim') !== false;
   if ((!regelsAan && !slimAan) || !event.user || !event.text?.trim()) return;
@@ -9864,6 +9869,9 @@ async function overwegEmojiReactie(client, event, { isTestKanaalMsg = false } = 
   // Opnieuw toetsen: tijdens de slimme laag kan een ander bericht de ruimte al hebben genomen.
   if (!magEmojiReageren(_emojiLog, event.user, Date.now(), freq)) return;
   _emojiLog = naEmojiReactie(_emojiLog, event.user, Date.now());
+  // De wachttijd telt vanaf het bericht: een slimme laag die al twee seconden dacht, wacht nog drie.
+  const rest = EMOJI_VERTRAGING_MS - (Date.now() - binnen);
+  if (rest > 0) await new Promise(r => setTimeout(r, rest));
   try {
     await slackLimiter.schedule(() => client.reactions.add({ channel: event.channel, timestamp: event.ts, name: emoji }));
     console.log(`🙂 Emoji :${emoji}: op een bericht (${regel ? `regel ${regel.key}` : 'slimme laag'})`);
@@ -9921,9 +9929,13 @@ app.event('message', async ({ event, client }) => {
 
     // 🇩🇪 Verklikker-markering: wie een ander lid probeert te beschuldigen of een straf aan te
     // naaien, krijgt stilletjes een Duitse vlag (passieve emoji-reactie, geen LLM, altijd actief).
+    // Ook de vlag komt na EMOJI_VERTRAGING_MS, zonder dat de rest van het bericht erop wacht.
     let vlagGezet = false;
     if (event.user && event.text?.trim() && lijktOpVerklikking(event.text, event.user)) {
-      try { await client.reactions.add({ channel: event.channel, timestamp: event.ts, name: 'flag-de' }); vlagGezet = true; } catch (_) {}
+      vlagGezet = true;
+      setTimeout(() => {
+        client.reactions.add({ channel: event.channel, timestamp: event.ts, name: 'flag-de' }).catch(() => {});
+      }, EMOJI_VERTRAGING_MS);
     }
 
     // Weekend: geen geautomatiseerde berichtreacties — testkanaal uitgezonderd, uitschakelbaar.
