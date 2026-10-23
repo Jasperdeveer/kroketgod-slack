@@ -83,6 +83,7 @@ const {
   graadPerLid, sterksteBand, grootsteVete, meestScheef, spil, eenlingen, relatiesVan,
 } = require('./lib/weefsel.js');
 const { MAX_HORIZON_DAGEN, parseerWanneer } = require('./lib/tijdcapsule.js');
+const { geleKaarten, kleurVoorNieuweKaart, schorsingUren, voegKaartToe, zonderLaatsteGeleKaart } = require('./lib/kaarten.js');
 const { zaakNummer, volgendeTeller, parseerZaak } = require('./lib/jurisprudentie.js');
 // Het Paarboek: één bladzijde per paar plus de claim-ladder. Vervangt op termijn de hele
 // wroklaag; draait voorlopig NAAST de kerfstok zodat beide dezelfde feiten zien en de
@@ -2866,79 +2867,62 @@ app.action(/^verbond_(accepteer|weiger)$/, async ({ ack, body, client }) => {
   } catch (err) { console.error('Fout bij verbondsverzoek:', err); }
 });
 
-// ── Gele kaarten ──────────────────────────────────────────────────────────────
-// Formele waarschuwingen (gele kaart). Tweede overtreding deze week = directe ban.
-// Meerdere bans in dezelfde week → escalerende duur: 4h → 8h → 24h → 48h.
+// ── Gele en rode kaarten ──────────────────────────────────────────────────────
+// 🟨 Gele kaart = een uur geschorst. 🟥 Rode kaart = een dag geschorst, en dat is wat een tweede
+// gele kaart in dezelfde week automatisch wordt. De regels zelf staan in lib/kaarten.js.
+// Alleen een rode kaart sleept het heilige verbond mee: een uur op de gang is iemands eigen zaak,
+// en zo kan één voordracht nooit drie mensen tegelijk schorsen.
 
 const loadGeleKaarten = () => readJSON('geleKaarten.json', {});
 const saveGeleKaarten = (data) => writeJSON('geleKaarten.json', data);
 
-// Geef een gele kaart. Geeft het totaal actieve kaarten voor userId deze week terug.
-function geefGeleKaart(userId, reden) {
-  const data = loadGeleKaarten();
-  const weekSleutel = getMondayOfWeek();
-  if (!data[userId]) data[userId] = { kaarten: [], bannenDezeWeek: [] };
-  data[userId].kaarten.push({ ts: Date.now(), reden, weekSleutel });
-  saveGeleKaarten(data);
-  return data[userId].kaarten.filter(k => k.weekSleutel === weekSleutel).length;
-}
-
-// Geeft true als userId al een gele kaart heeft gekregen deze week.
+// Geeft true als userId deze week al een gele kaart heeft: de volgende kaart wordt dan rood.
 function heeftGeleKaartDezeWeek(userId) {
-  const data = loadGeleKaarten();
-  const weekSleutel = getMondayOfWeek();
-  return (data[userId]?.kaarten || []).some(k => k.weekSleutel === weekSleutel);
+  return kleurVoorNieuweKaart(loadGeleKaarten()[userId], getMondayOfWeek()) === 'rood';
 }
 
-// Registreer een ban en geef de escalerende duur terug (in uren).
-// Volgorde: 4h → 8h → 24h → 48h
-function getBanEscalatieduur(userId) {
-  const data = loadGeleKaarten();
-  const weekSleutel = getMondayOfWeek();
-  if (!data[userId]) data[userId] = { kaarten: [], bannenDezeWeek: [] };
-  // Ruim verlopen weken op
-  data[userId].bannenDezeWeek = (data[userId].bannenDezeWeek || [])
-    .filter(b => b.weekSleutel === weekSleutel);
-  const aantalBannen = data[userId].bannenDezeWeek.length;
-  const DUREN = [4, 8, 24, 48];
-  const duurUren = DUREN[Math.min(aantalBannen, DUREN.length - 1)];
-  data[userId].bannenDezeWeek.push({ ts: Date.now(), weekSleutel, duurUren });
-  saveGeleKaarten(data);
-  return duurUren;
-}
-
-// Helper: leg een gele-kaart-ban op (met escalatie) en post het vonnis.
-async function legGeleKaartBanOp(client, channelId, userId, bijnaam, reden, citaat, threadTs, actorId = null) {
-  const duurUren = getBanEscalatieduur(userId);
+// Registreert de kaart en schorst het lid: geel een uur, rood een dag. Geeft het einde terug.
+// Logt niet zelf: de aanroeper weet waarom de kaart viel (stemming, vergrijp) en logt dat.
+function legKaartSchorsingOp(userId, kleur, reden, citaat) {
   const nu = new Date();
-  // Ban-duur is een vaste tijdsduur — gewoon optellen bij huidige UTC, geen tijdzone nodig
-  const eindeUtc = new Date(nu.getTime() + duurUren * 3_600_000);
+  // Schorsing is een vaste tijdsduur — gewoon optellen bij huidige UTC, geen tijdzone nodig
+  const eindeUtc = new Date(nu.getTime() + schorsingUren(kleur) * 3_600_000);
+
+  const kaarten = loadGeleKaarten();
+  kaarten[userId] = voegKaartToe(kaarten[userId], { kleur, reden, week: getMondayOfWeek(nu), ts: nu.getTime() });
+  saveGeleKaarten(kaarten);
 
   const verbanning = loadVerbanning();
   verbanning[userId] = {
     tot: eindeUtc.toISOString(),
-    reden: reden || 'overtreding na gele kaart',
+    reden,
     citaat: citaat || null,
     dagen: null,
     opgelegd: nu.toISOString(),
+    kaart: kleur,
   };
   saveVerbanning(verbanning);
-  logGebeurtenis('verbanning', userId, `${bijnaam} verbannen na gele kaart (${duurUren}u)`, citaat, actorId);
+  return eindeUtc;
+}
 
-  const terugTijd = eindeUtc.toLocaleTimeString('nl-NL', {
-    timeZone: 'Europe/Amsterdam', hour: '2-digit', minute: '2-digit',
-  });
-  const escalatieZin = duurUren > 4
-    ? `Dit is niet de eerste overtreding deze week — de straf is dienovereenkomstig zwaarder uitgevallen: ${duurUren} uur.`
-    : '';
+// Helper: geef een rode kaart (een dag geschorst) aan wie deze week al geel had, en post het vonnis.
+async function legRodeKaartOp(client, channelId, userId, bijnaam, reden, citaat, threadTs, actorId = null) {
+  reden = reden || 'tweede gele kaart deze week';
+  const eindeUtc = legKaartSchorsingOp(userId, 'rood', reden, citaat);
+  logGebeurtenis('verbanning', userId, `${bijnaam} kreeg een rode kaart: een dag geschorst`, citaat, actorId);
+
+  // Een dag later staat de klok op dezelfde tijd: noem de dag erbij, anders leest het als vandaag.
+  const opties = { timeZone: 'Europe/Amsterdam' };
+  const terugDag = eindeUtc.toLocaleDateString('nl-NL', { ...opties, weekday: 'long' });
+  const terugTijd = eindeUtc.toLocaleTimeString('nl-NL', { ...opties, hour: '2-digit', minute: '2-digit' });
   const verdictTekst = await kroketResponse(
-    `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} had al een gele kaart gekregen en heeft zich opnieuw misdragen: "${citaat || reden}". ` +
-    `${escalatieZin} De Hoge Frituurraad tolereert geen herhaling. ` +
-    `Spreek een verbanningsvonnis uit van ${duurUren} uur. Gebruik het decreet-formaat. Geen inleidingszin.`,
+    `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} had deze week al een gele kaart en heeft zich opnieuw misdragen: "${citaat || reden}". ` +
+    `Twee keer geel in één week is ROOD. De Hoge Frituurraad tolereert geen herhaling. ` +
+    `Spreek het vonnis uit: een rode kaart, een volle dag geschorst. Gebruik het decreet-formaat. Geen inleidingszin.`,
     450, false
   );
   await postEphemeral(client, channelId, userId,
-    `${verdictTekst}\n\n_De poorten heropenen zich om ${terugTijd}._`,
+    `🟥 ${verdictTekst}\n\n_De poorten heropenen zich ${terugDag} om ${terugTijd}._`,
     { thread_ts: threadTs });
   await verbanAlliantiePartnerMee(client, userId, bijnaam, channelId);
 }
@@ -9232,10 +9216,10 @@ app.event('app_mention', async ({ event, client }) => {
       const verwerkVergrijp = async (type) => {
         if (!members[userId]) return false; // alleen voor leden
 
-        // Heeft dit lid al een gele kaart deze week? → directe ban, geen vergrijp-accumultie
+        // Heeft dit lid al een gele kaart deze week? → dit is de tweede: rood, geen vergrijp-accumulatie
         if (heeftGeleKaartDezeWeek(userId)) {
           const thread_ts = antwoordThread(event);
-          await legGeleKaartBanOp(client, event.channel, userId, bijnaam,
+          await legRodeKaartOp(client, event.channel, userId, bijnaam,
             `${type} na gele kaart`, input, thread_ts);
           return true;
         }
@@ -14879,7 +14863,7 @@ async function ambtsdaadZachteHand(client, houderId, doelId, vorm, channelId) {
   if (vorm === 'vloek' && !heeftPowerup(doelId, 'vloek')) {
     return { ok: false, tekst: `_Op ${doelNaam} rust geen vloek. Er is niets weg te halen._` };
   }
-  if (vorm === 'kaart' && !(loadGeleKaarten()[doelId]?.length)) {
+  if (vorm === 'kaart' && !geleKaarten(loadGeleKaarten()[doelId])) {
     return { ok: false, tekst: `_${doelNaam} heeft geen gele kaart openstaan._` };
   }
   if (vorm === 'punt' && (loadScores()[houderId] || 0) < 1) {
@@ -14901,8 +14885,8 @@ async function ambtsdaadZachteHand(client, houderId, doelId, vorm, channelId) {
       }
       if (vorm === 'kaart') {
         const kaarten = loadGeleKaarten();
-        const weg = kaarten[doelId].pop();
-        if (!kaarten[doelId].length) delete kaarten[doelId];
+        const { dossier, weg } = zonderLaatsteGeleKaart(kaarten[doelId]);
+        if (dossier?.kaarten?.length) kaarten[doelId] = dossier; else delete kaarten[doelId];
         saveGeleKaarten(kaarten);
         logGebeurtenis('genade', doelId, `een gele kaart van ${doelNaam} werd geschrapt`, null, houderId);
         return {
@@ -17236,7 +17220,7 @@ function bouwGeleKaartPollBlocks(poll) {
       `*Door:* _een anonieme volgeling_\n` +
       (poll.reden ? `*Reden:* _"${poll.reden}"_\n` : '') +
       (poll.hadAlKaart
-        ? `\n⚠️ *${naam} heeft deze week al een gele kaart.* Wordt deze voordracht toegekend, dan volgt een *verbanning*.` +
+        ? `\n⚠️ *${naam} heeft deze week al een gele kaart.* Wordt deze voordracht toegekend, dan wordt het *rood*: een dag geschorst.` +
           // Het heilige verbond sleept de bondgenoot mee in een verbanning (bestaand gedrag).
           // Dat moet vóór de stemming op het bord staan: wie niet weet dat er twee mensen vallen,
           // kan daar niet eerlijk over stemmen — en de bondgenoot is zelf nooit voorgedragen.
@@ -17248,7 +17232,7 @@ function bouwGeleKaartPollBlocks(poll) {
             const meer = ids.length > 1;
             return `\n⚔️ *Let op:* door het heilige verbond ${meer ? 'worden' : 'wordt'} *${bijnamenVan(ids, members)}* dan mee verbannen, met dezelfde einddatum. Weeg dat mee.`;
           })()
-        : `\nWordt de voordracht toegekend, dan volgt een formele waarschuwing.`) } },
+        : `\nWordt de voordracht toegekend, dan volgt een gele kaart: een uur geschorst.`) } },
   ];
   if (poll.actief) {
     const min = Math.max(0, Math.ceil((poll.sluitTs - Date.now()) / 60_000));
@@ -17264,7 +17248,7 @@ function bouwGeleKaartPollBlocks(poll) {
   } else {
     const u = poll.uitslag || {};
     const kop = poll.uitkomst === 'terecht'
-      ? (poll.hadAlKaart ? '⛔ *TOEGEKEND — VERBANNING*' : '🟨 *TOEGEKEND — GELE KAART*')
+      ? (poll.hadAlKaart ? '🟥 *TOEGEKEND — RODE KAART*' : '🟨 *TOEGEKEND — GELE KAART*')
       : '🟩 *VERWORPEN — GEEN KAART*';
     blocks.push({ type: 'section', text: { type: 'mrkdwn', text:
       `${kop}\n` +
@@ -17375,27 +17359,29 @@ async function sluitGeleKaartPoll(client) {
     return poll;
   }
 
-  // Toegekend. Had dit lid deze week al een kaart, dan is dit de tweede overtreding → ban.
+  // Toegekend. Had dit lid deze week al een gele kaart, dan is dit de tweede → rood.
   if (poll.hadAlKaart) {
-    const redenTekst = poll.reden || 'herhaalde overtreding na gele kaart';
+    const redenTekst = poll.reden || 'tweede gele kaart deze week';
     await postToChannel(client, poll.kanaal,
-      `⛔ *DE RAAD HEEFT GESPROKEN* ⛔\n\n> De voordracht tegen *${naam}* is toegekend, en dit was de tweede kaart deze week.${stemBlok}`);
-    // Geen actorId: deze verbanning is een besluit van de Raad, niet van de anonieme aanklager.
-    await legGeleKaartBanOp(client, poll.kanaal, poll.doelwitId, naam, redenTekst, redenTekst, null, null);
+      `🟥 *DE RAAD HEEFT GESPROKEN* 🟥\n\n> De voordracht tegen *${naam}* is toegekend. Dit was de tweede gele kaart deze week, en twee keer geel is rood: *een dag geschorst*.${stemBlok}`);
+    // Geen actorId: deze schorsing is een besluit van de Raad, niet van de anonieme aanklager.
+    await legRodeKaartOp(client, poll.kanaal, poll.doelwitId, naam, redenTekst, redenTekst, null, null);
     return poll;
   }
 
-  geefGeleKaart(poll.doelwitId, poll.reden || 'overtreding van de snackleer');
-  logGebeurtenis('gelekaart', poll.doelwitId, `${naam} ontving een gele kaart na stemming (${totaalTerecht}-${totaalOnterecht})`, null, poll.aanklagerId);
+  const eindeUtc = legKaartSchorsingOp(poll.doelwitId, 'geel', poll.reden || 'overtreding van de snackleer', null);
+  logGebeurtenis('gelekaart', poll.doelwitId, `${naam} ontving een gele kaart na stemming (${totaalTerecht}-${totaalOnterecht}): een uur geschorst`, null, poll.aanklagerId);
+  const terugTijd = eindeUtc.toLocaleTimeString('nl-NL', { timeZone: 'Europe/Amsterdam', hour: '2-digit', minute: '2-digit' });
   const tekst = await kroketResponseMetVangnet(
     `De Raad heeft gestemd en een gele kaart voor ${naam} TOEGEKEND${poll.reden ? ' wegens de hieronder aangehaalde reden' : ''} ` +
     `(${totaalTerecht} terecht tegen ${totaalOnterecht} onterecht; uw eigen stem woog dubbel en was "terecht"). ` +
-    `Dit is een formele waarschuwing, geen vonnis: bij een volgende overtreding deze week volgt een verbanning. ` +
+    `Een gele kaart betekent een uur schorsing: ${naam} zit vanaf nu een uur buiten de frituurtafel. ` +
+    `Een tweede gele kaart deze week wordt automatisch rood: een volle dag geschorst. ` +
     `Spreek plechtig maar nog niet veroordelend — de HERDER past hier beter dan de RECHTER. 3-5 zinnen. Geen inleidingszin.` + redenBlok,
     450, false,
-    `🟨 *GELE KAART TOEGEKEND* 🟨\n\n> De Raad kent *${naam}* een formele waarschuwing toe. Bij een volgende overtreding deze week volgt verbanning.`
+    `🟨 *GELE KAART TOEGEKEND* 🟨\n\n> De Raad kent *${naam}* een gele kaart toe: een uur geschorst. Een tweede gele kaart deze week is rood: een dag.`
   );
-  await postToChannel(client, poll.kanaal, `<@${poll.doelwitId}>\n\n${tekst}${stemBlok}`);
+  await postToChannel(client, poll.kanaal, `<@${poll.doelwitId}>\n\n${tekst}\n\n_🟨 Geschorst tot ${terugTijd}._${stemBlok}`);
   return poll;
 }
 
@@ -17427,7 +17413,7 @@ planCron('* * * * *', async () => {
 registreerFeature({
   naam: 'gelekaart-stemming',
   state: ['gelekaartpoll.json'],
-  help: [{ gebruik: '/kroketgod gelekaart [naam] [reden]', verwacht: `draag een gele kaart voor; de Raad stemt ${GELEKAART_POLL_MINUTEN} minuten met emoji's en de stem van de Kroket God weegt dubbel` }],
+  help: [{ gebruik: '/kroketgod gelekaart [naam] [reden]', verwacht: `draag een gele kaart voor (een uur geschorst; de tweede in dezelfde week is rood, een dag); de Raad stemt ${GELEKAART_POLL_MINUTEN} minuten met emoji's en de stem van de Kroket God weegt dubbel` }],
 });
 
 
