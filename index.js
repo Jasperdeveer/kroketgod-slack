@@ -161,7 +161,7 @@ const {
   jackpotVrij, beslisUitkomst, vetbadDelta, potInleg, naInleg, dubbelOfNiksDelta, toetsDubbel, ruimKansen,
 } = require('./lib/vetbad.js');
 const {
-  LOS_GETAL_MAX, INZETSOORTEN, handWaarde, isBlackjack, deel, kaart, verdubbel, speelBank, magVerdubbelen,
+  MAX_INZET: CASINO_MAX_INZET, LOS_GETAL_MAX, INZETSOORTEN, handWaarde, isBlackjack, deel, kaart, verdubbel, speelBank, magVerdubbelen,
   blackjackUitbetaling, kleurVan, draai, rouletteUitbetaling, toetsRoulette,
 } = require('./lib/casino.js');
 const {
@@ -13845,8 +13845,8 @@ const VETBAD_MAX_INZET = 10;
 const VETBAD_BASIS_PER_DAG = 3;
 
 // ── Het Casino: blackjack en roulette in een venster (/kroketgod casino) ──────
-// Spelregels en uitbetaling: lib/casino.js. Inzet zoals het Vetbad (offerPlafond), tien spellen
-// per dag (lib/limieten.js). De inzet gaat eraf bij het delen of draaien, de uitbetaling komt
+// Spelregels en uitbetaling: lib/casino.js. Inzet zoals het Vetbad (offerPlafond) maar hoogstens
+// CASINO_MAX_INZET, tien spellen per dag (lib/limieten.js). De inzet gaat eraf bij het delen of draaien, de uitbetaling komt
 // erbij bij het afrekenen; kale boekingen zoals het Vetbad, dus geen roem of verbondszegen.
 // Een open blackjackhand staat in casino.json en niet in het venster: een herstart of een
 // gesloten venster eet de inzet niet op (wie terugkomt, speelt hem af), en een dubbele klik
@@ -13858,6 +13858,8 @@ const CASINO_VERKONDIG_VANAF = 10; // nettowinst waarvoor het kanaal het hoort
 const CASINO_TITEL = { type: 'plain_text', text: 'Casino' };
 const CASINO_SLUIT = { type: 'plain_text', text: 'Sluiten' };
 
+const casinoPlafond = (userId) => Math.min(CASINO_MAX_INZET, offerPlafond(userId));
+
 function casinoToegangReden(userId) {
   if (!loadMembers()[userId]) return 'Alleen volgelingen komen het casino in. Meld u eerst aan met `/kroketgod aanmelden`.';
   if (isVerbannen(userId)) return 'Ballingen komen het casino niet in.';
@@ -13868,9 +13870,9 @@ function casinoInzetFout(userId, inzet) {
   const reden = casinoToegangReden(userId);
   if (reden) return reden;
   if (!magNogVandaag(loadDaglimieten(), 'casino', userId, dagSleutel())) return `U speelde vandaag al ${DAGLIMIETEN.casino} spellen. Het casino gaat morgen weer open.`;
-  const max = offerPlafond(userId);
+  const max = casinoPlafond(userId);
   if (max < 1) return 'U heeft geen kroketpunten om in te zetten.';
-  if (!Number.isInteger(inzet) || inzet < 1 || inzet > max) return `Zet 1 tot en met ${max} in: hoogstens ${VETBAD_MAX_INZET}, en nooit meer dan de helft van uw bezit.`;
+  if (!Number.isInteger(inzet) || inzet < 1 || inzet > max) return `Zet 1 tot en met ${max} in: hoogstens ${CASINO_MAX_INZET}, en nooit meer dan de helft van uw bezit.`;
   return null;
 }
 
@@ -13900,7 +13902,7 @@ async function verkondigCasinoWinst(client, userId, spel, netto) {
 }
 
 const casinoStand = (userId) =>
-  `_U heeft ${puntenWoord(loadScores()[userId] || 0)}. Inzet hoogstens ${offerPlafond(userId)}; nog ${resterendVandaag(loadDaglimieten(), 'casino', userId, dagSleutel())} van ${DAGLIMIETEN.casino} spellen vandaag._`;
+  `_U heeft ${puntenWoord(loadScores()[userId] || 0)}. Inzet hoogstens ${casinoPlafond(userId)}; nog ${resterendVandaag(loadDaglimieten(), 'casino', userId, dagSleutel())} van ${DAGLIMIETEN.casino} spellen vandaag._`;
 const casinoTekst = (tekst) => ({ type: 'section', text: { type: 'mrkdwn', text: tekst } });
 const casinoKnop = (action_id, tekst, style) => ({ type: 'button', action_id, text: { type: 'plain_text', text: tekst }, ...(style ? { style } : {}) });
 const casinoInzetVeld = (vorige) => ({
