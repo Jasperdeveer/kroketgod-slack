@@ -9888,6 +9888,7 @@ const _ongeldigeEmoji = new Set(); // namen die Slack weigerde (bv. een verdwene
 // automaat, even later als iemand die het las. Geldt ook voor de Duitse vlag. De omgevings-
 // variabele is er voor de test.
 const EMOJI_VERTRAGING_MS = Number(process.env.KROKET_EMOJI_VERTRAGING_MS ?? 5000);
+const QUINTY_ID = 'U085E5Y3PAB'; // voor de :quintrippy:-regel
 
 function amsUur(nu = new Date()) {
   return Number(new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Amsterdam', hour: '2-digit', hourCycle: 'h23' }).format(nu));
@@ -9919,7 +9920,10 @@ async function overwegEmojiReactie(client, event, { isTestKanaalMsg = false } = 
   if (!magEmojiReageren(_emojiLog, event.user, Date.now(), freq)) return;
 
   const tekst = event.text.replace(/<@[A-Z0-9]+>/g, ' ');
-  const ctx = { uur: amsUur(), weekdag: amsWeekdag(), noemtKroketGodZonderMentie: /kroket ?god/i.test(tekst) };
+  const ctx = {
+    uur: amsUur(), weekdag: amsWeekdag(), noemtKroketGodZonderMentie: /kroket ?god/i.test(tekst),
+    quinty: event.user === QUINTY_ID || event.text.includes(`<@${QUINTY_ID}>`),
+  };
   const regel = regelsAan ? kiesEmojiRegel(tekst, ctx, { factor: freq.regelFactor }) : null;
   let emoji = regel?.emoji || null;
   // Een regel die raak was maar wiens worp misliep, laat het bericht met rust: geen slimme laag.
