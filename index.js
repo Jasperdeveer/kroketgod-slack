@@ -99,7 +99,7 @@ const {
 } = require('./lib/gunst.js');
 // Daglimieten voor de bronnen die de speler niets kosten: zondebok, lofzang, organische eer.
 const {
-  DAGLIMIETEN, IEDEREEN: LIMIET_IEDEREEN, magNog: magNogVandaag, resterend: resterendVandaag, boekIn: boekDaglimiet, zondebokStraf,
+  DAGLIMIETEN, IEDEREEN: LIMIET_IEDEREEN, magNog: magNogVandaag, telling: tellingVandaag, boekIn: boekDaglimiet, zondebokStraf,
 } = require('./lib/limieten.js');
 // Een tikfout in de geheime fortuin-code mag niet als vrije tekst bij de LLM belanden.
 const { lijktOpCode } = require('./lib/geheim.js');
@@ -13866,7 +13866,7 @@ const VETBAD_BASIS_PER_DAG = 3;
 // Een open spel (blackjack, hoger/lager) staat in casino.json en niet in het venster: een herstart
 // of een gesloten venster eet de inzet niet op (wie terugkomt, speelt het af), en een dubbele klik
 // vindt de tweede keer geen spel meer en betaalt dus niet twee keer uit.
-registreerFeature({ naam: 'casino', state: ['casino.json'] });
+registreerFeature({ naam: 'casino', state: ['casino.json', 'casinobonus.json'] });
 const loadCasinoHanden = () => readJSON('casino.json', {});
 const saveCasinoHanden = (d) => writeJSON('casino.json', d);
 const CASINO_VERKONDIG_VANAF = 10; // nettowinst waarvoor het kanaal het hoort
@@ -13890,6 +13890,10 @@ const GOKKAST_RUST = Array(3).fill(GOKKAST.at(-1).emoji); // de kast in rust too
 
 const casinoPlafond = (userId) => Math.min(CASINO_MAX_INZET, offerPlafond(userId));
 
+// Extra spellen voor iedereen op één dag, per decreet: casinobonus.json = { "2026-10-28": 5 }.
+const casinoLimiet = () => DAGLIMIETEN.casino + (Number(readJSON('casinobonus.json', {})[dagSleutel()]) || 0);
+const casinoResterend = (userId) => Math.max(0, casinoLimiet() - tellingVandaag(loadDaglimieten(), 'casino', userId, dagSleutel()));
+
 function casinoToegangReden(userId) {
   if (!loadMembers()[userId]) return 'Alleen volgelingen komen het casino in. Meld u eerst aan met `/kroketgod aanmelden`.';
   if (isVerbannen(userId)) return 'Ballingen komen het casino niet in.';
@@ -13899,7 +13903,7 @@ function casinoToegangReden(userId) {
 function casinoInzetFout(userId, inzet) {
   const reden = casinoToegangReden(userId);
   if (reden) return reden;
-  if (!magNogVandaag(loadDaglimieten(), 'casino', userId, dagSleutel())) return `U speelde vandaag al ${DAGLIMIETEN.casino} spellen. Het casino gaat morgen weer open.`;
+  if (casinoResterend(userId) < 1) return `U speelde vandaag al ${casinoLimiet()} spellen. Het casino gaat morgen weer open.`;
   const max = casinoPlafond(userId);
   if (max < 1) return 'U heeft geen kroketpunten om in te zetten.';
   if (!Number.isInteger(inzet) || inzet < 1 || inzet > max) return `Zet 1 tot en met ${max} in: hoogstens ${CASINO_MAX_INZET}, en nooit meer dan de helft van uw bezit.`;
@@ -13973,7 +13977,7 @@ async function casinoPlaatjes(client) {
 // ── Het venster ──────────────────────────────────────────────────────────────
 
 const casinoStand = (userId) =>
-  `_U heeft ${puntenWoord(loadScores()[userId] || 0)}. Inzet hoogstens ${casinoPlafond(userId)}; nog ${resterendVandaag(loadDaglimieten(), 'casino', userId, dagSleutel())} van ${DAGLIMIETEN.casino} spellen vandaag._`;
+  `_U heeft ${puntenWoord(loadScores()[userId] || 0)}. Inzet hoogstens ${casinoPlafond(userId)}; nog ${casinoResterend(userId)} van ${casinoLimiet()} spellen vandaag._`;
 const casinoTekst = (tekst) => ({ type: 'section', text: { type: 'mrkdwn', text: tekst } });
 const casinoKnop = (action_id, tekst, style) => ({ type: 'button', action_id, text: { type: 'plain_text', text: tekst }, ...(style ? { style } : {}) });
 const casinoGetal = (n) => n.toFixed(2).replace('.', ',');
