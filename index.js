@@ -163,7 +163,11 @@ const {
 const {
   MAX_INZET: CASINO_MAX_INZET, LOS_GETAL_MAX, INZETSOORTEN, handWaarde, isBlackjack, deel, kaart, verdubbel, speelBank, magVerdubbelen,
   blackjackUitbetaling, kleurVan, draai, rouletteUitbetaling, toetsRoulette,
+  GOKKAST, trekHendel, gokkastFactor, gokkastUitbetaling, HL_MAX, hlFactor, hlStart, hlRaad, hlUitbetaling,
+  DOBBELKEUZES, werp, dobbelUitbetaling,
 } = require('./lib/casino.js');
+const { blackjackBeeld, rouletteBeeld, gokkastBeeld, hogerLagerBeeld, dobbelBeeld, lobbyBeeld, naarPng } = require('./lib/casinobeeld.js');
+const { createHash } = require('crypto');
 const {
   VERBOND_MAX, VERZOEK_GELDIG_MS, groepen: verbondGroepen, naarOpslag: verbondNaarOpslag,
   groepVan: verbondGroepVan, bondgenotenVan, verlaat: verlaatVerbond, sluitPaar: sluitVerbondsPaar,
@@ -4833,12 +4837,14 @@ async function zetAvatarOnline(client, bestand, naam) {
 }
 
 // Een plaatje openbaar zetten op imgbb; geeft de directe link terug.
-async function zetOpImgbb(buf, naam) {
+// `verloopS`: imgbb gooit het plaatje na zoveel seconden weg (het casino); zonder blijft het staan.
+async function zetOpImgbb(buf, naam, { verloopS = null, timeout = 30000 } = {}) {
   if (!process.env.IMGBB_API_KEY) throw new Error('geen IMGBB_API_KEY');
   if (buf.length > GAST_AVATAR_MAX_BYTES) throw new Error('te groot');
   const form = new URLSearchParams({ image: buf.toString('base64'), name: slugifyPersonaId(naam, new Set()) });
-  const up = await fetch(`https://api.imgbb.com/1/upload?key=${encodeURIComponent(process.env.IMGBB_API_KEY)}`, {
-    method: 'POST', body: form, timeout: 30000,
+  const verloop = verloopS ? `&expiration=${verloopS}` : '';
+  const up = await fetch(`https://api.imgbb.com/1/upload?key=${encodeURIComponent(process.env.IMGBB_API_KEY)}${verloop}`, {
+    method: 'POST', body: form, timeout,
   });
   const data = await up.json().catch(() => ({}));
   const url = data?.data?.url;
@@ -6472,7 +6478,7 @@ async function voerKroketCommandoUit({ command, respond, client }) {
     if (/^casino$/i.test(input)) {
       const reden = casinoToegangReden(command.user_id);
       if (reden) await respond({ text: `_${reden}_`, response_type: 'ephemeral' });
-      else await client.views.open({ trigger_id: command.trigger_id, view: casinoLobby(command.user_id) });
+      else await openCasino(client, command.trigger_id, command.user_id);
       return;
     }
 
@@ -13848,19 +13854,39 @@ const VETBAD_MAX_INZET = 10;
 // niet nog eens ongemerkt kan wegnemen. offerExtra in RANGEN telt er nog steeds bij op.
 const VETBAD_BASIS_PER_DAG = 3;
 
-// ── Het Casino: blackjack en roulette in een venster (/kroketgod casino) ──────
-// Spelregels en uitbetaling: lib/casino.js. Inzet zoals het Vetbad (offerPlafond) maar hoogstens
-// CASINO_MAX_INZET, tien spellen per dag (lib/limieten.js). De inzet gaat eraf bij het delen of draaien, de uitbetaling komt
-// erbij bij het afrekenen; kale boekingen zoals het Vetbad, dus geen roem of verbondszegen.
-// Een open blackjackhand staat in casino.json en niet in het venster: een herstart of een
-// gesloten venster eet de inzet niet op (wie terugkomt, speelt hem af), en een dubbele klik
-// vindt de tweede keer geen hand meer en betaalt dus niet twee keer uit.
+// ── Het Casino (/kroketgod casino) ────────────────────────────────────────────
+// Spelregels en uitbetaling: lib/casino.js; de plaatjes: lib/casinobeeld.js. Inzet zoals het Vetbad
+// (offerPlafond) maar hoogstens CASINO_MAX_INZET, tien spellen per dag (lib/limieten.js). De inzet
+// gaat eraf als een spel begint, de uitbetaling komt erbij bij het afrekenen; kale boekingen zoals
+// het Vetbad, dus geen roem of verbondszegen.
+// Het venster heeft alleen knoppen: elke zet is een block_action, zonder de drie seconden van een
+// view_submission, dus met tijd om de tafel te tekenen en op imgbb te zetten. Het spel, de gekozen
+// inzet, het plaatje en de laatste uitslag staan in private_metadata. Mislukt het plaatje, dan
+// staat alles ook in de tekst.
+// Een open spel (blackjack, hoger/lager) staat in casino.json en niet in het venster: een herstart
+// of een gesloten venster eet de inzet niet op (wie terugkomt, speelt het af), en een dubbele klik
+// vindt de tweede keer geen spel meer en betaalt dus niet twee keer uit.
 registreerFeature({ naam: 'casino', state: ['casino.json'] });
 const loadCasinoHanden = () => readJSON('casino.json', {});
 const saveCasinoHanden = (d) => writeJSON('casino.json', d);
 const CASINO_VERKONDIG_VANAF = 10; // nettowinst waarvoor het kanaal het hoort
 const CASINO_TITEL = { type: 'plain_text', text: 'Casino' };
 const CASINO_SLUIT = { type: 'plain_text', text: 'Sluiten' };
+
+const CASINO_SPELLEN = {
+  blackjack: { naam: '🃏 Blackjack', plek: 'de blackjacktafel',
+    uitleg: 'De bank pakt tot 17. Blackjack betaalt 3:2, verdubbelen mag op de eerste twee kaarten.' },
+  roulette: { naam: '🎡 Roulette', plek: 'de roulettetafel',
+    uitleg: `Eén nul. Kleur, even/oneven en laag/hoog betalen 1:1, een dozijn 2:1, een los getal 35:1 (hoogstens ${LOS_GETAL_MAX} punt inzet).` },
+  gokkast: { naam: '🎰 Gokkast', plek: 'de gokkast',
+    uitleg: 'Drie of twee gelijke symbolen betalen naar het symbool; drie keer de Kroket God betaalt 8×.' },
+  hogerlager: { naam: '🔼 Hoger/Lager', plek: 'de hoger-lagertafel',
+    uitleg: `Raad of de volgende kaart hoger of lager is (gelijk is fout). Elke goede gok laat de pot groeien; cash wanneer u wilt, hoogstens ${HL_MAX}× uw inzet.` },
+  dobbelen: { naam: '🎲 Dobbelen', plek: 'de dobbeltafel',
+    uitleg: 'Twee stenen. Onder of boven 7 betaalt 1:1 en een 7 geeft de inzet terug; precies 7 betaalt 4:1.' },
+};
+const ROULETTE_KNOPPEN = { rood: '🔴 Rood', zwart: '⚫ Zwart', even: 'Even', oneven: 'Oneven', laag: '1–18', hoog: '19–36', dozijn1: '1e 12', dozijn2: '2e 12', dozijn3: '3e 12' };
+const GOKKAST_RUST = Array(3).fill(GOKKAST.at(-1).emoji); // de kast in rust toont de jackpot
 
 const casinoPlafond = (userId) => Math.min(CASINO_MAX_INZET, offerPlafond(userId));
 
@@ -13891,7 +13917,7 @@ function boekCasinoUitslag(userId, spel, inzet, uitbetaling, wat) {
   const netto = uitbetaling - inzet;
   // Alleen grote winsten: de weekrede stuurt elke gebeurtenis naar de keten, en tien spellen per
   // lid per dag blazen die prompt op.
-  if (netto >= CASINO_VERKONDIG_VANAF) logGebeurtenis('casino', userId, `${loadMembers()[userId]?.bijnaam || userId} won ${netto} aan de ${spel}tafel (${wat})`);
+  if (netto >= CASINO_VERKONDIG_VANAF) logGebeurtenis('casino', userId, `${loadMembers()[userId]?.bijnaam || userId} won ${netto} aan ${CASINO_SPELLEN[spel].plek} (${wat})`);
   const tekst = netto > 0 ? `🎉 *U wint ${puntenWoord(netto)}.*`
     : netto === 0 ? '〰️ *Gelijkspel. U krijgt uw inzet terug.*'
     : `💀 *Het huis wint. U verliest ${puntenWoord(-netto)}.*`;
@@ -13901,177 +13927,281 @@ function boekCasinoUitslag(userId, spel, inzet, uitbetaling, wat) {
 async function verkondigCasinoWinst(client, userId, spel, netto) {
   if (netto < CASINO_VERKONDIG_VANAF) return;
   const bijnaam = ontsnapMrkdwn(loadMembers()[userId]?.bijnaam || 'Een volgeling');
-  try { await postToChannel(client, KANAAL(), `🎰 *Het Casino van de Kroket God:* ${bijnaam} wint *+${netto}* kroketpunten aan de ${spel}tafel. Het huis telt zijn fiches na.`); }
+  try { await postToChannel(client, KANAAL(), `🎰 *Het Casino van de Kroket God:* ${bijnaam} wint *+${netto}* kroketpunten aan ${CASINO_SPELLEN[spel].plek}. Het huis telt zijn fiches na.`); }
   catch (err) { console.warn('⚠️ Casinowinst verkondigen mislukt:', err.message); }
 }
+
+// ── De plaatjes: tekenen, op imgbb zetten, onthouden ──────────────────────────
+// Dezelfde tafel (de lobby, een draai die al eens viel) wordt niet opnieuw geüpload. imgbb gooit
+// ze na een dag weg; de bot vergeet ze na twaalf uur.
+const CASINO_BEELD_VERLOOP_S = 24 * 3600;
+const CASINO_BEELD_GELDIG_MS = 12 * 3600_000;
+const _casinoBeelden = new Map(); // sha1 van de svg → { url, ts }
+
+async function casinoBeeldUrl(svg) {
+  const sleutel = createHash('sha1').update(svg).digest('hex');
+  const bekend = _casinoBeelden.get(sleutel);
+  if (bekend && Date.now() - bekend.ts < CASINO_BEELD_GELDIG_MS) return bekend.url;
+  const url = await zetOpImgbb(naarPng(svg), 'casino', { verloopS: CASINO_BEELD_VERLOOP_S, timeout: 8000 });
+  _casinoBeelden.set(sleutel, { url, ts: Date.now() });
+  if (_casinoBeelden.size > 300) _casinoBeelden.delete(_casinoBeelden.keys().next().value);
+  return url;
+}
+
+// De symbolen van de gokkast als data-URL, uit de eigen emoji van de werkruimte (emoji:read).
+// Alleen PNG en JPEG, op de inhoud bekeken: een emoji met .png in de naam kan WebP zijn, en dat
+// leest resvg niet. Wat ontbreekt, staat als naam op de rol; na tien minuten probeert de bot het opnieuw.
+let _casinoPlaatjes = {}, _casinoPlaatjesTs = 0;
+async function casinoPlaatjes(client) {
+  if (Object.keys(_casinoPlaatjes).length === GOKKAST.length || Date.now() - _casinoPlaatjesTs < 10 * 60_000) return _casinoPlaatjes;
+  _casinoPlaatjesTs = Date.now();
+  try {
+    const { emoji = {} } = await client.emoji.list();
+    for (const { emoji: naam } of GOKKAST) {
+      try {
+        const res = await fetch(emoji[naam], { timeout: 5000 });
+        const buf = await res.buffer();
+        const soort = buf.subarray(0, 4).toString('hex') === '89504e47' ? 'image/png'
+          : buf.subarray(0, 3).toString('hex') === 'ffd8ff' ? 'image/jpeg' : null;
+        if (res.ok && soort) _casinoPlaatjes[naam] = `data:${soort};base64,${buf.toString('base64')}`;
+      } catch (err) { console.warn(`⚠️ Gokkastsymbool :${naam}: ophalen mislukt:`, err.message); }
+    }
+  } catch (err) { console.warn('⚠️ Emoji voor de gokkast ophalen mislukt:', err.data?.error || err.message); }
+  return _casinoPlaatjes;
+}
+
+// ── Het venster ──────────────────────────────────────────────────────────────
 
 const casinoStand = (userId) =>
   `_U heeft ${puntenWoord(loadScores()[userId] || 0)}. Inzet hoogstens ${casinoPlafond(userId)}; nog ${resterendVandaag(loadDaglimieten(), 'casino', userId, dagSleutel())} van ${DAGLIMIETEN.casino} spellen vandaag._`;
 const casinoTekst = (tekst) => ({ type: 'section', text: { type: 'mrkdwn', text: tekst } });
 const casinoKnop = (action_id, tekst, style) => ({ type: 'button', action_id, text: { type: 'plain_text', text: tekst }, ...(style ? { style } : {}) });
-const casinoInzetVeld = (vorige) => ({
-  type: 'input', block_id: 'inzet_block', label: { type: 'plain_text', text: 'Inzet' },
-  element: { type: 'number_input', action_id: 'inzet_input', is_decimal_allowed: false, min_value: '1', initial_value: String(vorige || 1) },
-});
-
-function casinoLobby(userId, melding = null) {
-  return {
-    type: 'modal', callback_id: 'modal_casino', title: CASINO_TITEL, close: CASINO_SLUIT,
-    blocks: [
-      ...(melding ? [casinoTekst(melding), { type: 'divider' }] : []),
-      casinoTekst(`🎰 *Welkom in het Casino van de Kroket God.* Het huis wint altijd, behalve als het even niet oplet.\n${casinoStand(userId)}`),
-      { type: 'actions', elements: [casinoKnop('casino_blackjack', '🃏 Blackjack', 'primary'), casinoKnop('casino_roulette', '🎡 Roulette', 'primary')] },
-    ],
-  };
-}
-
-function blackjackVenster(userId, { inzet, melding } = {}) {
-  return {
-    type: 'modal', callback_id: 'modal_casino_bj', title: CASINO_TITEL, close: CASINO_SLUIT,
-    submit: { type: 'plain_text', text: 'Deel' },
-    blocks: [
-      ...(melding ? [casinoTekst(melding), { type: 'divider' }] : []),
-      casinoTekst(`🃏 *Blackjack.* De bank pakt tot 17. Blackjack betaalt 3:2, verdubbelen mag op de eerste twee kaarten.\n${casinoStand(userId)}`),
-      casinoInzetVeld(inzet),
-      { type: 'actions', elements: [casinoKnop('casino_roulette', '🎡 Naar roulette')] },
-    ],
-  };
-}
-
+const casinoGetal = (n) => n.toFixed(2).replace('.', ',');
 const kaartenTekst = (kaarten) => kaarten.map(k => `\`${k}\``).join(' ');
-function tafelTekst(hand, open) {
+const openCasinoSpel = (userId) => { const h = loadCasinoHanden()[userId]; return h && { spel: 'blackjack', ...h }; };
+const leesCasinoMeta = (view) => { try { return JSON.parse(view?.private_metadata || '{}'); } catch { return {}; } };
+
+// De tafel als tekst: wat er op het plaatje staat, voor als het plaatje niet laadt.
+function tafelTekst(hand, open = false) {
+  if (hand.spel === 'hogerlager') return `🃏 ${kaartenTekst(hand.kaarten.slice(-6))}\n💰 Pot: *${casinoGetal(hand.pot)}* _(inzet ${hand.inzet})_`;
   const bank = open ? `${kaartenTekst(hand.bank)}  *${handWaarde(hand.bank).totaal}*` : `${kaartenTekst(hand.bank.slice(0, 1))} \`??\``;
   return `🏦 Bank: ${bank}\n🙋 U: ${kaartenTekst(hand.speler)}  *${handWaarde(hand.speler).totaal}*\n_Inzet: ${puntenWoord(hand.inzet)}${hand.verdubbeld ? ' (verdubbeld)' : ''}_`;
 }
+const tafelBeeld = (hand) => (hand.spel === 'hogerlager' ? hogerLagerBeeld(hand) : blackjackBeeld(hand));
 
-function blackjackTafel(userId, hand) {
-  const knoppen = [casinoKnop('casino_bj_kaart', 'Kaart', 'primary'), casinoKnop('casino_bj_pas', 'Pas')];
-  if (magVerdubbelen(hand) && (loadScores()[userId] || 0) >= hand.inzet) knoppen.push(casinoKnop('casino_bj_dubbel', `Verdubbel (+${hand.inzet})`, 'danger'));
+function startKnoppen(spel, inzet) {
+  const rij = (elements) => ({ type: 'actions', elements });
+  if (spel === 'blackjack') return [rij([casinoKnop('casino_zet_deel', `🃏 Deel (${inzet})`, 'primary')])];
+  if (spel === 'gokkast') return [rij([casinoKnop('casino_zet_hendel', `🎰 Trek aan de hendel (${inzet})`, 'primary')])];
+  if (spel === 'hogerlager') return [rij([casinoKnop('casino_zet_start', `🃏 Deel een kaart (${inzet})`, 'primary')])];
+  if (spel === 'dobbelen') return [rij(Object.entries(DOBBELKEUZES).map(([k, naam]) => casinoKnop(`casino_zet_${k}`, `${naam} · ${k === 'zeven' ? '4:1' : '1:1'}`, 'primary')))];
+  return [
+    rij(Object.entries(ROULETTE_KNOPPEN).map(([k, naam]) => casinoKnop(`casino_zet_${k}`, naam))),
+    rij([{ type: 'static_select', action_id: 'casino_zet_getal', placeholder: { type: 'plain_text', text: `Los getal (${LOS_GETAL_MAX} punt)…` },
+      options: Array.from({ length: 37 }, (_, n) => ({ text: { type: 'plain_text', text: String(n) }, value: String(n) })) }]),
+  ];
+}
+
+function spelKnoppen(userId, hand) {
+  if (hand.spel === 'hogerlager') {
+    const open = hand.kaarten.at(-1);
+    return [
+      ...['hoger', 'lager'].filter(k => hlFactor(open, k) > 0)
+        .map(k => casinoKnop(`casino_zet_${k}`, `${k === 'hoger' ? '▲ Hoger' : '▼ Lager'} ×${casinoGetal(hlFactor(open, k))}`, 'primary')),
+      casinoKnop('casino_zet_cash', `💰 Cash ${hlUitbetaling(hand)}`),
+    ];
+  }
+  const knoppen = [casinoKnop('casino_zet_kaart', 'Kaart', 'primary'), casinoKnop('casino_zet_pas', 'Pas')];
+  if (magVerdubbelen(hand) && (loadScores()[userId] || 0) >= hand.inzet) knoppen.push(casinoKnop('casino_zet_dubbel', `Verdubbel (+${hand.inzet})`, 'danger'));
+  return knoppen;
+}
+
+function casinoVenster(userId, { spel = 'lobby', inzet = 1, beeld = null, melding = null } = {}) {
+  const hand = openCasinoSpel(userId);
+  const max = casinoPlafond(userId);
+  const gekozen = Math.max(1, Math.min(inzet, max || 1));
+  const blocks = beeld ? [{ type: 'image', image_url: beeld, alt_text: spel === 'lobby' ? 'Het casino' : CASINO_SPELLEN[spel].plek }] : [];
+  if (spel === 'lobby') {
+    blocks.push(casinoTekst(`🎰 *Welkom in het Casino van de Kroket God.* Het huis wint altijd, behalve als het even niet oplet.\n${casinoStand(userId)}` +
+      (hand ? `\n_U heeft nog een open spel: ${CASINO_SPELLEN[hand.spel].naam}._` : '')));
+    blocks.push({ type: 'actions', elements: Object.entries(CASINO_SPELLEN).map(([id, s]) => casinoKnop(`casino_naar_${id}`, s.naam, 'primary')) });
+  } else if (hand?.spel === spel) {
+    blocks.push(casinoTekst([melding, `*${CASINO_SPELLEN[spel].naam}*`, tafelTekst(hand)].filter(Boolean).join('\n')));
+    blocks.push({ type: 'actions', elements: spelKnoppen(userId, hand) });
+  } else {
+    blocks.push(casinoTekst([melding, `*${CASINO_SPELLEN[spel].naam}.* ${CASINO_SPELLEN[spel].uitleg}`, casinoStand(userId)].filter(Boolean).join('\n')));
+    if (max >= 1) {
+      blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: '*Uw inzet:*' }] },
+        { type: 'actions', elements: Array.from({ length: max }, (_, i) => casinoKnop(`casino_inzet_${i + 1}`, String(i + 1), i + 1 === gekozen ? 'primary' : undefined)) });
+    }
+    blocks.push(...startKnoppen(spel, gekozen));
+  }
+  if (spel !== 'lobby') blocks.push({ type: 'divider' }, { type: 'actions', elements: [casinoKnop('casino_naar_lobby', '← Naar de lobby')] });
   return {
-    type: 'modal', callback_id: 'modal_casino_tafel', title: CASINO_TITEL, close: CASINO_SLUIT,
-    blocks: [casinoTekst(`🃏 *Blackjack*\n${tafelTekst(hand, false)}`), { type: 'actions', elements: knoppen }],
+    type: 'modal', callback_id: 'modal_casino', title: CASINO_TITEL, close: CASINO_SLUIT, blocks,
+    private_metadata: JSON.stringify({ spel, inzet: gekozen, beeld, melding: melding ? melding.slice(0, 1500) : null }),
   };
 }
 
-// Rekent een afgelopen hand af; geeft het venster voor de volgende hand terug.
-function sluitBlackjack(userId, hand) {
+// Mislukt het bijwerken met plaatje (Slack kan het niet ophalen), dan zonder.
+async function toonCasino(client, viewId, userId, meta) {
+  for (const m of meta.beeld ? [meta, { ...meta, beeld: null }] : [meta]) {
+    try { await client.views.update({ view_id: viewId, view: casinoVenster(userId, m) }); return; }
+    catch (err) { console.warn('⚠️ Casinovenster bijwerken mislukt:', err.data?.error || err.message); }
+  }
+}
+
+const _casinoKlikken = new Map(); // userId → volgnummer: een trage klik overschrijft geen snellere
+
+// Het commando opent de lobby meteen (een trigger_id is maar drie seconden geldig) en zet het
+// plaatje erin zodra het er is, tenzij er intussen al geklikt is.
+async function openCasino(client, triggerId, userId) {
+  const r = await client.views.open({ trigger_id: triggerId, view: casinoVenster(userId) });
+  const nr = _casinoKlikken.get(userId) || 0;
+  if (!r?.view?.id) return;
+  try {
+    const beeld = await casinoBeeldUrl(lobbyBeeld());
+    if ((_casinoKlikken.get(userId) || 0) === nr) await toonCasino(client, r.view.id, userId, { spel: 'lobby', beeld });
+  } catch (err) { console.warn('⚠️ Casinoplaatje mislukt:', err.message); }
+}
+
+// ── De zetten ────────────────────────────────────────────────────────────────
+// Elke functie verandert de stand zonder await (dus atomair) en geeft { meta, teken, netto } terug:
+// het volgende scherm, een functie die de nieuwe tafel als svg tekent (null = geen plaatje,
+// undefined = het huidige houden) en de nettowinst als er afgerekend is. null = niets te doen.
+
+function openCasinoTafel(userId, hand, meta) {
+  saveCasinoHanden({ ...loadCasinoHanden(), [userId]: hand });
+  return { meta: { ...meta, spel: hand.spel, melding: null }, teken: () => tafelBeeld(hand) };
+}
+
+function sluitCasinoTafel(userId) {
   const handen = loadCasinoHanden();
   delete handen[userId];
   saveCasinoHanden(handen);
-  const wat = `${handWaarde(hand.speler).totaal} tegen ${handWaarde(hand.bank).totaal}${hand.verdubbeld ? ', verdubbeld' : ''}`;
-  const { tekst, netto } = boekCasinoUitslag(userId, 'blackjack', hand.inzet, blackjackUitbetaling(hand), wat);
-  const kop = isBlackjack(hand.speler) && !isBlackjack(hand.bank) ? '🃏 *Blackjack!*'
-    : isBlackjack(hand.bank) ? '🏦 *De bank heeft blackjack.*'
-    : handWaarde(hand.speler).totaal > 21 ? '💥 *Gekocht.*'
-    : handWaarde(hand.bank).totaal > 21 ? '💥 *De bank koopt zich dood.*' : '🃏 *Uitslag*';
-  const view = blackjackVenster(userId, { inzet: hand.verdubbeld ? hand.inzet / 2 : hand.inzet, melding: `${kop}\n${tafelTekst(hand, true)}\n${tekst}` });
-  return { view, netto };
 }
 
-function rouletteVenster(userId, { inzet, soort, getal, melding } = {}) {
-  const opties = Object.entries(INZETSOORTEN).map(([value, s]) => ({ text: { type: 'plain_text', text: s.naam }, value }));
-  const gekozen = opties.find(o => o.value === soort);
+function sluitBlackjack(userId, hand, meta) {
+  sluitCasinoTafel(userId);
+  const s = handWaarde(hand.speler).totaal, b = handWaarde(hand.bank).totaal;
+  const wat = `${s} tegen ${b}${hand.verdubbeld ? ', verdubbeld' : ''}`;
+  const { tekst, netto } = boekCasinoUitslag(userId, 'blackjack', hand.inzet, blackjackUitbetaling(hand), wat);
+  const kop = isBlackjack(hand.speler) && !isBlackjack(hand.bank) ? 'BLACKJACK!'
+    : isBlackjack(hand.bank) ? 'BANK HEEFT BLACKJACK'
+    : s > 21 ? 'GEKOCHT'
+    : b > 21 ? 'DE BANK KOOPT ZICH DOOD'
+    : netto > 0 ? 'GEWONNEN' : netto === 0 ? 'GELIJK' : 'VERLOREN';
   return {
-    type: 'modal', callback_id: 'modal_casino_roulette', title: CASINO_TITEL, close: CASINO_SLUIT,
-    submit: { type: 'plain_text', text: 'Draai' },
-    blocks: [
-      ...(melding ? [casinoTekst(melding), { type: 'divider' }] : []),
-      casinoTekst(`🎡 *Roulette.* Eén nul. Kleur, even/oneven en laag/hoog betalen 1:1, een dozijn 2:1, een los getal 35:1 (hoogstens ${puntenWoord(LOS_GETAL_MAX)} inzet).\n${casinoStand(userId)}`),
-      casinoInzetVeld(inzet),
-      { type: 'input', block_id: 'soort_block', label: { type: 'plain_text', text: 'Inzetten op' },
-        element: { type: 'static_select', action_id: 'soort_input', options: opties, ...(gekozen ? { initial_option: gekozen } : {}) } },
-      { type: 'input', block_id: 'getal_block', optional: true, label: { type: 'plain_text', text: 'Getal (alleen bij een los getal)' },
-        element: { type: 'number_input', action_id: 'getal_input', is_decimal_allowed: false, min_value: '0', max_value: '36',
-          ...(Number.isInteger(getal) ? { initial_value: String(getal) } : {}) } },
-      { type: 'actions', elements: [casinoKnop('casino_blackjack', '🃏 Naar blackjack')] },
-    ],
+    meta: { ...meta, spel: 'blackjack', inzet: hand.verdubbeld ? hand.inzet / 2 : hand.inzet, melding: `🃏 *${kop}*\n${tafelTekst(hand, true)}\n${tekst}` },
+    teken: () => blackjackBeeld(hand, { open: true, uitslag: { kop, netto } }),
+    netto,
   };
 }
 
-async function werkCasinoBij(client, viewId, view) {
-  try { await client.views.update({ view_id: viewId, view }); }
-  catch (err) { console.warn('⚠️ Casinovenster bijwerken mislukt:', err.data?.error || err.message); }
+function sluitHogerLager(userId, hand, meta) {
+  sluitCasinoTafel(userId);
+  const { tekst, netto } = boekCasinoUitslag(userId, 'hogerlager', hand.inzet, hlUitbetaling(hand), `${hand.kaarten.length - 1} keer geraden`);
+  const kop = hand.pot <= 0 ? 'MIS' : hand.pot >= HL_MAX * hand.inzet ? 'PLAFOND BEREIKT' : 'GECASHT';
+  const dicht = { ...hand, klaar: true };
+  return {
+    meta: { ...meta, spel: 'hogerlager', inzet: hand.inzet, melding: `🃏 *${kop}*\n${tafelTekst(dicht)}\n${tekst}` },
+    teken: () => hogerLagerBeeld(dicht, { uitslag: { kop, netto } }),
+    netto,
+  };
 }
 
-app.action('casino_blackjack', async ({ ack, body, client }) => {
-  await ack();
-  const hand = loadCasinoHanden()[body.user.id];
-  await werkCasinoBij(client, body.view.id, hand ? blackjackTafel(body.user.id, hand) : blackjackVenster(body.user.id));
-});
+function voerCasinoZetUit(userId, meta, soort, zet, waarde) {
+  const inzet = meta.inzet || 1;
+  const hand = openCasinoSpel(userId);
+  const fout = (tekst) => ({ meta: { ...meta, melding: `⚠️ _${tekst}_` }, teken: undefined });
 
-app.action('casino_roulette', async ({ ack, body, client }) => {
-  await ack();
-  await werkCasinoBij(client, body.view.id, rouletteVenster(body.user.id));
-});
+  if (soort === 'inzet') return { meta: { ...meta, inzet: Math.min(Math.max(1, Number(zet) || 1), CASINO_MAX_INZET) }, teken: undefined };
+  if (soort === 'naar') {
+    if (zet === 'lobby') return { meta: { spel: 'lobby', inzet }, teken: () => lobbyBeeld() };
+    if (!CASINO_SPELLEN[zet]) return null;
+    if (hand) return { meta: { spel: hand.spel, inzet, melding: hand.spel === zet ? null : '_Speel eerst uw open spel af._' }, teken: () => tafelBeeld(hand) };
+    return { meta: { spel: zet, inzet }, teken: zet === 'gokkast' ? (p) => gokkastBeeld(GOKKAST_RUST, p) : null };
+  }
 
-app.view('modal_casino_bj', async ({ ack, body, view, client }) => {
-  const userId = body.user.id;
-  const open = loadCasinoHanden()[userId];
-  if (open) {
-    await ack({ response_action: 'update', view: blackjackTafel(userId, open) });
-    return;
-  }
-  const inzet = Number(view.state.values.inzet_block?.inzet_input?.value);
-  const fout = casinoInzetFout(userId, inzet);
-  if (fout) {
-    await ack({ response_action: 'errors', errors: { inzet_block: fout } });
-    return;
-  }
-  boekCasinoSpel(userId, inzet);
-  const hand = deel(Math.random, inzet);
-  if (!hand.klaar) {
-    saveCasinoHanden({ ...loadCasinoHanden(), [userId]: hand });
-    await ack({ response_action: 'update', view: blackjackTafel(userId, hand) });
-    return;
-  }
-  const { view: uitslag, netto } = sluitBlackjack(userId, hand);
-  await ack({ response_action: 'update', view: uitslag });
-  await verkondigCasinoWinst(client, userId, 'blackjack', netto);
-});
-
-for (const [actie, zet] of [['casino_bj_kaart', kaart], ['casino_bj_pas', speelBank], ['casino_bj_dubbel', verdubbel]]) {
-  app.action(actie, async ({ ack, body, client }) => {
-    await ack();
-    const userId = body.user.id;
-    const hand = loadCasinoHanden()[userId];
-    if (!hand) return; // dubbele klik: de eerste klik rekende al af en toont de uitslag
-    let view, netto = null;
-    if (actie === 'casino_bj_dubbel' && !(magVerdubbelen(hand) && (loadScores()[userId] || 0) >= hand.inzet)) view = blackjackTafel(userId, hand);
-    else {
-      if (actie === 'casino_bj_dubbel') pasScoreAan(userId, -hand.inzet);
-      const nieuw = zet(hand);
-      if (nieuw.klaar) ({ view, netto } = sluitBlackjack(userId, nieuw));
-      else {
-        saveCasinoHanden({ ...loadCasinoHanden(), [userId]: nieuw });
-        view = blackjackTafel(userId, nieuw);
-      }
+  // Zetten binnen een open spel. Geen open spel (meer) van die soort: een dubbele klik, niets doen.
+  if (['kaart', 'pas', 'dubbel'].includes(zet)) {
+    if (hand?.spel !== 'blackjack') return null;
+    if (zet === 'dubbel') {
+      if (!magVerdubbelen(hand) || (loadScores()[userId] || 0) < hand.inzet) return openCasinoTafel(userId, hand, meta);
+      pasScoreAan(userId, -hand.inzet);
     }
-    await werkCasinoBij(client, body.view.id, view);
-    if (netto !== null) await verkondigCasinoWinst(client, userId, 'blackjack', netto);
-  });
+    const nieuw = { kaart, pas: speelBank, dubbel: verdubbel }[zet](hand);
+    return nieuw.klaar ? sluitBlackjack(userId, nieuw, meta) : openCasinoTafel(userId, nieuw, meta);
+  }
+  if (['hoger', 'lager', 'cash'].includes(zet)) {
+    if (hand?.spel !== 'hogerlager') return null;
+    if (zet === 'cash') return sluitHogerLager(userId, hand, meta);
+    if (!hlFactor(hand.kaarten.at(-1), zet)) return openCasinoTafel(userId, hand, meta);
+    const nieuw = hlRaad(hand, zet, Math.random);
+    return nieuw.klaar ? sluitHogerLager(userId, nieuw, meta) : openCasinoTafel(userId, nieuw, meta);
+  }
+
+  // Een nieuw spel. Wie nog een open spel heeft, speelt dat eerst af.
+  if (hand) return { meta: { ...meta, spel: hand.spel, melding: '_Speel eerst uw open spel af._' }, teken: () => tafelBeeld(hand) };
+  const spel = meta.spel;
+  const getal = zet === 'getal' ? Number(waarde) : null;
+  const geldig = (spel === 'blackjack' && zet === 'deel') || (spel === 'hogerlager' && zet === 'start') || (spel === 'gokkast' && zet === 'hendel')
+    || (spel === 'dobbelen' && DOBBELKEUZES[zet]) || (spel === 'roulette' && INZETSOORTEN[zet]);
+  if (!geldig) return null;
+  const reden = casinoInzetFout(userId, inzet) || (spel === 'roulette' ? toetsRoulette(zet, inzet, getal)?.tekst : null);
+  if (reden) return fout(reden);
+  boekCasinoSpel(userId, inzet);
+
+  if (spel === 'blackjack') {
+    const nieuw = { spel: 'blackjack', ...deel(Math.random, inzet) };
+    return nieuw.klaar ? sluitBlackjack(userId, nieuw, meta) : openCasinoTafel(userId, nieuw, meta);
+  }
+  if (spel === 'hogerlager') return openCasinoTafel(userId, hlStart(Math.random, inzet), meta);
+  if (spel === 'gokkast') {
+    const rollen = trekHendel(Math.random);
+    const factor = gokkastFactor(rollen);
+    const { tekst, netto } = boekCasinoUitslag(userId, 'gokkast', inzet, gokkastUitbetaling(rollen, inzet), rollen.join(' '));
+    const kop = factor === GOKKAST.at(-1).drie && new Set(rollen).size === 1 ? 'JACKPOT' : new Set(rollen).size === 1 ? 'DRIE GELIJK' : factor ? 'TWEE GELIJK' : 'NIETS';
+    return { meta: { ...meta, melding: `🎰 ${rollen.map(r => `:${r}:`).join(' ')}  *${kop}*\n${tekst}` }, teken: (p) => gokkastBeeld(rollen, p, { uitslag: { kop, netto } }), netto };
+  }
+  if (spel === 'dobbelen') {
+    const stenen = werp(Math.random);
+    const { tekst, netto } = boekCasinoUitslag(userId, 'dobbelen', inzet, dobbelUitbetaling(zet, inzet, stenen), `${DOBBELKEUZES[zet]}, gooide ${stenen[0] + stenen[1]}`);
+    const kop = netto > 0 ? 'GEWONNEN' : netto === 0 ? 'ZEVEN · INZET TERUG' : 'VERLOREN';
+    const opWat = `${inzet} op ${DOBBELKEUZES[zet]}`;
+    return { meta: { ...meta, melding: `🎲 ${stenen[0]} + ${stenen[1]} = *${stenen[0] + stenen[1]}*. U zette ${opWat}.\n${tekst}` },
+      teken: () => dobbelBeeld(stenen, { inzetTekst: opWat, uitslag: { kop, netto } }), netto };
+  }
+  const uitkomst = draai(Math.random);
+  const opWat = zet === 'getal' ? `getal ${getal}` : INZETSOORTEN[zet].naam.replace(/^[^\p{L}\d]+/u, '');
+  const { tekst, netto } = boekCasinoUitslag(userId, 'roulette', inzet, rouletteUitbetaling(zet, inzet, uitkomst, getal), `${opWat}, viel ${uitkomst}`);
+  const bal = { groen: '🟢', rood: '🔴', zwart: '⚫' }[kleurVan(uitkomst)];
+  return {
+    meta: { ...meta, melding: `🎡 Het balletje valt op ${bal} *${uitkomst}*. U zette ${puntenWoord(inzet)} op ${opWat}.\n${tekst}` },
+    teken: () => rouletteBeeld(uitkomst, { inzetTekst: `${inzet} op ${opWat}`, uitslag: { kop: netto > 0 ? 'RAAK' : 'HET HUIS WINT', netto } }),
+    netto,
+  };
 }
 
-app.view('modal_casino_roulette', async ({ ack, body, view, client }) => {
+app.action(/^casino_(naar|inzet|zet)_/, async ({ ack, body, action, client }) => {
+  await ack();
   const userId = body.user.id;
-  const w = view.state.values;
-  const inzet = Number(w.inzet_block?.inzet_input?.value);
-  const soort = w.soort_block?.soort_input?.selected_option?.value;
-  const getalRuw = w.getal_block?.getal_input?.value;
-  const getal = getalRuw ? Number(getalRuw) : null;
-  const fout = casinoInzetFout(userId, inzet);
-  const soortFout = fout ? null : toetsRoulette(soort, inzet, getal);
-  if (fout || soortFout) {
-    await ack({ response_action: 'errors', errors: fout ? { inzet_block: fout } : { [`${soortFout.veld}_block`]: soortFout.tekst } });
-    return;
+  if (casinoToegangReden(userId) || !body.view?.id) return;
+  const nr = (_casinoKlikken.get(userId) || 0) + 1;
+  _casinoKlikken.set(userId, nr);
+  const meta = { inzet: 1, ...leesCasinoMeta(body.view) };
+  if (!CASINO_SPELLEN[meta.spel]) meta.spel = 'lobby';
+  meta.inzet = Math.min(Math.max(1, Number(meta.inzet) || 1), CASINO_MAX_INZET);
+  const [, soort, zet] = action.action_id.match(/^casino_(naar|inzet|zet)_(.+)$/);
+  const uit = voerCasinoZetUit(userId, meta, soort, zet, action.selected_option?.value);
+  if (!uit) return;
+  let beeld = uit.teken === undefined ? meta.beeld || null : null;
+  if (uit.teken) {
+    try { beeld = await casinoBeeldUrl(uit.teken(await casinoPlaatjes(client))); }
+    catch (err) { console.warn('⚠️ Casinoplaatje mislukt:', err.message); }
   }
-  boekCasinoSpel(userId, inzet);
-  const uitkomst = draai(Math.random);
-  const opWat = soort === 'getal' ? `getal ${getal}` : INZETSOORTEN[soort].naam;
-  const { tekst, netto } = boekCasinoUitslag(userId, 'roulette', inzet, rouletteUitbetaling(soort, inzet, uitkomst, getal), `${opWat}, viel ${uitkomst}`);
-  const bal = { groen: '🟢', rood: '🔴', zwart: '⚫' }[kleurVan(uitkomst)];
-  await ack({ response_action: 'update', view: rouletteVenster(userId, {
-    inzet, soort, getal, melding: `🎡 Het balletje valt op ${bal} *${uitkomst}*. U zette ${puntenWoord(inzet)} op ${opWat}.\n${tekst}` }) });
-  await verkondigCasinoWinst(client, userId, 'roulette', netto);
+  if (_casinoKlikken.get(userId) === nr) await toonCasino(client, body.view.id, userId, { ...uit.meta, beeld });
+  if (uit.netto != null) await verkondigCasinoWinst(client, userId, uit.meta.spel, uit.netto);
 });
 
 // ── De Vetpot en Dubbel of niks (rekenregels en waarom: lib/vetbad.js) ────────
