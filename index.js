@@ -167,6 +167,7 @@ const {
   DOBBELKEUZES, werp, dobbelUitbetaling,
 } = require('./lib/casino.js');
 const { blackjackBeeld, rouletteBeeld, gokkastBeeld, hogerLagerBeeld, dobbelBeeld, lobbyBeeld, naarPng } = require('./lib/casinobeeld.js');
+const { GOKPAUZE_DAGEN, naCasinoSpel, opRustdag, moetWaarschuwen, naWaarschuwing, naPoging } = require('./lib/gokpauze.js');
 const { createHash } = require('crypto');
 const {
   VERBOND_MAX, VERZOEK_GELDIG_MS, groepen: verbondGroepen, naarOpslag: verbondNaarOpslag,
@@ -6477,7 +6478,8 @@ async function voerKroketCommandoUit({ command, respond, client }) {
     // ── Het Casino: ook een venster, dus ook vóór de ontvangstbevestiging.
     if (/^casino$/i.test(input)) {
       const reden = casinoToegangReden(command.user_id);
-      if (reden) await respond({ text: `_${reden}_`, response_type: 'ephemeral' });
+      const pauze = reden ? null : await gokpauzeWeigering(command.user_id, 'het casino binnen te lopen');
+      if (reden || pauze) await respond({ text: pauze || `_${reden}_`, response_type: 'ephemeral' });
       else await openCasino(client, command.trigger_id, command.user_id);
       return;
     }
@@ -7402,6 +7404,11 @@ async function voerKroketCommandoUit({ command, respond, client }) {
           await respond({ text: '_Een balling bestijgt geen troon. Eerst boete, dan ambitie._', response_type: 'ephemeral' });
           return;
         }
+        const pauze = await gokpauzeWeigering(command.user_id, 'de Frituurkoning uit te dagen om punten');
+        if (pauze) {
+          await respond({ text: pauze, response_type: 'ephemeral' });
+          return;
+        }
         // Lege troon → kroning zonder gevecht.
         if (!troon.koningId || !members[troon.koningId]) {
           writeJSON('troon.json', { koningId: command.user_id, sinds: new Date().toISOString() });
@@ -7534,7 +7541,7 @@ async function voerKroketCommandoUit({ command, respond, client }) {
         return;
       }
       // Dunne wrapper: de logica staat in plaatsKroketGok, gedeeld met de App Home-knop.
-      const gokUitkomst = plaatsKroketGok(command.user_id, keuze);
+      const gokUitkomst = await plaatsKroketGok(command.user_id, keuze);
       await respond({ text: gokUitkomst.tekst, response_type: 'ephemeral' });
       return;
     }
@@ -12138,6 +12145,8 @@ async function voerDuel(client, userId, doelId, channelId, wapenId = null) {
   // Ban-check hoort HIER, niet alleen in de slash-gate: knoppen/modals uit de App Home komen
   // niet langs die gate, en een view die vóór de verbanning is geopend heeft de knoppen nog.
   if (isVerbannen(userId)) return { ok: false, tekst: '_Een balling voert geen duels. Toon eerst berouw._' };
+  const pauze = await gokpauzeWeigering(userId, 'een medelid uit te dagen voor een duel om punten');
+  if (pauze) return { ok: false, tekst: pauze };
   const doelLid = members[doelId];
   if (!doelLid) return { ok: false, tekst: 'De Kroket God kent die volgeling niet.' };
   if (isVerbannen(doelId)) return { ok: false, tekst: `_${doelLid.bijnaam} is verbannen — een duel met een balling levert geen eer op._` };
@@ -12347,6 +12356,8 @@ async function voerRoof(client, userId, doelId, channelId) {
   const dader = members[userId];
   if (!dader) return { ok: false, tekst: 'Alleen leden van de Kroket Illuminati kennen de duistere kunst van de Kroketroof.' };
   if (isVerbannen(userId)) return { ok: false, tekst: '_Een balling die rooft, graaft zijn ballingschap dieper. De poorten blijven dicht._' };
+  const pauze = await gokpauzeWeigering(userId, 'een medelid te beroven, met kans op buit of boete');
+  if (pauze) return { ok: false, tekst: pauze };
   const doelLid = members[doelId];
   if (!doelLid) return { ok: false, tekst: 'De Kroket God kent die volgeling niet.' };
   if (doelId === userId) return { ok: false, tekst: '_Uzelf beroven is boekhoudkundig gezien niets en spiritueel gezien treurig._' };
@@ -13854,6 +13865,68 @@ const VETBAD_MAX_INZET = 10;
 // niet nog eens ongemerkt kan wegnemen. offerExtra in RANGEN telt er nog steeds bij op.
 const VETBAD_BASIS_PER_DAG = 3;
 
+// ── De Gokpauze (regels en waarom: lib/gokpauze.js) ───────────────────────────
+// Vijf casinodagen op rij → een officiële waarschuwing en de dag erna een rustdag zonder gokken.
+// Alles privé: de waarschuwing in het casinovenster en als fluisterbericht, de toespraken bij een
+// poging als antwoord op die poging. Elke gok-actie vraagt gokpauzeWeigering vóór ze iets boekt.
+registreerFeature({ naam: 'gokpauze', state: ['gokpauze.json'] });
+const loadGokpauze = () => readJSON('gokpauze.json', {});
+const saveGokpauze = (d) => writeJSON('gokpauze.json', d);
+const opGokpauze = (userId) => opRustdag(loadGokpauze()[userId], dagSleutel());
+
+function registreerCasinodag(userId) {
+  const d = loadGokpauze();
+  d[userId] = naCasinoSpel(d[userId], dagSleutel());
+  saveGokpauze(d);
+}
+
+// De officiële waarschuwing, precies één keer: de tekst als hij nog gemeld moet worden, anders null.
+function neemGokWaarschuwing(userId) {
+  const d = loadGokpauze();
+  const rec = d[userId];
+  if (!moetWaarschuwen(rec)) return null;
+  d[userId] = naWaarschuwing(rec);
+  saveGokpauze(d);
+  const datum = new Date(`${rec.rustdag}T12:00:00Z`).toLocaleDateString('nl-NL', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'Europe/Amsterdam' });
+  const bijnaam = ontsnapMrkdwn(loadMembers()[userId]?.bijnaam || 'Volgeling');
+  return `:illuminati-kroket: *Officiële waarschuwing van de Hoge Frituurraad* :illuminati-kroket:\n` +
+    `> ${bijnaam}, de Raad heeft u ${GOKPAUZE_DAGEN} dagen op rij aan de tafels van het casino gezien. Eén avond is vermaak; ${GOKPAUZE_DAGEN} dagen achter elkaar is een gewoonte, en een gewoonte die punten kost, begint aan een mens te trekken.\n` +
+    `> Daarom is *${datum}* voor u een verplichte rustdag. Die dag blijven het casino, het Grote Vetbad, de voorspelling over de Kroket van de Dag, duels, roven, de troon en het kopen van aandelen voor u gesloten. Vandaag mag u nog spelen.\n` +
+    '> De Kroket God legt u deze dag op omdat hij u ook volgende maand nog aan zijn tafel wil zien, met een heldere kop.\n' +
+    '— De Almachtige Kroket God';
+}
+
+// Als de keten zwijgt. Oplopend: de laatste blijft staan voor elke volgende poging.
+const GOKPAUZE_VANGNET = [
+  'Vandaag is uw rustdag, volgeling. Vijf dagen achter elkaar aan de tafel is geen toeval meer. De frituur loopt niet weg: haal vandaag een echte kroket, zonder inzet.',
+  'Alweer? Dit is uw tweede poging vandaag, en de Raad ziet het. Wie geen dag zonder gokken kan, gokt niet meer voor zijn plezier. Leg de fiches neer en spreek vandaag een medelid over iets anders dan punten.',
+  'Ik spreek u nu niet als rechter toe, maar als iemand die het beste met u voorheeft. Dit is precies het moment waarop een spel een last wordt. Sluit het venster, doe iets met uw handen, en kom morgen terug als de olie weer helder is.',
+  'U blijft aankloppen bij een deur die vandaag dicht is. Dat zegt meer over de drang dan over het spel. Morgen gaat de deur weer open; vandaag blijft hij dicht.',
+];
+
+// De privé-toespraak bij een poging op de rustdag. `actie`: wat het lid probeerde, als bijzin
+// ("te offeren aan het Grote Vetbad"). Telt de poging, zodat de toon kan oplopen.
+async function gokpauzeToespraak(userId, actie) {
+  const d = loadGokpauze();
+  d[userId] = naPoging(d[userId]);
+  saveGokpauze(d);
+  const poging = d[userId].pogingen;
+  const vangnet = GOKPAUZE_VANGNET[Math.min(poging, GOKPAUZE_VANGNET.length) - 1];
+  const tekst = await kroketResponseMetVangnet(
+    `Een volgeling heeft ${GOKPAUZE_DAGEN} dagen op rij gegokt in het casino van de Kroket God en heeft vandaag een verplichte rustdag. ` +
+    `Toch probeert deze volgeling nu ${actie}. Dit is poging ${poging} van vandaag. ` +
+    'Spreek de volgeling privé toe, met "u", als herder en niet als rechter: je wilt voorkomen dat dit uitgroeit tot een echte gokverslaving. ' +
+    'Warm maar onverbiddelijk: vandaag wordt er niet gegokt. Geef één concreet alternatief voor vandaag, iets zonder punten of kans. ' +
+    (poging > 1 ? 'Er is vandaag al eerder een poging gedaan: wees dringender en persoonlijker dan de vorige keer. ' : '') +
+    'Drie tot vijf zinnen. Geen inleidingszin, geen ondertekening.',
+    260, false, vangnet, 'licht');
+  const hulp = poging >= 3 ? '\n_Speelt dit ook buiten de frituur? Bij loketkansspel.nl praat u anoniem met iemand die er verstand van heeft._' : '';
+  return `🕯️ ${tekst}\n\n_Uw rustdag duurt tot middernacht. Morgen gaat alles weer open._${hulp}`;
+}
+
+// Voor elke gok-actie: null als het mag, anders de toespraak.
+const gokpauzeWeigering = async (userId, actie) => (opGokpauze(userId) ? gokpauzeToespraak(userId, actie) : null);
+
 // ── Het Casino (/kroketgod casino) ────────────────────────────────────────────
 // Spelregels en uitbetaling: lib/casino.js; de plaatjes: lib/casinobeeld.js. Inzet zoals het Vetbad
 // (offerPlafond) maar hoogstens CASINO_MAX_INZET, tien spellen per dag (lib/limieten.js). De inzet
@@ -13903,6 +13976,7 @@ function casinoToegangReden(userId) {
 function casinoInzetFout(userId, inzet) {
   const reden = casinoToegangReden(userId);
   if (reden) return reden;
+  if (opGokpauze(userId)) return 'Vandaag is uw rustdag. Het casino blijft voor u dicht tot middernacht.';
   if (casinoResterend(userId) < 1) return `U speelde vandaag al ${casinoLimiet()} spellen. Het casino gaat morgen weer open.`;
   const max = casinoPlafond(userId);
   if (max < 1) return 'U heeft geen kroketpunten om in te zetten.';
@@ -13914,6 +13988,7 @@ function casinoInzetFout(userId, inzet) {
 function boekCasinoSpel(userId, inzet) {
   saveDaglimieten(boekDaglimiet(loadDaglimieten(), 'casino', userId, dagSleutel()));
   pasScoreAan(userId, -inzet);
+  registreerCasinodag(userId);
 }
 
 function boekCasinoUitslag(userId, spel, inzet, uitbetaling, wat) {
@@ -14043,7 +14118,7 @@ function casinoVenster(userId, { spel = 'lobby', inzet = 1, beeld = null, meldin
   if (spel !== 'lobby') blocks.push({ type: 'divider' }, { type: 'actions', elements: [casinoKnop('casino_naar_lobby', '← Naar de lobby')] });
   return {
     type: 'modal', callback_id: 'modal_casino', title: CASINO_TITEL, close: CASINO_SLUIT, blocks,
-    private_metadata: JSON.stringify({ spel, inzet: gekozen, beeld, melding: melding ? melding.slice(0, 1500) : null }),
+    private_metadata: JSON.stringify({ spel, inzet: gekozen, beeld, melding: melding ? melding.slice(0, 2400) : null }),
   };
 }
 
@@ -14056,6 +14131,7 @@ async function toonCasino(client, viewId, userId, meta) {
 }
 
 const _casinoKlikken = new Map(); // userId → volgnummer: een trage klik overschrijft geen snellere
+const CASINO_OPEN_ZETTEN = new Set(['kaart', 'pas', 'dubbel', 'hoger', 'lager', 'cash']); // binnen een open spel
 
 // Het commando opent de lobby meteen (een trigger_id is maar drie seconden geldig) en zet het
 // plaatje erin zodra het er is, tenzij er intussen al geklikt is.
@@ -14197,8 +14273,18 @@ app.action(/^casino_(naar|inzet|zet)_/, async ({ ack, body, action, client }) =>
   if (!CASINO_SPELLEN[meta.spel]) meta.spel = 'lobby';
   meta.inzet = Math.min(Math.max(1, Number(meta.inzet) || 1), CASINO_MAX_INZET);
   const [, soort, zet] = action.action_id.match(/^casino_(naar|inzet|zet)_(.+)$/);
+  if (soort === 'zet' && !CASINO_OPEN_ZETTEN.has(zet) && opGokpauze(userId)) {
+    const melding = await gokpauzeToespraak(userId, 'een spel te beginnen in het casino');
+    if (_casinoKlikken.get(userId) === nr) await toonCasino(client, body.view.id, userId, { ...meta, melding });
+    return;
+  }
   const uit = voerCasinoZetUit(userId, meta, soort, zet, action.selected_option?.value);
   if (!uit) return;
+  const waarschuwing = neemGokWaarschuwing(userId);
+  if (waarschuwing) {
+    uit.meta.melding = [waarschuwing, uit.meta.melding].filter(Boolean).join('\n\n');
+    postEphemeral(client, KANAAL(), userId, waarschuwing).catch(err => console.warn('⚠️ Gokwaarschuwing fluisteren mislukt:', err.message));
+  }
   let beeld = uit.teken === undefined ? meta.beeld || null : null;
   if (uit.teken) {
     try { beeld = await casinoBeeldUrl(uit.teken(await casinoPlaatjes(client))); }
@@ -14240,6 +14326,8 @@ async function voerOffer(client, userId, inzet, channelId) {
       ? `_U bezit ${punten} kroketpunten en kunt dus niets offeren. Verdien eerst iets; het Vetbad neemt geen schuldbrieven._`
       : `🎲 *HET GROTE VETBAD*\n\n> Uw bezit: *${punten}* kroketpunten\n> U mag nu hoogstens *${max}* per offer inzetten (de helft van uw bezit, met een absoluut plafond van ${VETBAD_MAX_INZET})\n> Offers vandaag: *${gedaan}/${offerLimiet(userId)}*\n> 🍯 De Vetpot staat op *${loadVetpot().pot}* — ${jackpotVrij(loadVetpot(), getMondayOfWeek()) ? 'één op de honderd offers slaat hem om, hoogstens één keer per week' : 'deze week al gevallen, volgende week weer te winnen'}\n\nGebruik \`/kroketgod offer [aantal]\` — bijvoorbeeld \`offer ${max}\`.` };
   }
+  const pauze = await gokpauzeWeigering(userId, 'te offeren aan het Grote Vetbad');
+  if (pauze) return { ok: false, tekst: pauze };
   if (inzet > VETBAD_MAX_INZET) {
     return { ok: false, tekst: `_Het Vetbad aanvaardt hoogstens ${VETBAD_MAX_INZET} kroketpunten per offer. Hoogmoed wordt niet beloond._` };
   }
@@ -14662,6 +14750,8 @@ async function koopAandeel(client, koperId, doelId, aantal = 1) {
   const members = loadMembers();
   if (!members[koperId]) return { ok: false, tekst: '_Alleen leden van de Kroket Illuminati worden op de beurs toegelaten._' };
   if (isVerbannen(koperId)) return { ok: false, tekst: '_Een balling heeft geen handelsrecht. Toon eerst berouw met `/kroketgod beroep`._' };
+  const pauze = await gokpauzeWeigering(koperId, 'aandelen te kopen op de Frituurbeurs');
+  if (pauze) return { ok: false, tekst: pauze };
   if (beursWachtOpAfrekening()) return { ok: false, tekst: '_De beurs van vorige week is nog niet afgerekend. Zodra dat gebeurd is, opent de handel weer._' };
 
   const { posities, inzet, vandaag, geteld } = beursDezeWeek();
@@ -19930,6 +20020,8 @@ app.action('vetbad_dubbel', async ({ ack, body, client }) => {
   try {
     const id = body.actions?.[0]?.value;
     const userId = body.user.id;
+    const pauze = await gokpauzeWeigering(userId, 'zijn winst nog eens in te zetten met dubbel of niks');
+    if (pauze) { await meldKnopTerug(client, body, pauze); return; }
     const nu = Date.now();
     // Lezen, toetsen en als gespeeld markeren zonder await ertussen: een dubbelklik of een tweede
     // tabblad speelt anders twee keer met dezelfde winst.
@@ -20193,16 +20285,18 @@ app.action('open_gok', async ({ ack, body, client }) => {
 
 app.view('modal_gok', async ({ ack, body, view, client }) => {
   await ack();
-  const uitkomst = plaatsKroketGok(body.user.id, view.state.values.keuze?.keuze?.selected_option?.value);
+  const uitkomst = await plaatsKroketGok(body.user.id, view.state.values.keuze?.keuze?.selected_option?.value);
   await publiceerAppHome(client, body.user.id, uitkomst.tekst);
 });
 
 // Gedeelde gok-logica: één implementatie voor het slash-commando en de App Home-knop, hetzelfde
 // patroon als voerDuel/voerRoof/koopWinkelItem. Stond eerder alleen inline in de slash-handler.
-function plaatsKroketGok(userId, keuze) {
+async function plaatsKroketGok(userId, keuze) {
   const members = loadMembers();
   if (!members[userId]) return { ok: false, tekst: 'Alleen leden van de Kroket Illuminati mogen het oordeel voorspellen.' };
   if (isVerbannen(userId)) return { ok: false, tekst: '_Een balling voorspelt niets. Toon eerst berouw._' };
+  const pauze = await gokpauzeWeigering(userId, 'te gokken op het oordeel over de Kroket van de Dag');
+  if (pauze) return { ok: false, tekst: pauze };
   if (keuze !== 'krokant' && keuze !== 'slap') {
     return { ok: false, tekst: '_Voorspel `krokant` of `slap`._' };
   }
