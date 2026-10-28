@@ -175,7 +175,7 @@ const {
   toetsNieuweGast, bekendeGasten, toetsBekendeGast, naamTrefwoorden, kiesTrefwoorden,
 } = require('./lib/gasten.js');
 const { FUNCTIES, uitlichtPrompt, bouwUitlichting } = require('./lib/nieuwtjes.js');
-const { schetsVan, andereGasten, kandidatenVoorOnderling, kiesAntwoorder } = require('./lib/gastenkring.js');
+const { schetsVan, andereGasten, kandidatenVoorOnderling, kiesAntwoorder, kiesInvaller } = require('./lib/gastenkring.js');
 const {
   SLIM_PALET, SLIM_KLASSEN, frequentie: emojiFrequentie, kiesRegel: kiesEmojiRegel,
   magReageren: magEmojiReageren, naReactie: naEmojiReactie,
@@ -4940,7 +4940,9 @@ async function postAlsPersona(client, channelId, persona, text, options = {}) {
 // lib/gastenkring.js: een kleine kans, en in het hele kanaal hoogstens eens per drie uur. Zelfde
 // stiltes als de gewone steken (stilmodus, alleen-testkanaal, weekendrust), en de antwoorder moet
 // zijn eigen steek-cooldown voorbij zijn — en die gaat nu weer in.
-let _personaOnderlingLaatst = 0;
+// Begint bij het opstarten, niet bij 0: anders mocht er na elke herstart meteen weer een gast op een
+// gast reageren, en na een paar deploys op een dag was "heel soms" ineens heel vaak.
+let _personaOnderlingLaatst = Date.now();
 function overwegPersonaOnderling(client, channelId, spreker, tekst, threadTs) {
   try {
     if (channelId !== process.env.SLACK_CHANNEL_ID || !String(tekst || '').trim()) return;
@@ -4973,49 +4975,46 @@ function overwegPersonaOnderling(client, channelId, spreker, tekst, threadTs) {
   }
 }
 
-// Rolt een kans om ongevraagd in te vallen op iets dat zojuist in het hoofdkanaal is gezegd
-// (door Kroket God of een lid). Nooit in stille modus, alleen-testkanaal of weekendrust, en met
-// een cooldown per persona zodat er niet te vaak wordt meegepraat.
-function magPersonaInterjecteren(personaId, kans, cooldownMs = PERSONA_INTERJECT_COOLDOWN_MS) {
-  if (instelling('stilModus') || instelling('alleenTestkanaal')) return false;
-  if (isWeekendAms() && instelling('weekendRust')) return false;
-  const laatste = _personaLaatsteInterjectie.get(personaId) || 0;
-  if (Date.now() - laatste < cooldownMs) return false;
-  return Math.random() < kans;
-}
-
-// `bron`: 'kroketgod' (na een bericht van de Kroket God, hogere kans) of 'lid' (na een gewoon
-// kanaalbericht, lagere kans). Loopt over alle actieve personas met `ongevraagd: true`.
+// Ongevraagd invallen op iets dat zojuist in het hoofdkanaal is gezegd (door de Kroket God of een
+// lid). Nooit in stille modus, alleen-testkanaal of weekendrust. Hoogstens één gast per bericht en
+// daarna een kanaalbrede pauze (kiesInvaller, lib/gastenkring.js), plus de cooldown per gast.
+// `bron`: 'kroketgod' (na een bericht van de Kroket God, hogere kans) of 'lid' (lagere kans).
 async function overwegPersonaInterjecties(client, channelId, aanleidingTekst, bron, threadTs = undefined, spreker = null) {
   try {
     if (channelId !== process.env.SLACK_CHANNEL_ID) return;
     if (!aanleidingTekst?.trim()) return;
-    const personas = alleActievePersonas(); // incl. de weekvijand, zie weekvijandPersona()
-    for (const [id, persona] of Object.entries(personas)) {
-      if (persona.actief === false || !persona.ongevraagd) continue;
+    if (instelling('stilModus') || instelling('alleenTestkanaal')) return;
+    if (isWeekendAms() && instelling('weekendRust')) return;
+    const nu = Date.now();
+    const kandidaten = Object.entries(alleActievePersonas()) // incl. de weekvijand, zie weekvijandPersona()
       // Gerichte persona: alleen invallen op een bericht van zíjn lid. Berichten van de Kroket
       // God zelf (bron 'kroketgod') hebben geen spreker, dus die slaat hij per definitie over.
-      if (persona.alleenVoorLid && !personaMagReagerenOp(persona, spreker)) continue;
-      const kans = bron === 'kroketgod'
-        ? (persona.interjectKans ?? PERSONA_INTERJECT_KANS)
-        : (persona.memberInterjectKans ?? PERSONA_MEMBER_INTERJECT_KANS);
-      if (!magPersonaInterjecteren(id, kans, personaCooldownMs(persona))) continue;
-      _personaLaatsteInterjectie.set(id, Date.now());
-      const vertraging = 4000 + Math.floor(Math.random() * 6000); // 4-10s, voelt als een reactie
-      setTimeout(async () => {
-        try {
-          const tekst = await personaResponse(
-            { naam: persona.naam, systemPrompt: persona.systemPrompt },
-            `Er werd zojuist in het kanaal gezegd: "${aanleidingTekst.substring(0, 400)}". ` +
-            `Val ongevraagd in met een korte, droge steek in jouw karakter. Geen inleidingszin.`,
-            150
-          );
-          await postAlsPersona(client, channelId, persona, tekst, threadTs ? { thread_ts: threadTs } : undefined);
-        } catch (err) {
-          console.warn(`Persona-interjectie (${persona.naam}) mislukt:`, err.message);
-        }
-      }, vertraging);
-    }
+      .filter(([id, p]) => p.actief !== false && p.ongevraagd && personaMagReagerenOp(p, spreker)
+        && nu - (_personaLaatsteInterjectie.get(id) || 0) >= personaCooldownMs(p))
+      .map(([id, p]) => [id, p, bron === 'kroketgod'
+        ? (p.interjectKans ?? PERSONA_INTERJECT_KANS)
+        : (p.memberInterjectKans ?? PERSONA_MEMBER_INTERJECT_KANS)]);
+    // Het laatste gastbericht: uit het archief, want dat overleeft een herstart; en uit de Map, want
+    // een net gekozen gast staat pas na zijn vertraging en LLM-aanroep in het archief.
+    const laatste = Math.max(entriesTussen({ soort: 'persona', max: 1 })[0]?.ts || 0, ..._personaLaatsteInterjectie.values());
+    const keuze = kiesInvaller(kandidaten, { laatste, nu });
+    if (!keuze) return;
+    const [id, persona] = keuze;
+    _personaLaatsteInterjectie.set(id, nu);
+    const vertraging = 4000 + Math.floor(Math.random() * 6000); // 4-10s, voelt als een reactie
+    setTimeout(async () => {
+      try {
+        const tekst = await personaResponse(
+          { naam: persona.naam, systemPrompt: persona.systemPrompt },
+          `Er werd zojuist in het kanaal gezegd: "${aanleidingTekst.substring(0, 400)}". ` +
+          `Val ongevraagd in met een korte, droge steek in jouw karakter. Geen inleidingszin.`,
+          150
+        );
+        await postAlsPersona(client, channelId, persona, tekst, threadTs ? { thread_ts: threadTs } : undefined);
+      } catch (err) {
+        console.warn(`Persona-interjectie (${persona.naam}) mislukt:`, err.message);
+      }
+    }, vertraging);
   } catch (_) {}
 }
 
