@@ -167,7 +167,8 @@ const {
   DOBBELKEUZES, werp, dobbelUitbetaling,
 } = require('./lib/casino.js');
 const { blackjackBeeld, rouletteBeeld, gokkastBeeld, hogerLagerBeeld, dobbelBeeld, lobbyBeeld, naarPng } = require('./lib/casinobeeld.js');
-const { GOKPAUZE_DAGEN, naCasinoSpel, opRustdag, moetWaarschuwen, naWaarschuwing, naPoging } = require('./lib/gokpauze.js');
+const { GOKPAUZE_DAGEN, naCasinoSpel, opRustdag, moetWaarschuwen, naWaarschuwing, naPoging, zonderRustdag, standVan } = require('./lib/gokpauze.js');
+const { boekSpel: boekCasinoStat, vatSamen: vatCasinoSamen } = require('./lib/casinostats.js');
 const { createHash } = require('crypto');
 const {
   VERBOND_MAX, VERZOEK_GELDIG_MS, groepen: verbondGroepen, naarOpslag: verbondNaarOpslag,
@@ -288,6 +289,24 @@ const app = new App({
         } catch (err) {
           res.writeHead(500, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: err.message }));
+        }
+      },
+    },
+    {
+      // Het casino beheren: iedereen vandaag extra spellen geven, of de rustdag van een lid opheffen.
+      path: '/api/casino',
+      method: ['POST'],
+      handler: async (req, res) => {
+        if (!dashboardAuth(req, res)) return;
+        try {
+          const body = await leesBody(req);
+          const bericht = voerCasinoBeheerUit(body);
+          logAudit('casino', bericht);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: true, bericht }));
+        } catch (err) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, error: err.message }));
         }
       },
     },
@@ -3918,7 +3937,7 @@ function getTijdContext() {
 
 // Het register zelf staat in lib/commandoregister.js; hier alleen de gebruikersafhankelijke getallen.
 function geheimeCommandos(userId) {
-  return commandoRegister({ offerPerDag: offerLimiet(userId), vetbadMax: VETBAD_MAX_INZET, genadeKosten: GENADE_KOSTEN });
+  return commandoRegister({ offerPerDag: offerLimiet(userId), vetbadMax: VETBAD_MAX_INZET, genadeKosten: GENADE_KOSTEN, casinoMax: casinoMax(), casinoPerDag: casinoPerDag() });
 }
 
 // ── Help & Commando's ──────────────────────────────────────────────────────────
@@ -13929,7 +13948,8 @@ const gokpauzeWeigering = async (userId, actie) => (opGokpauze(userId) ? gokpauz
 
 // ── Het Casino (/kroketgod casino) ────────────────────────────────────────────
 // Spelregels en uitbetaling: lib/casino.js; de plaatjes: lib/casinobeeld.js. Inzet zoals het Vetbad
-// (offerPlafond) maar hoogstens CASINO_MAX_INZET, tien spellen per dag (lib/limieten.js). De inzet
+// (offerPlafond) maar hoogstens casinoMax(), casinoPerDag() spellen per dag: beide instelbaar in het
+// dashboard, net als het casino zelf (casinoAan). De cijfers per spel staan in casinostats.json. De inzet
 // gaat eraf als een spel begint, de uitbetaling komt erbij bij het afrekenen; kale boekingen zoals
 // het Vetbad, dus geen roem of verbondszegen.
 // Het venster heeft alleen knoppen: elke zet is een block_action, zonder de drie seconden van een
@@ -13939,7 +13959,7 @@ const gokpauzeWeigering = async (userId, actie) => (opGokpauze(userId) ? gokpauz
 // Een open spel (blackjack, hoger/lager) staat in casino.json en niet in het venster: een herstart
 // of een gesloten venster eet de inzet niet op (wie terugkomt, speelt het af), en een dubbele klik
 // vindt de tweede keer geen spel meer en betaalt dus niet twee keer uit.
-registreerFeature({ naam: 'casino', state: ['casino.json', 'casinobonus.json'] });
+registreerFeature({ naam: 'casino', state: ['casino.json', 'casinobonus.json', 'casinostats.json'] });
 const loadCasinoHanden = () => readJSON('casino.json', {});
 const saveCasinoHanden = (d) => writeJSON('casino.json', d);
 const CASINO_VERKONDIG_VANAF = 10; // nettowinst waarvoor het kanaal het hoort
@@ -13961,14 +13981,18 @@ const CASINO_SPELLEN = {
 const ROULETTE_KNOPPEN = { rood: '🔴 Rood', zwart: '⚫ Zwart', even: 'Even', oneven: 'Oneven', laag: '1–18', hoog: '19–36', dozijn1: '1e 12', dozijn2: '2e 12', dozijn3: '3e 12' };
 const GOKKAST_RUST = Array(3).fill(GOKKAST.at(-1).emoji); // de kast in rust toont de jackpot
 
-const casinoPlafond = (userId) => Math.min(CASINO_MAX_INZET, offerPlafond(userId));
+const casinoMax = () => Number(instelling('casinoMaxInzet')) || CASINO_MAX_INZET;
+const casinoPerDag = () => Number(instelling('casinoPerDag')) || DAGLIMIETEN.casino;
+const casinoPlafond = (userId) => Math.min(casinoMax(), offerPlafond(userId));
 
 // Extra spellen voor iedereen op één dag, per decreet: casinobonus.json = { "2026-10-28": 5 }.
-const casinoLimiet = () => DAGLIMIETEN.casino + (Number(readJSON('casinobonus.json', {})[dagSleutel()]) || 0);
+const casinoBonusVandaag = () => Number(readJSON('casinobonus.json', {})[dagSleutel()]) || 0;
+const casinoLimiet = () => casinoPerDag() + casinoBonusVandaag();
 const casinoResterend = (userId) => Math.max(0, casinoLimiet() - tellingVandaag(loadDaglimieten(), 'casino', userId, dagSleutel()));
 
 function casinoToegangReden(userId) {
   if (!loadMembers()[userId]) return 'Alleen volgelingen komen het casino in. Meld u eerst aan met `/kroketgod aanmelden`.';
+  if (instelling('casinoAan') === false) return 'Het casino is gesloten op last van de Hoge Frituurraad.';
   if (isVerbannen(userId)) return 'Ballingen komen het casino niet in.';
   return null;
 }
@@ -13980,7 +14004,7 @@ function casinoInzetFout(userId, inzet) {
   if (casinoResterend(userId) < 1) return `U speelde vandaag al ${casinoLimiet()} spellen. Het casino gaat morgen weer open.`;
   const max = casinoPlafond(userId);
   if (max < 1) return 'U heeft geen kroketpunten om in te zetten.';
-  if (!Number.isInteger(inzet) || inzet < 1 || inzet > max) return `Zet 1 tot en met ${max} in: hoogstens ${CASINO_MAX_INZET}, en nooit meer dan de helft van uw bezit.`;
+  if (!Number.isInteger(inzet) || inzet < 1 || inzet > max) return `Zet 1 tot en met ${max} in: hoogstens ${casinoMax()}, en nooit meer dan de helft van uw bezit.`;
   return null;
 }
 
@@ -13993,6 +14017,7 @@ function boekCasinoSpel(userId, inzet) {
 
 function boekCasinoUitslag(userId, spel, inzet, uitbetaling, wat) {
   if (uitbetaling > 0) pasScoreAan(userId, uitbetaling);
+  writeJSON('casinostats.json', boekCasinoStat(readJSON('casinostats.json', {}), dagSleutel(), userId, spel, inzet, uitbetaling));
   const netto = uitbetaling - inzet;
   // Alleen grote winsten: de weekrede stuurt elke gebeurtenis naar de keten, en tien spellen per
   // lid per dag blazen die prompt op.
@@ -14117,7 +14142,7 @@ function casinoVenster(userId, { spel = 'lobby', inzet = 1, beeld = null, meldin
   }
   if (spel !== 'lobby') blocks.push({ type: 'divider' }, { type: 'actions', elements: [casinoKnop('casino_naar_lobby', '← Naar de lobby')] });
   return {
-    type: 'modal', callback_id: 'modal_casino', title: CASINO_TITEL, close: CASINO_SLUIT, blocks,
+    type: 'modal', callback_id: 'modal_casino', title: CASINO_TITEL, close: CASINO_SLUIT, blocks, notify_on_close: true,
     private_metadata: JSON.stringify({ spel, inzet: gekozen, beeld, melding: melding ? melding.slice(0, 2400) : null }),
   };
 }
@@ -14195,7 +14220,7 @@ function voerCasinoZetUit(userId, meta, soort, zet, waarde) {
   const hand = openCasinoSpel(userId);
   const fout = (tekst) => ({ meta: { ...meta, melding: `⚠️ _${tekst}_` }, teken: undefined });
 
-  if (soort === 'inzet') return { meta: { ...meta, inzet: Math.min(Math.max(1, Number(zet) || 1), CASINO_MAX_INZET) }, teken: undefined };
+  if (soort === 'inzet') return { meta: { ...meta, inzet: Math.min(Math.max(1, Number(zet) || 1), casinoMax()) }, teken: undefined };
   if (soort === 'naar') {
     if (zet === 'lobby') return { meta: { spel: 'lobby', inzet }, teken: () => lobbyBeeld() };
     if (!CASINO_SPELLEN[zet]) return null;
@@ -14263,6 +14288,63 @@ function voerCasinoZetUit(userId, meta, soort, zet, waarde) {
   };
 }
 
+// Na het sluiten staan saldo en spellen in de Home-tab weer goed.
+app.view({ callback_id: 'modal_casino', type: 'view_closed' }, async ({ ack, body, client }) => {
+  await ack();
+  await publiceerAppHome(client, body.user.id).catch(err => console.warn('⚠️ Home na het casino verversen mislukt:', err.message));
+});
+
+// De knop in de Home-tab. Op een rustdag geen venster maar de toespraak, bovenaan de Home.
+app.action('open_casino', async ({ ack, body, client }) => {
+  await ack();
+  const userId = body.user.id;
+  try {
+    const reden = casinoToegangReden(userId);
+    if (reden) await publiceerAppHome(client, userId, `_${reden}_`);
+    else if (opGokpauze(userId)) await publiceerAppHome(client, userId, await gokpauzeToespraak(userId, 'het casino binnen te lopen'));
+    else await openCasino(client, body.trigger_id, userId);
+  } catch (err) { console.error('Fout bij de casinoknop:', err.data?.error || err.message); }
+});
+
+// Wat het dashboard over het casino laat zien (bouwDashboardData) en kan (/api/casino).
+function casinoDashboardData(naam) {
+  const dag = dagSleutel();
+  const stats = readJSON('casinostats.json', {});
+  const metNamen = (sam) => ({
+    ...sam,
+    perLid: Object.entries(sam.perLid).map(([id, s]) => ({ naam: naam(id), ...s, netto: s.uitbetaald - s.ingezet })).sort((a, b) => b.spellen - a.spellen),
+    grootste: sam.grootste ? { ...sam.grootste, naam: naam(sam.grootste.userId), spel: CASINO_SPELLEN[sam.grootste.spel]?.naam || sam.grootste.spel } : null,
+  });
+  const pauze = loadGokpauze();
+  return {
+    dag, aan: instelling('casinoAan') !== false, maxInzet: casinoMax(), perDag: casinoPerDag(), bonusVandaag: casinoBonusVandaag(),
+    spelNamen: Object.fromEntries(Object.entries(CASINO_SPELLEN).map(([id, s]) => [id, s.naam])),
+    vandaag: metNamen(vatCasinoSamen(stats, dag, dag)),
+    week: metNamen(vatCasinoSamen(stats, getMondayOfWeek(), dag)),
+    gokpauze: Object.entries(pauze).map(([id, rec]) => ({ userId: id, naam: naam(id), ...standVan(rec, dag) }))
+      .filter(r => r.reeks > 0 || r.rustdag).sort((a, b) => (b.rustdag ? 1 : 0) - (a.rustdag ? 1 : 0) || b.reeks - a.reeks),
+    reeksLengte: GOKPAUZE_DAGEN,
+  };
+}
+
+function voerCasinoBeheerUit({ soort, aantal, userId }) {
+  if (soort === 'bonus') {
+    const n = Math.max(0, Math.min(50, Math.round(Number(aantal) || 0)));
+    const bonus = readJSON('casinobonus.json', {});
+    if (n) bonus[dagSleutel()] = n; else delete bonus[dagSleutel()];
+    writeJSON('casinobonus.json', bonus);
+    return n ? `Iedereen heeft vandaag ${n} extra spellen (${casinoLimiet()} in totaal)` : 'Geen extra spellen meer vandaag';
+  }
+  if (soort === 'opheffen') {
+    const d = loadGokpauze();
+    if (!d[userId]?.rustdag) throw new Error('Dit lid heeft geen rustdag');
+    d[userId] = zonderRustdag(d[userId]);
+    saveGokpauze(d);
+    return `Rustdag van ${loadMembers()[userId]?.bijnaam || userId} opgeheven`;
+  }
+  throw new Error('Onbekende casino-actie');
+}
+
 app.action(/^casino_(naar|inzet|zet)_/, async ({ ack, body, action, client }) => {
   await ack();
   const userId = body.user.id;
@@ -14271,7 +14353,7 @@ app.action(/^casino_(naar|inzet|zet)_/, async ({ ack, body, action, client }) =>
   _casinoKlikken.set(userId, nr);
   const meta = { inzet: 1, ...leesCasinoMeta(body.view) };
   if (!CASINO_SPELLEN[meta.spel]) meta.spel = 'lobby';
-  meta.inzet = Math.min(Math.max(1, Number(meta.inzet) || 1), CASINO_MAX_INZET);
+  meta.inzet = Math.min(Math.max(1, Number(meta.inzet) || 1), casinoMax());
   const [, soort, zet] = action.action_id.match(/^casino_(naar|inzet|zet)_(.+)$/);
   if (soort === 'zet' && !CASINO_OPEN_ZETTEN.has(zet) && opGokpauze(userId)) {
     const melding = await gokpauzeToespraak(userId, 'een spel te beginnen in het casino');
@@ -17741,6 +17823,17 @@ function persoonlijkeStatus(userId) {
     restMs: telEerVandaag(userId) >= eerLimiet(userId) ? msTotDagreset() : 0, per: 'dag',
   });
 
+  // Het casino. Op een rustdag staat het bij "Op" (het lid is gewaarschuwd, dit verraadt niets).
+  if (instelling('casinoAan') !== false) {
+    const rustdag = opGokpauze(userId);
+    const casinoGebruikt = rustdag ? casinoLimiet() : casinoLimiet() - casinoResterend(userId);
+    cooldowns.push({
+      naam: 'Casino', gebruikt: casinoGebruikt, limiet: casinoLimiet(),
+      restMs: casinoGebruikt >= casinoLimiet() ? msTotDagreset() : 0, per: 'dag',
+      extra: rustdag ? 'rustdag' : casinoPlafond(userId) > 0 ? `max ${casinoPlafond(userId)} punten inzet` : 'te weinig punten',
+    });
+  }
+
   const roofGebruikt = readJSON('cooldowns.json', {}).roof?.[userId] === weekNu;
   cooldowns.push({
     naam: 'Kroketroof', gebruikt: roofGebruikt ? 1 : 0, limiet: 1,
@@ -19469,6 +19562,12 @@ function bouwAppHomeBlocks(userId, melding = '', extraBlocks = []) {
     blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text:
       `Op: ${op.map(c => `${c.naam}${c.restMs ? ` (${resterendeTijd(c.restMs)})` : ''}`).join(' · ')}` }] });
   }
+  const casinoWeek = vatCasinoSamen(readJSON('casinostats.json', {}), getMondayOfWeek(), dagSleutel(), userId);
+  if (casinoWeek.spellen) {
+    blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text:
+      `🎰 Casino deze week: ${casinoWeek.spellen} ${casinoWeek.spellen === 1 ? 'spel' : 'spellen'} · ` +
+      `${casinoWeek.netto > 0 ? `*+${casinoWeek.netto}* gewonnen` : casinoWeek.netto < 0 ? `*${casinoWeek.netto}* verloren` : 'quitte'}` }] });
+  }
 
   // De actieknoppen: onveranderd, want dit is de enige plek op de hele tab waar je iets DOET.
   const cooldowns = readJSON('cooldowns.json', {});
@@ -19486,6 +19585,7 @@ function bouwAppHomeBlocks(userId, melding = '', extraBlocks = []) {
     if (duelKan) acties.push({ type: 'button', text: { type: 'plain_text', text: '⚔️ Duelleren', emoji: true }, action_id: 'open_duel' });
     if (roofKan) acties.push({ type: 'button', text: { type: 'plain_text', text: '🥷 Beroven', emoji: true }, action_id: 'open_roof' });
     if (offerKan) acties.push({ type: 'button', text: { type: 'plain_text', text: '🎲 Offeren', emoji: true }, action_id: 'open_offer' });
+    if (instelling('casinoAan') !== false && casinoResterend(userId) > 0) acties.push({ type: 'button', text: { type: 'plain_text', text: '🎰 Casino', emoji: true }, action_id: 'open_casino' });
     if (telEerVandaag(userId) < eerLimiet(userId)) {
       acties.push({ type: 'button', text: { type: 'plain_text', text: '🙏 Eer geven', emoji: true }, action_id: 'open_eer', style: 'primary' });
     }
@@ -22545,6 +22645,7 @@ async function bouwDashboardData() {
   // drie staan de andere twee samen in b.
   const alliantieParen = alleVerbonden().map(g => ({ a: naam(g[0]), b: g.slice(1).map(naam).join(' & ') }));
   const spel = {
+    casino: casinoDashboardData(naam),
     troon: troonData.koningId && members[troonData.koningId]
       ? { koning: naam(troonData.koningId), sinds: troonData.sinds, score: scores[troonData.koningId] || 0 }
       : null,

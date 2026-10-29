@@ -373,6 +373,29 @@ function render(d){
 
   // ── Spel-tab: troon, gouden kroket, kroket-gok, quiz, bingo, verbonden ──────
   var sp=d.spel||{};
+  var cs=sp.casino;
+  if(cs){
+    var huis=function(n){return n<0?'<span style="color:var(--green)">+'+(-n)+'</span>':n>0?'<span style="color:var(--red)">−'+n+'</span>':'±0';};
+    var rij=function(l,x){return '<tr><td>'+l+'</td><td>'+x.spellen+'</td><td>'+x.ingezet+'</td><td>'+x.uitbetaald+'</td><td>'+huis(x.netto)+'</td></tr>';};
+    var perSpel=Object.keys(cs.week.perSpel).map(function(k){var x=cs.week.perSpel[k];return rij(esc(cs.spelNamen[k]||k),{spellen:x.spellen,ingezet:x.ingezet,uitbetaald:x.uitbetaald,netto:x.uitbetaald-x.ingezet});}).join('');
+    var perLid=cs.week.perLid.map(function(l){return '<tr><td>'+esc(l.naam)+'</td><td>'+l.spellen+'</td><td>'+(l.netto>0?'+':'')+l.netto+'</td></tr>';}).join('');
+    var gw=cs.week.grootste;
+    shtml+=card('🎰 Casino'+tip('Wat er in het casino gespeeld is. "Huis" is wat het casino aan de spelers verdiende (groen) of verloor (rood). De cijfers tellen vanaf 29 oktober 2026. Instellen kan bij Beheer → Instellingen.'),
+      '<div class="muted">'+(cs.aan?'open':'<b style="color:var(--red)">gesloten</b>')+' · max '+cs.maxInzet+' per spel · '+cs.perDag+' spellen per dag'+(cs.bonusVandaag?' <b style="color:var(--gold)">+'+cs.bonusVandaag+' extra vandaag</b>':'')+'</div>'
+      +'<table style="margin-top:8px"><tr><th></th><th>Spellen</th><th>Ingezet</th><th>Uitbetaald</th><th>Huis</th></tr>'+rij('Vandaag',cs.vandaag)+rij('Deze week',cs.week)+'</table>'
+      +(perSpel?'<div class="lbl" style="margin-top:10px">Per spel, deze week</div><table>'+perSpel+'</table>':'')
+      +(perLid?'<div class="lbl" style="margin-top:10px">Per lid, deze week</div><table><tr><th>Lid</th><th>Spellen</th><th>Netto</th></tr>'+perLid+'</table>':'<div class="muted" style="margin-top:8px">deze week nog niet gespeeld</div>')
+      +(gw?'<div style="margin-top:8px">🏆 Grootste winst: <b>'+esc(gw.naam)+'</b> +'+gw.netto+' aan '+esc(gw.spel)+'</div>':''));
+    var gp=cs.gokpauze.map(function(g){
+      var status=g.rustdag===cs.dag?'<b style="color:var(--red)">rustdag vandaag</b>'+(g.pogingen?' · '+g.pogingen+'× geprobeerd':'')
+        :g.rustdag?'rustdag '+new Date(g.rustdag+'T12:00:00Z').toLocaleDateString('nl-NL',{weekday:'long'})+(g.gewaarschuwd?' · gewaarschuwd':' · nog niet gewaarschuwd')
+        :'';
+      return '<tr><td>'+esc(g.naam)+'</td><td>'+(g.rustdag?'—':g.reeks+'/'+cs.reeksLengte)+'</td><td>'+status+'</td><td>'
+        +(g.rustdag?'<button class="skip" onclick="gokpauzeOpheffen(\''+esc(g.userId)+'\',\''+esc(g.naam).replace(/'/g,'')+'\')">opheffen</button>':'')+'</td></tr>';
+    }).join('');
+    shtml+=card('🕯️ Gokpauze <span id="gp_status" class="muted" style="font-weight:400;text-transform:none;margin-left:8px"></span>'+tip('De onzichtbare reeks: wie '+cs.reeksLengte+' dagen op rij in het casino speelt, krijgt een privé-waarschuwing en de dag erna een rustdag zonder casino, Vetbad, gok, duel, roof, troon en aandelen kopen. De leden zien hun reeks niet; jij wel. "Opheffen" haalt een rustdag weg.'),
+      gp?'<table><tr><th>Lid</th><th>Reeks</th><th>Status</th><th></th></tr>'+gp+'</table>':'<div class="muted">niemand in een reeks</div>');
+  }
   var troonInhoud=sp.troon
     ? '<div class="big">👑 '+esc(sp.troon.koning)+'</div><div class="muted">op de troon sinds '+new Date(sp.troon.sinds).toLocaleDateString('nl-NL',{day:'numeric',month:'long'})+' · '+sp.troon.score+' kroketpunten · ontvangt dagelijks +1 kroontribuut</div>'
     : '<div class="muted">De troon staat leeg — de eerste uitdager wordt zonder strijd gekroond.</div>';
@@ -689,8 +712,8 @@ function renderInstellingen(d){
       +chk('i_spaar',s.spaarstand,'Spaarstand (licht)','Forceert het lichte, goedkope model en slaat Gemini en Cerebras over. Bespaart schaarse quota, iets lagere kwaliteit.')
       +chk('i_allianties',s.alliantiesActief,'Allianties actief','Uit = alle heilige verbonden zijn GEPAUZEERD. De verbonden blijven bestaan en vervallen niet — ze staan nog in het overzicht en in ieders dossier — maar ze geven en kosten voorlopig niets: geen Verbondszegen bij puntenwinst, geen solidariteitsbonus bij een relikwie, geen verbondstrouw bij eer, geen pact-bescherming bij een beroep, en een bondgenoot valt niet mee in een verbanning. Ook de beschermingen liggen stil: tijdens de pauze mag een lid zijn eigen bondgenoot duelleren en beroven. Er kunnen geen verbonden gesloten of verbroken worden zolang dit uit staat. Zet je het weer aan, dan doen alle bestaande verbonden meteen weer mee.')
       +chk('i_straattaal',s.straattaal,'Straattaalmodus','Aan = de Kroket God spreekt straattaal. Zijn karakter, macht en formaten blijven precies hetzelfde — hij oordeelt, decreteert en straft nog steeds — alleen zijn woordkeus verandert: wollah, ouleh, yusu, drerrie, niffo, tantoe, safi. Plus een eigen kroketleer-woordenboek (krokku voor kroketpunten, goudbruin voor perfect, slappo, magnetrontje, korstwollah, uitgefrituurd). Werkt direct na opslaan en geldt voor alles wat hij zegt, overal. Uit = de gewone plechtige stem.')
-      +chk('i_emojiRegels',s.emojiRegels!==false,'Emoji: vaste regels','De Kroket God zet stil één emoji op een bericht dat erom vraagt: 🚨 ketchup op een kroket, ☢️ airfryer, 🧢 bluf, 🤡 opscheppen, 🧎 excuses, 🎂 verjaardag, 🪦 punten kwijt, 👁️ wie het óver hem heeft, en zo verder (lib/emojireacties.js). Geen LLM. De Duitse vlag voor wie een ander erbij lapt, staat hier los van en blijft altijd aan.')
-      +chk('i_emojiSlim',s.emojiSlim!==false,'Emoji: slimme laag','Bij een deel van de berichten zonder regel kiest een klein model uit 😏 sarcasme, 🙄 zeuren, 🍿 drama, 🔥 sterk punt, 👑 gelijk, ⚖️ vraagt om een oordeel — of meestal niets. Kost één Groq-call per beoordeeld bericht, nooit Gemini.')
+      +chk('i_emojiRegels',s.emojiRegels!==false,'Emoji: vaste regels','De Kroket God zet stil één emoji op een bericht dat erom vraagt: 🚨 ketchup op een kroket, 🧢 bluf, 🤡 opscheppen, 🎂 verjaardag, 👁️ wie het óver hem heeft, en eigen emoji als :ohhellno: (airfryer), :shame-nun: (excuses), :sad-cat: (punten kwijt), :elmo-money: (lenen), :bosschebol: en :worstenbrood: (lib/emojireacties.js). Geen LLM. De Duitse vlag voor wie een ander erbij lapt, staat hier los van en blijft altijd aan.')
+      +chk('i_emojiSlim',s.emojiSlim!==false,'Emoji: slimme laag','Bij een deel van de berichten zonder regel kiest een klein model uit 18 reacties: 😏 sarcasme, 🙄 zeuren, 🍿 drama, 🔥 sterk punt, 👑 gelijk, ⚖️ oordeel, plus twaalf eigen emoji (:facepalm:, :this-is-fine:, :uno_reverse:, :party_parrot:, :panic: …) — of meestal niets. Kost één Groq-call per beoordeeld bericht, nooit Gemini.')
       +'<label class="tog">Emoji-frequentie '+tip('Laag: hoogstens 3 per uur, per persoon één per uur, de helft van de regelkansen, en de slimme laag kijkt naar 1 op de 10 berichten. Normaal: 8 per uur, één per persoon per 20 minuten. Hoog: 15 per uur. Zeldzaam is bijzonder.')+' <select id="i_emojiFreq" style="width:auto">'+['laag','normaal','hoog'].map(function(f){return '<option value="'+f+'"'+((s.emojiFrequentie||'laag')===f?' selected':'')+'>'+f+'</option>';}).join('')+'</select></label>'
     +'</div>'
     +'<div><div class="lbl">Providers uit'+tip('Vink een LLM-provider aan om hem tijdelijk uit de antwoord-keten te halen, bv. bij een storing. Er blijft altijd minstens een werkend model over.')+'</div>'+provs+'</div>'
@@ -698,6 +721,13 @@ function renderInstellingen(d){
       +num('i_kortaf',s.kortafKans,'Kortaf-grap','Kans dat de Kroket God op een mention van een enkel woord (bv. kroket) heel droog antwoordt met OK of een emoji, i.p.v. een tirade.')
       +num('i_warrig',s.warrigKans,'Warrig','Kans dat een reactie het warrige formaat krijgt: de Kroket God dwaalt af alsof hij te lang in de frituurwalm stond.')
       +num('i_vrijdag',s.vrijdagAppendKans,'Vrijdag-append','Kans dat er een aftelling tot het heilige vrijdagmoment (12:00) aan een reactie wordt geplakt.')
+    +'</div>'
+    +'<div><div class="lbl">Casino</div>'
+      +chk('i_casinoAan',s.casinoAan!==false,'Casino open','Uit = /kroketgod casino en de knop in de Home-tab melden dat het casino gesloten is. Een open hand blijft bewaard tot het weer opengaat.')
+      +'<label class="numl">Max inzet per spel'+tip('Hoogstens zoveel kroketpunten per spel, en nooit meer dan de helft van iemands bezit. 1 tot 10.')+' <input type="number" min="1" max="10" id="i_casinoMax" value="'+(s.casinoMaxInzet||5)+'"></label>'
+      +'<label class="numl">Spellen per dag'+tip('Per lid, alle casinospellen samen. 1 tot 50.')+' <input type="number" min="1" max="50" id="i_casinoPerDag" value="'+(s.casinoPerDag||10)+'"></label>'
+      +'<label class="numl">Extra vandaag'+tip('Geeft iedereen vandaag zoveel spellen bovenop het normale aantal, zoals bij een decreet. Om middernacht vervalt het. 0 = geen extra. Werkt los van Opslaan.')+' <input type="number" min="0" max="50" id="i_casinoBonus" value="'+(((d.spel||{}).casino||{}).bonusVandaag||0)+'"></label>'
+      +'<button class="btn" onclick="casinoBonus()">🎰 Geef extra spellen</button> <span id="cb_status" class="muted"></span>'
     +'</div>'
     +'</div>'
     +'<div class="lbl" style="margin-top:12px">Decreet van de dag'+tip('Vrije tekst die als extra instructie in de system prompt wordt geinjecteerd. Geef de Kroket God een tijdelijk thema, bv. spreek vandaag uitsluitend in haiku. Werkt direct na opslaan.')+'</div>'
@@ -770,7 +800,7 @@ function renderInstellingen(d){
 }
 function bewaar(){
   var uit=[];document.querySelectorAll('[data-prov]').forEach(function(c){if(c.checked)uit.push(c.getAttribute('data-prov'));});
-  post('/api/instellingen',{stemmingOverride:document.getElementById('i_stemming').value,stilModus:document.getElementById('i_stil').checked,weekendRust:document.getElementById('i_weekend').checked,statusMeldingen:document.getElementById('i_dm').checked,menties:document.getElementById('i_menties').checked,alleenTestkanaal:document.getElementById('i_test').checked,spaarstand:document.getElementById('i_spaar').checked,alliantiesActief:document.getElementById('i_allianties').checked,straattaal:document.getElementById('i_straattaal').checked,emojiRegels:document.getElementById('i_emojiRegels').checked,emojiSlim:document.getElementById('i_emojiSlim').checked,emojiFrequentie:document.getElementById('i_emojiFreq').value,providerUit:uit,kortafKans:(+document.getElementById('i_kortaf').value||0)/100,warrigKans:(+document.getElementById('i_warrig').value||0)/100,vrijdagAppendKans:(+document.getElementById('i_vrijdag').value||0)/100,decreetVanDeDag:document.getElementById('i_decreet').value,decreetIntensiteit:(+document.getElementById('i_decreetInt').value||0)/100,eerHuisonderwerpen:document.getElementById('i_huis').value},'Opgeslagen');
+  post('/api/instellingen',{stemmingOverride:document.getElementById('i_stemming').value,stilModus:document.getElementById('i_stil').checked,weekendRust:document.getElementById('i_weekend').checked,statusMeldingen:document.getElementById('i_dm').checked,menties:document.getElementById('i_menties').checked,alleenTestkanaal:document.getElementById('i_test').checked,spaarstand:document.getElementById('i_spaar').checked,alliantiesActief:document.getElementById('i_allianties').checked,straattaal:document.getElementById('i_straattaal').checked,emojiRegels:document.getElementById('i_emojiRegels').checked,emojiSlim:document.getElementById('i_emojiSlim').checked,emojiFrequentie:document.getElementById('i_emojiFreq').value,providerUit:uit,kortafKans:(+document.getElementById('i_kortaf').value||0)/100,warrigKans:(+document.getElementById('i_warrig').value||0)/100,vrijdagAppendKans:(+document.getElementById('i_vrijdag').value||0)/100,decreetVanDeDag:document.getElementById('i_decreet').value,decreetIntensiteit:(+document.getElementById('i_decreetInt').value||0)/100,eerHuisonderwerpen:document.getElementById('i_huis').value,casinoAan:document.getElementById('i_casinoAan').checked,casinoMaxInzet:+document.getElementById('i_casinoMax').value||5,casinoPerDag:+document.getElementById('i_casinoPerDag').value||10},'Opgeslagen');
 }
 function doeActie(a){post('/api/actie',{actie:a},'Uitgevoerd','i_actiestatus');}
 function skip(soort,key,ts,id){post('/api/overslaan',{soort:soort,key:key?decodeURIComponent(key):'',ts:ts,id:id},'Overgeslagen');}
@@ -799,6 +829,8 @@ function verkondig(modus){
 }
 function getToken(){return localStorage.getItem('dashboard_token')||'';}
 function scoreDelta(uid,delta){post('/api/score',{userId:uid,delta:delta},'Score aangepast');setTimeout(tick,800);}
+function casinoBonus(){post('/api/casino',{soort:'bonus',aantal:+document.getElementById('i_casinoBonus').value||0},'Opgeslagen','cb_status');setTimeout(tick,800);}
+function gokpauzeOpheffen(uid,naam){if(!confirm('Rustdag van '+naam+' opheffen?'))return;post('/api/casino',{soort:'opheffen',userId:uid},'Opgeheven','gp_status');setTimeout(tick,800);}
 function banActie(uid,actie){post('/api/ban',{userId:uid,actie:actie,uren:4},actie==='opheffen'?'Ban opgeheven':'Ban verlengd');setTimeout(tick,800);}
 function winkelBeheer(actie){post('/api/winkel',{actie:actie,userId:document.getElementById('w_lid').value,item:document.getElementById('w_item').value,aankondig:document.getElementById('w_aankondig').checked},actie==='geef'?'Gegeven':'Verwijderd');setTimeout(tick,800);}
 function eerGeef(){
