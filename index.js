@@ -4938,28 +4938,27 @@ async function laatGastBinnenkomen(client, persona, gastheer, nieuw) {
 
 // Het afscheid na drie werkdagen (vertrekNaWerkdagen, lib/gasten.js), in de stem van de gast zelf.
 // Hoogstens één vertrek per keer en een halfuur ertussen: een hele lichting gaat niet in één klap.
-// Lukt de stem niet, dan nog een uur lang een nieuwe poging; daarna een kale melding, want weg is weg.
-// In de stille modus of alleen-testkanaal vertrekt hij zonder iets te zeggen.
+// Iedereen neemt afscheid (eigenaar): in de stille modus of alleen-testkanaal blijft hij tot hij het
+// mag zeggen, en lukt de stem niet, dan een halfuur later opnieuw. Pas na een etmaal vergeefs
+// proberen een kale melding, anders blijft een gast die nooit een stem krijgt eeuwig hangen.
 const AFSCHEID_PAUZE_MS = 30 * 60_000;
 let _laatsteAfscheid = 0;
 async function laatGastVertrekken(client) {
   const nu = Date.now();
   if (nu - _laatsteAfscheid < AFSCHEID_PAUZE_MS) return;
+  if (instelling('stilModus') || instelling('alleenTestkanaal')) return;
   const id = eersteVertrekker(loadPersonas(), nu);
   if (!id) return;
   _laatsteAfscheid = nu;
   const persona = { id, ...loadPersonas()[id] };
-  const stil = instelling('stilModus') || instelling('alleenTestkanaal');
   let tekst = null;
-  if (!stil) {
-    try {
-      tekst = await personaResponse(persona, 'Je drie werkdagen als gast in het kanaal van het genootschap zitten erop: je vertrekt nu. Neem afscheid in één tot drie zinnen, helemaal in karakter, met een knipoog naar wat er de afgelopen dagen in het kanaal gebeurde. Geen inleidingszin.', 220);
-    } catch (err) {
-      console.warn(`⚠️ Afscheid van ${persona.naam} zonder stem:`, err.message);
-      if (nu - persona.vertrekOp < 60 * 60_000) return;
-    }
-    await postAlsPersona(client, KANAAL(), persona, `_👋 De drie werkdagen zitten erop_\n\n${tekst || `_${persona.naam} is vertrokken._`}`);
+  try {
+    tekst = await personaResponse(persona, 'Je drie werkdagen als gast in het kanaal van het genootschap zitten erop: je vertrekt nu. Neem afscheid in één tot drie zinnen, helemaal in karakter, met een knipoog naar wat er de afgelopen dagen in het kanaal gebeurde. Geen inleidingszin.', 220);
+  } catch (err) {
+    console.warn(`⚠️ Afscheid van ${persona.naam} zonder stem:`, err.message);
+    if (nu - persona.vertrekOp < 24 * 3_600_000) return;
   }
+  await postAlsPersona(client, KANAAL(), persona, `_👋 De drie werkdagen zitten erop_\n\n${tekst || `_${persona.naam} is vertrokken._`}`);
   const personas = loadPersonas();
   if (!personas[id]) return;
   personas[id] = { ...personas[id], actief: false };
