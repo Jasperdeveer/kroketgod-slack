@@ -179,6 +179,7 @@ const {
   KOSTEN_NIEUW: GAST_KOSTEN_NIEUW, KOSTEN_BESTAAND: GAST_KOSTEN_BESTAAND, NAAM_MAX: GAST_NAAM_MAX,
   BESCHRIJVING_MAX: GAST_BESCHRIJVING_MAX, normaliseer: normaliseerGastnaam,
   toetsNieuweGast, bekendeGasten, toetsBekendeGast, naamTrefwoorden, kiesTrefwoorden,
+  vertrekNaWerkdagen, eersteVertrekker,
 } = require('./lib/gasten.js');
 const { FUNCTIES, uitlichtPrompt, bouwUitlichting } = require('./lib/nieuwtjes.js');
 const { schetsVan, andereGasten, kandidatenVoorOnderling, kiesAntwoorder, kiesInvaller, kiesDaggasten } = require('./lib/gastenkring.js');
@@ -546,6 +547,7 @@ const app = new App({
             id = slugifyPersonaId(naam, new Set(Object.keys(personas)));
           }
           // Velden die het dashboard niet kent (alleenVoorLid, cooldownMs, uitgenodigdDoor) blijven staan.
+          const blijftAanwezig = personas[id]?.actief !== false && body.actief !== false;
           personas[id] = {
             ...(personas[id] || {}),
             naam, icoon, trefwoord, systemPrompt,
@@ -553,6 +555,9 @@ const app = new App({
             actief: body.actief !== false,
             aangemaakt: personas[id]?.aangemaakt || Date.now(),
           };
+          // Aan- of uitzetten in het dashboard is de hand van de eigenaar: geen vertrek na drie
+          // werkdagen. Een bewerking van een gast die er is, laat zijn vertrektijd staan.
+          if (!blijftAanwezig) delete personas[id].vertrekOp;
           savePersonas(personas);
           logAudit('persona', `${naam} (${id}) opgeslagen`);
           res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
@@ -614,7 +619,7 @@ const app = new App({
           const personas = loadPersonas();
           const toets = toetsBekendeGast({ id, personas, saldo: GAST_KOSTEN_BESTAAND });
           if (!toets.ok) throw new Error(toets.reden);
-          personas[id] = { ...personas[id], actief: true, uitgenodigdDoor: 'dashboard', uitgenodigdOp: Date.now() };
+          personas[id] = { ...personas[id], actief: true, uitgenodigdDoor: 'dashboard', uitgenodigdOp: Date.now(), vertrekOp: vertrekNaWerkdagen(Date.now()) };
           savePersonas(personas);
           logAudit('persona', `${personas[id].naam} (${id}) teruggehaald via het dashboard`);
           laatGastBinnenkomen(app.client, { id, ...personas[id] }, 'de Hoge Frituurraad', false)
@@ -4931,6 +4936,38 @@ async function laatGastBinnenkomen(client, persona, gastheer, nieuw) {
   await postAlsPersona(client, KANAAL(), persona, `${kop}\n\n${tekst || `_${persona.naam} is binnen._`}`);
 }
 
+// Het afscheid na drie werkdagen (vertrekNaWerkdagen, lib/gasten.js), in de stem van de gast zelf.
+// Hoogstens één vertrek per keer en een halfuur ertussen: een hele lichting gaat niet in één klap.
+// Lukt de stem niet, dan nog een uur lang een nieuwe poging; daarna een kale melding, want weg is weg.
+// In de stille modus of alleen-testkanaal vertrekt hij zonder iets te zeggen.
+const AFSCHEID_PAUZE_MS = 30 * 60_000;
+let _laatsteAfscheid = 0;
+async function laatGastVertrekken(client) {
+  const nu = Date.now();
+  if (nu - _laatsteAfscheid < AFSCHEID_PAUZE_MS) return;
+  const id = eersteVertrekker(loadPersonas(), nu);
+  if (!id) return;
+  _laatsteAfscheid = nu;
+  const persona = { id, ...loadPersonas()[id] };
+  const stil = instelling('stilModus') || instelling('alleenTestkanaal');
+  let tekst = null;
+  if (!stil) {
+    try {
+      tekst = await personaResponse(persona, 'Je drie werkdagen als gast in het kanaal van het genootschap zitten erop: je vertrekt nu. Neem afscheid in één tot drie zinnen, helemaal in karakter, met een knipoog naar wat er de afgelopen dagen in het kanaal gebeurde. Geen inleidingszin.', 220);
+    } catch (err) {
+      console.warn(`⚠️ Afscheid van ${persona.naam} zonder stem:`, err.message);
+      if (nu - persona.vertrekOp < 60 * 60_000) return;
+    }
+    await postAlsPersona(client, KANAAL(), persona, `_👋 De drie werkdagen zitten erop_\n\n${tekst || `_${persona.naam} is vertrokken._`}`);
+  }
+  const personas = loadPersonas();
+  if (!personas[id]) return;
+  personas[id] = { ...personas[id], actief: false };
+  delete personas[id].vertrekOp;
+  savePersonas(personas);
+  logAudit('persona', `${persona.naam} (${id}) vertrokken na drie werkdagen`);
+}
+
 async function postAlsPersona(client, channelId, persona, text, options = {}) {
   const gefilterd = schoonOutput(text);
   const tekstVoorBlok = gefilterd.substring(0, 2999);
@@ -8964,6 +9001,7 @@ async function maakGast(client, { invoer, toets, bestand = null, link = null, af
   personas[id] = {
     naam: toets.naam, icoon: avatar.icoon, trefwoord: trefwoorden.join(', '), systemPrompt: profiel.systemPrompt,
     ongevraagd: true, actief: true, aangemaakt: Date.now(), uitgenodigdDoor: door, uitgenodigdOp: Date.now(),
+    vertrekOp: vertrekNaWerkdagen(Date.now()),
   };
   savePersonas(personas);
   return { gast: { id, ...personas[id] }, avatar, profiel, zelfGekozen };
@@ -9065,7 +9103,7 @@ app.action('gast_bekend_kies', async ({ ack, body, client }) => {
     let melding;
     if (toets.ok) {
       pasScoreAan(userId, -GAST_KOSTEN_BESTAAND);
-      personas[id] = { ...personas[id], actief: true, uitgenodigdDoor: userId, uitgenodigdOp: Date.now() };
+      personas[id] = { ...personas[id], actief: true, uitgenodigdDoor: userId, uitgenodigdOp: Date.now(), vertrekOp: vertrekNaWerkdagen(Date.now()) };
       savePersonas(personas);
       logAudit('persona', `${personas[id].naam} (${id}) teruggehaald door ${gastheer}`);
       melding = `✅ *${ontsnapMrkdwn(personas[id].naam)} is onderweg naar het kanaal.* Er gingen ${GAST_KOSTEN_BESTAAND} kroketpunten af.`;
@@ -11478,6 +11516,11 @@ planCron('35 9 * * 1', () => {
   const dagNamen = ['maandag', 'dinsdag', 'woensdag', 'donderdag', 'vrijdag'];
   console.log(`🥇 Gouden Kroket gepland op ${dagNamen[extraDagen]} ~${doelUur}:${String(doelMin).padStart(2, '0')} AMS`);
 }, { timezone: 'Europe/Amsterdam' });
+
+// Elke vijf minuten: is er een gast wiens drie werkdagen erop zitten? Dan neemt hij afscheid.
+planCron('*/5 * * * *', () => laatGastVertrekken(app.client)
+  .catch(err => console.error('Fout bij gastvertrek:', err.data?.error || err.message)),
+{ timezone: 'Europe/Amsterdam' });
 
 // Elke minuut: is het geplande moment daar? Post dan. Meer dan 6 uur te laat (bot lag eruit,
 // of stille modus duurde lang) → plan vervalt stilletjes tot de volgende maandag.
