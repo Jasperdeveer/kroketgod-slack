@@ -16,6 +16,7 @@ verbanning.json
 test_kanalen.json
 instellingen.json
 personas.json
+daggasten.json
 
 # Overige runtime-state en opgebouwde inhoud. Bevat ledengegevens en uitspraken van leden,
 # dus hoort niet in git — en zou bij een git reset de echte stand overschrijven.

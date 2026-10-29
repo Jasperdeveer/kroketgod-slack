@@ -181,7 +181,7 @@ const {
   toetsNieuweGast, bekendeGasten, toetsBekendeGast, naamTrefwoorden, kiesTrefwoorden,
 } = require('./lib/gasten.js');
 const { FUNCTIES, uitlichtPrompt, bouwUitlichting } = require('./lib/nieuwtjes.js');
-const { schetsVan, andereGasten, kandidatenVoorOnderling, kiesAntwoorder, kiesInvaller } = require('./lib/gastenkring.js');
+const { schetsVan, andereGasten, kandidatenVoorOnderling, kiesAntwoorder, kiesInvaller, kiesDaggasten } = require('./lib/gastenkring.js');
 const {
   SLIM_PALET, SLIM_KLASSEN, frequentie: emojiFrequentie, kiesRegel: kiesEmojiRegel,
   magReageren: magEmojiReageren, naReactie: naEmojiReactie,
@@ -11855,12 +11855,27 @@ function weekvijandPersona(raidState = null) {
   };
 }
 
-// Alle personas die nu actief zijn: de door de gebruiker beheerde lijst plus, als er een raid
-// loopt, de weekvijand. Eén helper, twee afnemers (trigger-detectie en interjecties).
+// Alle personas die nu actief zijn: de door de gebruiker beheerde lijst, de daggasten van vandaag
+// en, als er een raid loopt, de weekvijand. Eén helper, twee afnemers (trigger-detectie en interjecties).
 function alleActievePersonas() {
-  const eigen = loadPersonas();
+  const eigen = { ...loadPersonas() };
+  // Een kopie per daggast: het object uit de cache van readJSON mag niet zelf op actief komen.
+  for (const id of daggastenVandaag()) if (eigen[id]) eigen[id] = { ...eigen[id], actief: true };
   const vijand = weekvijandPersona();
   return vijand ? { ...eigen, weekvijand: vijand } : eigen;
+}
+
+// Elke dag een paar afwezige gasten extra in het kanaal (kiesDaggasten, lib/gastenkring.js). Het
+// lot valt bij het eerste gebruik na middernacht (Amsterdam); personas.json blijft ongemoeid.
+function daggastenVandaag() {
+  const opgeslagen = readJSON('daggasten.json', {});
+  const dag = dagSleutel();
+  if (opgeslagen.dag === dag) return opgeslagen.ids || [];
+  const personas = loadPersonas();
+  const ids = kiesDaggasten(personas, { vorige: opgeslagen.ids || [] });
+  writeJSON('daggasten.json', { dag, ids });
+  console.log(`🎲 Daggasten voor ${dag}: ${ids.map(id => personas[id].naam).join(', ') || 'geen'}.`);
+  return ids;
 }
 
 // Laat de vijand iets zeggen onder eigen naam en gezicht.
