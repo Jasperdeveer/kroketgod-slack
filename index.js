@@ -608,6 +608,27 @@ const app = new App({
       },
     },
     {
+      // Een eigen plaatje als avatar bij persona bewerken: openbaar zetten op imgbb, want Slack wil een
+      // publieke link. Body: { afbeelding (data-URL, in de browser al verkleind), naam }. Antwoordt
+      // met de link; het formulier zet die in het avatarveld en bewaart hem pas bij Opslaan.
+      path: '/api/avatar',
+      method: ['POST'],
+      handler: async (req, res) => {
+        if (!dashboardAuth(req, res)) return;
+        try {
+          const body = await leesBody(req);
+          const buf = leesDashboardAfbeelding(body.afbeelding);
+          if (!buf) throw new Error('Geen plaatje meegestuurd.');
+          const url = await zetOpImgbb(buf, String(body.naam || '').trim().slice(0, 60) || 'avatar');
+          res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+          res.end(JSON.stringify({ ok: true, url }));
+        } catch (err) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, error: err.reden || err.message }));
+        }
+      },
+    },
+    {
       // Een bekende gast terughalen vanuit het dashboard: weer actief, met een rentree in het
       // kanaal. ("zet aan" in de lijst doet hetzelfde zonder rentree.) Body: { id }.
       path: '/api/gast/bekend',

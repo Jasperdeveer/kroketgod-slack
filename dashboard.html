@@ -469,11 +469,12 @@ function renderPersonaForm(){
     +'<div class="lbl" style="margin-top:14px;border-top:1px solid var(--line);padding-top:13px">Nieuwe persona toevoegen / bewerken'+tip('Een persona is een nevenentiteit die net als de Kroket God in het kanaal post, maar onder een eigen naam en avatar — bv. een rivaliserende snackgod. Ze reageren als iemand hun trefwoord noemt, en optioneel af en toe ongevraagd.')+'</div>'
     +'<div class="setgrid">'
     +'<div><div class="lbl">Naam</div><input type="text" id="p_naam" placeholder="bv. De Heilige Mr. Satébal" maxlength="60"></div>'
-    +'<div><div class="lbl">Avatar'+tip('Een Slack-emoji-shortcode (bv. :peanuts:, of een custom emoji die je zelf hebt geüpload in Slack — dubbele punten mogen weg), OF een directe afbeeldings-URL die begint met http(s)://.')+'</div>'
+    +'<div><div class="lbl">Avatar'+tip('Een Slack-emoji-shortcode (bv. :peanuts:, of een custom emoji die je zelf hebt geüpload in Slack — dubbele punten mogen weg), OF een directe afbeeldings-URL die begint met http(s)://. Of kies een plaatje van je computer: het wordt verkleind, op imgbb gezet en de link komt hier te staan. Bewaren doe je met Opslaan.')+'</div>'
       +'<div style="display:flex;align-items:center;gap:8px">'
       +'<input type="text" id="p_icoon" placeholder=":peanuts: of https://.../avatar.png" maxlength="500" style="flex:1">'
       +'<img id="p_icoon_preview" style="display:none;width:32px;height:32px;border-radius:6px;object-fit:cover;border:1px solid var(--line)">'
-      +'</div></div>'
+      +'</div>'
+      +'<input type="file" id="p_bestand" accept="image/png,image/jpeg,image/gif,image/webp" style="margin-top:6px;width:100%"></div>'
     +'</div>'
     +'<div style="margin-top:8px"><button class="btn" data-persona-vragen>✨ Vul in met AI — bedenk 3 vragen</button>'+tip('Vul eerst alleen de naam in en klik hier. De AI bedenkt 3 ontwerpvragen; op basis van jouw antwoorden schrijft hij het volledige profiel (prompt, trefwoorden en een passend icoon) in dezelfde stijl als Satébal. Kost 2 LLM-calls. Je kunt alles daarna nog aanpassen voor je opslaat.')+'</div>'
     +'<div id="p_wizard_vragen"></div>'
@@ -492,7 +493,26 @@ function renderPersonaForm(){
   host.innerHTML=html;
   host.onclick=function(e){var b=e.target.closest('button');if(!b)return;if(b.hasAttribute('data-persona-save'))personaOpslaan();else if(b.hasAttribute('data-persona-cancel'))personaAnnuleer();else if(b.hasAttribute('data-persona-vragen'))personaVragen();else if(b.hasAttribute('data-persona-genereer'))personaGenereer();else if(b.hasAttribute('data-gast-uitnodigen'))gastUitnodigen();};
   host.oninput=function(e){if(e.target.id==='p_icoon')updateIconPreview();};
-  host.onchange=function(e){if(e.target.id==='g_bestand')gastBestandGekozen();};
+  host.onchange=function(e){if(e.target.id==='g_bestand')gastBestandGekozen();else if(e.target.id==='p_bestand')personaBestandGekozen();};
+}
+// Een eigen plaatje als avatar bij persona bewerken: verkleinen, op imgbb zetten, link in het avatarveld.
+function personaBestandGekozen(){
+  var inp=document.getElementById('p_bestand'),f=inp.files[0],st=document.getElementById('p_status');
+  if(!f)return;
+  if(st)st.textContent='Plaatje uploaden…';
+  verkleinAfbeelding(f,function(d){
+    if(!d){if(st)st.textContent='Dat plaatje kon ik niet lezen.';inp.value='';return;}
+    var tok=getToken();
+    fetch('/api/avatar',{method:'POST',headers:{'Content-Type':'application/json','Authorization':tok?'Bearer '+tok:''},body:JSON.stringify({afbeelding:d,naam:document.getElementById('p_naam').value.trim()})})
+      .then(function(r){return r.json();})
+      .then(function(j){
+        if(!j.ok){if(st)st.textContent='Uploaden mislukt: '+(j.error||'');return;}
+        document.getElementById('p_icoon').value=j.url;updateIconPreview();
+        if(st)st.textContent='Plaatje staat klaar; klik op Opslaan om het te bewaren.';
+      })
+      .catch(function(){if(st)st.textContent='Uploaden mislukt.';})
+      .then(function(){inp.value='';});
+  });
 }
 // ── Gast uitnodigen (zelfde als /kroketgod invite, zonder punten) ──
 // Het plaatje wordt hier al verkleind tot 512 px (JPEG): de server leest hoogstens 1 MB per verzoek.
