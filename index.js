@@ -1490,23 +1490,29 @@ function zorgVoorZakgeld(week = getMondayOfWeek()) {
   const state = readJSON('zakgeld.json', { week: null, ontvangen: [] });
   const ids = nogTeOntvangen(state, week, Object.keys(loadMembers()), { resetWeek, momentGeweest: zakgeldMomentGeweest(week) });
   if (!ids.length) return [];
+  // Wie bij de uitdeelronde met vakantie is, slaat deze week over (eigenaar, 30 oktober 2026). Hij komt
+  // wel op de lijst, zodat hij het na terugkomst niet alsnog krijgt.
+  const krijgen = ids.filter(id => !isAfwezig(id));
   const scores = loadScores();
-  for (const id of ids) scores[id] = Math.max(0, scores[id] || 0) + ZAKGELD;
+  for (const id of krijgen) scores[id] = Math.max(0, scores[id] || 0) + ZAKGELD;
   writeJSON('zakgeld.json', naUitkering(state, week, ids));
   saveScores(scores);
-  console.log(`💰 Zakgeld (${ZAKGELD}) uitgedeeld voor de week van ${week} aan ${ids.length} lid/leden.`);
-  return ids;
+  console.log(`💰 Zakgeld (${ZAKGELD}) uitgedeeld voor de week van ${week} aan ${krijgen.length} lid/leden` +
+    `${krijgen.length < ids.length ? `, ${ids.length - krijgen.length} met vakantie overgeslagen` : ''}.`);
+  return krijgen;
 }
 
 // Met kanaalbericht, maar alleen bij een echte uitdeelronde: kreeg ieder lid het tegelijk. Kreeg
 // alleen een nieuwkomer het, dan blijft het stil — "ieder lid kreeg zakgeld" zou dan niet kloppen.
 async function deelZakgeldUit(client) {
   const ids = zorgVoorZakgeld();
-  if (ids.length && ids.length === Object.keys(loadMembers()).length) {
+  const kampeerders = Object.keys(loadMembers()).filter(id => isAfwezig(id)).length;
+  if (ids.length && ids.length + kampeerders === Object.keys(loadMembers()).length) {
     await postToChannel(client, process.env.SLACK_CHANNEL_ID,
       `💰 *ZAKGELD* 💰\n\n> De Hoge Frituurraad heeft ieder lid *${ZAKGELD} kroketpunten* zakgeld toegestopt. ` +
       `Zet ze in tegen de weekvijand, voor een roof of in de winkel — of houd ze vast tot zondag. ` +
-      `Tot en met woensdag kan niemand het u afroven.\n\n— De Hoge Frituurraad`);
+      `Tot en met woensdag kan niemand het u afroven.` +
+      `${kampeerders ? '\n> _Wie op de camping staat, slaat deze week over ⛺_' : ''}\n\n— De Hoge Frituurraad`);
   }
   return ids;
 }
@@ -7496,6 +7502,11 @@ async function voerKroketCommandoUit({ command, respond, client }) {
           await respond({ text: '_U zít al op de troon. Uzelf uitdagen is een vorm van waanzin die zelfs de Kroket God niet aanmoedigt._', response_type: 'ephemeral' });
           return;
         }
+        const opVakantie = vakantieWeigering(command.user_id, troon.koningId);
+        if (opVakantie) {
+          await respond({ text: opVakantie, response_type: 'ephemeral' });
+          return;
+        }
         const INZET = 3;
         const scores = loadScores();
         if ((scores[command.user_id] || 0) < INZET) {
@@ -8292,6 +8303,7 @@ async function voerKroketCommandoUit({ command, respond, client }) {
         return;
       }
       const echt = Math.min(dagen, AFWEZIG_MAX_DAGEN);
+      const wasAlWeg = isAfwezig(command.user_id);
       eigen.afwezigTot = Date.now() + echt * 86_400_000;
       act[command.user_id] = eigen;
       saveActiviteit(act);
@@ -8301,7 +8313,17 @@ async function voerKroketCommandoUit({ command, respond, client }) {
       if (lopend && lopend.doelwitId === command.user_id && lopend.fase !== 'afgerond') {
         await blaasTribunaalAf(client, 'de beschuldigde meldde zich afwezig');
       }
-      await respond({ text: `🏖️ _Genoteerd: u bent ${echt} dag(en) afwezig${echt < dagen ? ` (gemaximeerd op ${AFWEZIG_MAX_DAGEN})` : ''}. Geen tribunaal kan u in die tijd raken. Terug? \`aanwezig\`._`, response_type: 'ephemeral' });
+      await respond({ text: `🏖️ _Genoteerd: u bent ${echt} dag(en) afwezig${echt < dagen ? ` (gemaximeerd op ${AFWEZIG_MAX_DAGEN})` : ''}. Geen tribunaal, duel, roof, overval of troonstrijd kan u in die tijd raken; u doet zelf ook niet mee, en het zakgeld slaat u over. Terug? \`aanwezig\`._`, response_type: 'ephemeral' });
+      // De groep hoort het ook (eigenaar, 30 oktober 2026): een tent en een kampeerwens van de Kroket
+      // God. Alleen bij het aanzetten; een verlenging van een lopende vakantie zegt hij niet opnieuw.
+      if (!wasAlWeg) {
+        const naam = members[command.user_id].bijnaam;
+        const wens = await kroketResponseMetVangnet(
+          `${naam} gaat ${echt} ${echt === 1 ? 'dag' : 'dagen'} op vakantie en is zolang afwezig. Wens ${naam} in één tot twee zinnen veel plezier met kamperen ` +
+          `(denk aan tent, luchtbed, campingdouche of kampvuur; kies er zelf iets uit) met een kroket-knipoog. Noem ${naam} letterlijk. Geen inleidingszin.`,
+          200, false, `Veel plezier met kamperen, ${naam}! De Kroket God houdt een kroket warm tot u terug bent.`, 'licht');
+        await postToChannel(client, command.channel_id, `⛺ *${naam} gaat ${echt} ${echt === 1 ? 'dag' : 'dagen'} kamperen*\n\n${wens}`);
+      }
       return;
     }
 
@@ -12266,6 +12288,8 @@ async function voerDuel(client, userId, doelId, channelId, wapenId = null) {
   if (!doelLid) return { ok: false, tekst: 'De Kroket God kent die volgeling niet.' };
   if (isVerbannen(doelId)) return { ok: false, tekst: `_${doelLid.bijnaam} is verbannen — een duel met een balling levert geen eer op._` };
   if (doelId === userId) return { ok: false, tekst: '_Een duel met uzelf is een spiegelgevecht. De Kroket God weigert dit te aanschouwen._' };
+  const opVakantie = vakantieWeigering(userId, doelId);
+  if (opVakantie) return { ok: false, tekst: opVakantie };
   // Bondgenoten vechten niet onderling — een heilig verbond keert zich niet tegen zichzelf.
   if (isBondgenoot(userId, doelId)) {
     return { ok: false, tekst: `_${doelLid.bijnaam} is uw bondgenoot. Een heilig verbond keert zich niet tegen zichzelf — de Kroket God verbiedt dit broederduel._` };
@@ -12476,6 +12500,8 @@ async function voerRoof(client, userId, doelId, channelId) {
   const doelLid = members[doelId];
   if (!doelLid) return { ok: false, tekst: 'De Kroket God kent die volgeling niet.' };
   if (doelId === userId) return { ok: false, tekst: '_Uzelf beroven is boekhoudkundig gezien niets en spiritueel gezien treurig._' };
+  const opVakantie = vakantieWeigering(userId, doelId);
+  if (opVakantie) return { ok: false, tekst: opVakantie };
   if (isBondgenoot(userId, doelId)) {
     return { ok: false, tekst: `_${doelLid.bijnaam} is uw bondgenoot. Wie zijn eigen verbond berooft, berooft zichzelf — de Kroket God verbiedt dit._` };
   }
@@ -13084,6 +13110,8 @@ async function overvalWissel(client, vanId, naarId) {
   const w = data.open.find(x => x.vanId === vanId && x.naarId === naarId);
   const mag = magOvervallen(w, nu);
   if (!mag.ok) return { ok: false, tekst: `_${mag.reden}_` };
+  const opVakantie = vakantieWeigering(vanId, naarId);
+  if (opVakantie) return { ok: false, tekst: opVakantie };
   // Het zakgeld is tot en met woensdag tegen roof beschermd (lib/zakgeld.js). Dat geldt voor de
   // greep bovenop de schuld, niet voor de schuld zelf — zie overval() in lib/vetwissel.js.
   const uitkomst = doeOverval(w, nu, loadScores()[naarId] || 0, Math.random(), { greepBodem: tegenRoofBeschermd(naarId) });
@@ -18624,6 +18652,14 @@ function isAfwezig(userId) {
   return Date.now() < tot;
 }
 
+// Wie met vakantie is, doet niet mee in het spel tegen elkaar (eigenaar, 30 oktober 2026): niet aan te
+// vallen met duel, roof, overval of troonstrijd, en zelf ook niet aanvallen. Een weigering, of null.
+function vakantieWeigering(userId, doelId = null) {
+  if (isAfwezig(userId)) return '_U staat op de camping ⛺. Wie met vakantie is, vecht niet. Terug? `/kroketgod aanwezig`._';
+  if (doelId && isAfwezig(doelId)) return `_${loadMembers()[doelId]?.bijnaam || 'Die volgeling'} staat op de camping ⛺ en is tot de terugkeer onaantastbaar._`;
+  return null;
+}
+
 // Legt activiteit vast. Retourneert `true` als er een tribunaal tegen dit lid loopt dat
 // hierdoor moet worden afgeblazen — de aanroeper handelt dat af (async, dus niet hier).
 function markeerActiviteit(userId, soort = 'bericht') {
@@ -19288,7 +19324,7 @@ registreerFeature({
   state: ['activiteit.json', 'tribunaal.json', 'tribunaalhistorie.json', 'archief.json'],
   help: [
     { gebruik: '/kroketgod tribunaal [naam]', verwacht: `draag een lid voor dat ${TRIBUNAAL_DREMPEL_DAGEN}+ dagen volledig stil is, óf ${TRIBUNAAL_WOORD_DAGEN}+ dagen geen woord zei; de Raad stemt daarna geheim` },
-    { gebruik: '/kroketgod afwezig [dagen]', verwacht: 'meld dat u weg bent — dan kan er geen tribunaal tegen u komen (`afwezig 0` of `aanwezig` zet het uit)' },
+    { gebruik: '/kroketgod afwezig [dagen]', verwacht: 'meld dat u weg bent — geen tribunaal, duel, roof, overval of troonstrijd (ook niet door u), geen zakgeld, en de Kroket God wenst u in het kanaal veel kampeerplezier (`afwezig 0` of `aanwezig` zet het uit)' },
   ],
   homeOrde: 30,
   home: ({ userId, members }) => {
