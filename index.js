@@ -2069,10 +2069,21 @@ function archiefRegel(t) {
   return `[${archiefDatum(t.ts)}] ${t.spreker}: "${t.tekst}"`;
 }
 
+// Archief per lid: een lid leest in het archief alleen wat er sinds zijn toetreding is gezegd,
+// net als in WhatsApp. Wat de bot in het kanaal citeert, leest iedereen; dat moet dus van ná het
+// jongste lid zijn. Onbekend (nog niet ingeschreven) = vanaf nu, dus niets van vroeger.
+function lidSindsMs(userId) {
+  return Date.parse(loadMembers()[userId]?.lidSinds) || Date.now();
+}
+function gedeeldSinds() {
+  return Math.max(0, ...Object.values(loadMembers()).map(l => Date.parse(l.lidSinds) || 0));
+}
+
 function getArchiefEchos(input, n = 3) {
   try {
     const treffers = zoekArchief(input, {
       n,
+      nieuwerDan: gedeeldSinds(),
       ouderDan: Date.now() - ARCHIEF_ECHO_VENSTER_MS,
       minLengte: 25,
     });
@@ -5978,7 +5989,9 @@ let _kanaalLedenCache = { ts: 0, leden: null };
 async function isKanaalLid(client, userId) {
   const kanaal = process.env.SLACK_CHANNEL_ID;
   if (!kanaal || !userId) return null;
-  if (!_kanaalLedenCache.leden || Date.now() - _kanaalLedenCache.ts > 10 * 60_000) {
+  const leeftijd = Date.now() - _kanaalLedenCache.ts;
+  // Een "nee" uit de bewaarde lijst kan een lid zijn dat er net bij is: dan na een halve minuut opnieuw vragen.
+  if (!_kanaalLedenCache.leden || leeftijd > 10 * 60_000 || (leeftijd > 30_000 && !_kanaalLedenCache.leden.has(userId))) {
     try {
       const leden = new Set();
       let cursor;
@@ -5994,6 +6007,15 @@ async function isKanaalLid(client, userId) {
     }
   }
   return _kanaalLedenCache.leden.has(userId);
+}
+
+// Wat een collega buiten het besloten kanaal te zien krijgt, in de App Home en op elk commando.
+// Bewust kaal: de werkruimte telt ruim honderd mensen die van het genootschap niet hoeven te weten.
+const NIET_BESCHIKBAAR = 'Deze app is niet beschikbaar.';
+async function isBuitenstaander(client, userId) {
+  const lid = await isKanaalLid(client, userId);
+  // Kan Slack het niet zeggen (null), dan beslist de inschrijving.
+  return lid === false || (lid === null && !loadMembers()[userId]);
 }
 
 function buildIntakeModal(triggerId) {
@@ -6267,6 +6289,14 @@ async function voerKroketCommandoUit({ command, respond, client }) {
         await respond({ text: '_Onbekend commando._', response_type: 'ephemeral' });
         return;
       }
+    }
+
+    // Buitenstaanders krijgen op alles hetzelfde kale antwoord: geen help, geen prompts, geen
+    // aanmelden. Typen in het besloten kanaal zelf bewijst het lidmaatschap al.
+    const inHetKanaal = command.bron !== 'home' && command.channel_id === process.env.SLACK_CHANNEL_ID;
+    if (!inHetKanaal && await isBuitenstaander(client, command.user_id)) {
+      await respond({ text: NIET_BESCHIKBAAR, response_type: 'ephemeral' });
+      return;
     }
 
     // Prompt-injectie detectie — vrije tekst in slash commands gaat ook de LLM-prompt in
@@ -8250,11 +8280,11 @@ async function voerKroketCommandoUit({ command, respond, client }) {
               ['Doorzoekbare uitspraken', o.doorzoekbaar],
               ['Verschillende sprekers', o.sprekers],
               ['Oudste optekening', o.oudste ? archiefDatum(o.oudste) : '—'],
-            ])}\nZoek met \`/kroketgod archief [zoekterm]\` — bijvoorbeeld \`archief bamischijf\`.\n_Het archief wordt nooit gewist. Slack vergeet na negentig dagen; de Kroket God niet._`
+            ])}\nZoek met \`/kroketgod archief [zoekterm]\` — bijvoorbeeld \`archief bamischijf\`.\n_Het archief wordt nooit gewist. Slack vergeet na negentig dagen; de Kroket God niet. U vindt hier wat er sinds uw toetreding is gezegd._`
           : '_Het archief is nog leeg. Vanaf nu wordt alles wat in het kanaal gezegd wordt voorgoed opgetekend._', response_type: 'ephemeral' });
         return;
       }
-      const treffers = zoekArchief(zoekterm, { n: 8, minLengte: 10 });
+      const treffers = zoekArchief(zoekterm, { n: 8, minLengte: 10, nieuwerDan: lidSindsMs(command.user_id) });
       if (!treffers.length) {
         await respond({ text: `_Het archief zwijgt over "${zoekterm}". Er is nooit iets over gezegd — of het is met andere woorden gezegd._`, response_type: 'ephemeral' });
         return;
@@ -19904,6 +19934,17 @@ async function publiceerAppHome(client, userId, melding = '', extraBlocks = []) 
     if (vorige && vorige.tot > Date.now()) ({ melding, extraBlocks } = vorige);
     else laatsteHomeMelding.delete(userId);
   }
+  if (await isBuitenstaander(client, userId)) {
+    try {
+      await slackLimiter.schedule(() => client.views.publish({
+        user_id: userId,
+        view: { type: 'home', blocks: [{ type: 'section', text: { type: 'plain_text', text: NIET_BESCHIKBAAR } }] },
+      }));
+    } catch (err) {
+      console.error(`⚠️ App Home publiceren voor ${userId} mislukt:`, err.data?.error || err.message);
+    }
+    return;
+  }
   try {
     await slackLimiter.schedule(() => client.views.publish({
       user_id: userId,
@@ -22415,6 +22456,7 @@ async function startVerhoor(client) {
     soort: 'lid',
     minLengte: 40,
     ouderDan: Date.now() - VERHOOR_MIN_LEEFTIJD_DAGEN * 86_400_000,
+    nieuwerDan: gedeeldSinds(),
     sprekerIds: spelers,
     uitgesloten: gebruikt,
   });
