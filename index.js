@@ -164,7 +164,7 @@ const {
   MAX_INZET: CASINO_MAX_INZET, LOS_GETAL_MAX, INZETSOORTEN, handWaarde, isBlackjack, deel, kaart, verdubbel, speelBank, magVerdubbelen,
   blackjackUitbetaling, kleurVan, draai, rouletteUitbetaling, toetsRoulette,
   GOKKAST, trekHendel, gokkastFactor, gokkastUitbetaling, HL_MAX, hlFactor, hlStart, hlRaad, hlUitbetaling,
-  DOBBELKEUZES, werp, dobbelUitbetaling,
+  DOBBELKEUZES, werp, dobbelUitbetaling, totWinst,
 } = require('./lib/casino.js');
 const { blackjackBeeld, rouletteBeeld, gokkastBeeld, hogerLagerBeeld, dobbelBeeld, lobbyBeeld, naarPng } = require('./lib/casinobeeld.js');
 const { GOKPAUZE_DAGEN, naCasinoSpel, opRustdag, moetWaarschuwen, naWaarschuwing, naPoging, zonderRustdag, standVan } = require('./lib/gokpauze.js');
@@ -13570,7 +13570,9 @@ function getGeluk(userId) {
 // geheime code als slash-commando in het testkanaal, verbruikt zodra hij ergens toeslaat.
 // Werkt op: duel (ook wanneer u wordt uitgedaagd), roof, offer aan het Vetbad (verdubbeling — nooit
 // de jackpot, die is hoogstens één keer per week en niet af te dwingen),
-// troonstrijd (aanval én verdediging), beroep vanuit ballingschap en uitbraakpoging.
+// troonstrijd (aanval én verdediging), beroep vanuit ballingschap en uitbraakpoging, en elk spel in
+// het casino: een winnende hand, worp, draai of gok (totWinst, lib/casino.js; elke gok bij hoger/lager
+// is een eigen kansactie). Ook de gokkast-jackpot kan dan vallen, met zijn gewone, kleine kans.
 //
 // De code staat NIET in deze repo: hij komt uit KROKETGOD_FORTUIN_CODE in .env op de Pi. Zonder
 // die env-var bestaat het commando simpelweg niet — er is dan geen invoer die iets doet.
@@ -14320,7 +14322,8 @@ function voerCasinoZetUit(userId, meta, soort, zet, waarde) {
     if (hand?.spel !== 'hogerlager') return null;
     if (zet === 'cash') return sluitHogerLager(userId, hand, meta);
     if (!hlFactor(hand.kaarten.at(-1), zet)) return openCasinoTafel(userId, hand, meta);
-    const nieuw = hlRaad(hand, zet, Math.random);
+    const trek = () => hlRaad(hand, zet, Math.random);
+    const nieuw = pakFortuin(userId, 'casino: hoger/lager') ? totWinst(trek, (h) => h.pot > 0) : trek();
     return nieuw.klaar ? sluitHogerLager(userId, nieuw, meta) : openCasinoTafel(userId, nieuw, meta);
   }
 
@@ -14336,26 +14339,32 @@ function voerCasinoZetUit(userId, meta, soort, zet, waarde) {
   boekCasinoSpel(userId, inzet);
 
   if (spel === 'blackjack') {
-    const nieuw = { spel: 'blackjack', ...deel(Math.random, inzet) };
+    // Met het voorrecht: blackjack uit de eerste hand, en de bank heeft er geen.
+    const trek = () => deel(Math.random, inzet);
+    const gedeeld = pakFortuin(userId, 'casino: blackjack') ? totWinst(trek, (h) => isBlackjack(h.speler) && !isBlackjack(h.bank)) : trek();
+    const nieuw = { spel: 'blackjack', ...gedeeld };
     return nieuw.klaar ? sluitBlackjack(userId, nieuw, meta) : openCasinoTafel(userId, nieuw, meta);
   }
   if (spel === 'hogerlager') return openCasinoTafel(userId, hlStart(Math.random, inzet), meta);
   if (spel === 'gokkast') {
-    const rollen = trekHendel(Math.random);
+    const trek = () => trekHendel(Math.random);
+    const rollen = pakFortuin(userId, 'casino: gokkast') ? totWinst(trek, (r) => gokkastFactor(r) > 1) : trek();
     const factor = gokkastFactor(rollen);
     const { tekst, netto } = boekCasinoUitslag(userId, 'gokkast', inzet, gokkastUitbetaling(rollen, inzet), rollen.join(' '));
     const kop = factor === GOKKAST.at(-1).drie && new Set(rollen).size === 1 ? 'JACKPOT' : new Set(rollen).size === 1 ? 'DRIE GELIJK' : factor ? 'TWEE GELIJK' : 'NIETS';
     return { meta: { ...meta, melding: `🎰 ${rollen.map(r => `:${r}:`).join(' ')}  *${kop}*\n${tekst}` }, teken: (p) => gokkastBeeld(rollen, p, { uitslag: { kop, netto } }), netto };
   }
   if (spel === 'dobbelen') {
-    const stenen = werp(Math.random);
+    const trek = () => werp(Math.random);
+    const stenen = pakFortuin(userId, 'casino: dobbelen') ? totWinst(trek, (s) => dobbelUitbetaling(zet, inzet, s) > inzet) : trek();
     const { tekst, netto } = boekCasinoUitslag(userId, 'dobbelen', inzet, dobbelUitbetaling(zet, inzet, stenen), `${DOBBELKEUZES[zet]}, gooide ${stenen[0] + stenen[1]}`);
     const kop = netto > 0 ? 'GEWONNEN' : netto === 0 ? 'ZEVEN · INZET TERUG' : 'VERLOREN';
     const opWat = `${inzet} op ${DOBBELKEUZES[zet]}`;
     return { meta: { ...meta, melding: `🎲 ${stenen[0]} + ${stenen[1]} = *${stenen[0] + stenen[1]}*. U zette ${opWat}.\n${tekst}` },
       teken: () => dobbelBeeld(stenen, { inzetTekst: opWat, uitslag: { kop, netto } }), netto };
   }
-  const uitkomst = draai(Math.random);
+  const trek = () => draai(Math.random);
+  const uitkomst = pakFortuin(userId, 'casino: roulette') ? totWinst(trek, (n) => rouletteUitbetaling(zet, inzet, n, getal) > inzet) : trek();
   const opWat = zet === 'getal' ? `getal ${getal}` : INZETSOORTEN[zet].naam.replace(/^[^\p{L}\d]+/u, '');
   const { tekst, netto } = boekCasinoUitslag(userId, 'roulette', inzet, rouletteUitbetaling(zet, inzet, uitkomst, getal), `${opWat}, viel ${uitkomst}`);
   const bal = { groen: '🟢', rood: '🔴', zwart: '⚫' }[kleurVan(uitkomst)];
