@@ -594,7 +594,7 @@ const app = new App({
             invoer, toets, afbeelding, link: String(body.link || '').trim() || null, door: 'dashboard',
           });
           logAudit('persona', `${gast.naam} (${gast.id}) uitgenodigd via het dashboard — gezicht: ${avatar.bron}`);
-          laatGastBinnenkomen(app.client, gast, 'de Hoge Frituurraad', true)
+          laatGastBinnenkomen(app.client, gast, 'de Kroket God', true)
             .catch(err => console.error(`Entree van ${gast.naam} mislukt:`, err.message));
           const bericht = `${gast.naam} is binnen. ${AVATAR_NOOT[avatar.bron]} Hij reageert op: ${gast.trefwoord}${zelfGekozen ? ' (gekozen door de Raad)' : ''}.`;
           res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
@@ -643,7 +643,7 @@ const app = new App({
           personas[id] = { ...personas[id], actief: true, uitgenodigdDoor: 'dashboard', uitgenodigdOp: Date.now(), vertrekOp: vertrekNaWerkdagen(Date.now()) };
           savePersonas(personas);
           logAudit('persona', `${personas[id].naam} (${id}) teruggehaald via het dashboard`);
-          laatGastBinnenkomen(app.client, { id, ...personas[id] }, 'de Hoge Frituurraad', false)
+          laatGastBinnenkomen(app.client, { id, ...personas[id] }, 'de Kroket God', false)
             .catch(err => console.error(`Rentree van ${personas[id].naam} mislukt:`, err.message));
           res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
           res.end(JSON.stringify({ ok: true, bericht: `${personas[id].naam} is onderweg naar het kanaal.` }));
