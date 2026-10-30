@@ -179,7 +179,7 @@ const {
   KOSTEN_NIEUW: GAST_KOSTEN_NIEUW, KOSTEN_BESTAAND: GAST_KOSTEN_BESTAAND, NAAM_MAX: GAST_NAAM_MAX,
   BESCHRIJVING_MAX: GAST_BESCHRIJVING_MAX, normaliseer: normaliseerGastnaam,
   toetsNieuweGast, bekendeGasten, toetsBekendeGast, naamTrefwoorden, kiesTrefwoorden,
-  vertrekNaWerkdagen, eersteVertrekker,
+  vertrekNaWerkdagen, eersteVertrekker, MAX_GASTEN,
 } = require('./lib/gasten.js');
 const { FUNCTIES, uitlichtPrompt, bouwUitlichting } = require('./lib/nieuwtjes.js');
 const { schetsVan, andereGasten, kandidatenVoorOnderling, kiesAntwoorder, kiesInvaller, kiesDaggasten } = require('./lib/gastenkring.js');
@@ -543,7 +543,7 @@ const app = new App({
           const personas = loadPersonas();
           let id = body.id && personas[body.id] ? body.id : null;
           if (!id) {
-            if (Object.keys(personas).length >= 20) throw new Error('Maximaal 20 personas — verwijder er eerst een');
+            if (Object.keys(personas).length >= MAX_GASTEN) throw new Error(`Maximaal ${MAX_GASTEN} personas — verwijder er eerst een`);
             id = slugifyPersonaId(naam, new Set(Object.keys(personas)));
           }
           // Velden die het dashboard niet kent (alleenVoorLid, cooldownMs, uitgenodigdDoor) blijven staan.
@@ -8922,6 +8922,7 @@ function bouwBekendeGastenVenster(userId, melding = null, { metGezichten = true 
   const blocks = [];
   if (melding) blocks.push({ type: 'section', text: { type: 'mrkdwn', text: melding } }, { type: 'divider' });
   blocks.push({ type: 'section', text: { type: 'mrkdwn', text: `👥 *Haal een bekende gast terug in het kanaal.* Dat kost *${GAST_KOSTEN_BESTAAND} kroketpunten*.\n_U heeft ${puntenWoord(saldo)}._` } });
+  const kop = blocks.length;
   for (const g of gasten) {
     const emoji = /^:[^:\s]+:$/.test(g.icoon) ? `${g.icoon} ` : '';
     const roep = g.trefwoorden.length ? `\n_Roep met: ${ontsnapMrkdwn(g.trefwoorden.join(', '))}_` : '';
@@ -8941,6 +8942,23 @@ function bouwBekendeGastenVenster(userId, melding = null, { metGezichten = true 
     }
   }
   if (!gasten.length) blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '_Er zijn nog geen bekende gasten._' } });
+  // Past niet iedereen als los blok (Slack: hoogstens 100 blokken, zo'n dertig gasten), dan één regel
+  // met wie er al is en een keuzelijst met wie niet (die houdt bij 100 op, net als MAX_GASTEN).
+  if (blocks.length > 100) {
+    blocks.splice(kop);
+    const er = gasten.filter(g => g.aanwezig).map(g => ontsnapMrkdwn(g.naam));
+    const weg = gasten.filter(g => !g.aanwezig).slice(0, 100);
+    if (er.length) blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: `✅ Er al: ${er.join(', ')}`.slice(0, 3000) }] });
+    if (weg.length) blocks.push({ type: 'actions', elements: [{
+      type: 'static_select', action_id: 'gast_bekend_kies', placeholder: { type: 'plain_text', text: 'Kies een gast…' },
+      options: weg.map(g => ({ text: { type: 'plain_text', text: g.naam.slice(0, 75) }, value: g.id })),
+      confirm: {
+        title: { type: 'plain_text', text: 'Gast uitnodigen' },
+        text: { type: 'mrkdwn', text: `Deze gast terughalen voor ${GAST_KOSTEN_BESTAAND} kroketpunten?` },
+        confirm: { type: 'plain_text', text: 'Nodig uit' }, deny: { type: 'plain_text', text: 'Laat maar' },
+      },
+    }] });
+  }
   return {
     type: 'modal', callback_id: 'modal_gast_bekend',
     title: { type: 'plain_text', text: 'Bekende gasten' },
@@ -9113,7 +9131,7 @@ app.action('gast_nieuw_open', async ({ ack, body, client }) => {
 app.action('gast_bekend_kies', async ({ ack, body, client }) => {
   await ack();
   const userId = body.user.id;
-  const id = body.actions?.[0]?.value;
+  const id = body.actions?.[0]?.value ?? body.actions?.[0]?.selected_option?.value; // knop of keuzelijst
   try {
     const gastheer = loadMembers()[userId]?.bijnaam;
     if (!gastheer) return;
