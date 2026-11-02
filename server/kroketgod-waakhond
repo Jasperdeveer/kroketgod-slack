@@ -1,0 +1,39 @@
+#!/bin/bash
+# Elke 2 minuten via kroketgod-waakhond.timer.
+#
+# Kopie van wat op jsprsuperserver draait, zodat de server opnieuw op te bouwen is. Installeren:
+#   sudo cp kroketgod-waakhond /usr/local/bin/
+#   sudo cp kroketgod-waakhond.service kroketgod-waakhond.timer /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now kroketgod-waakhond.timer
+# Plus de nachtelijke herstart in `crontab -e` van jspr (03:00, servertijd Europe/Amsterdam):
+#   0 3 * * * docker restart kroketgod >> /home/jspr/kroketgod/cron.log 2>&1
+# Let op: de netwerkstap herstart na 20 minuten de HELE server, dus ook pihole en homebridge.
+STAAT=/var/lib/kroketgod-waakhond
+mkdir -p "$STAAT"
+tel() { local n=$(( $(cat "$STAAT/$1" 2>/dev/null || echo 0) + 1 )); echo $n > "$STAAT/$1"; echo $n; }
+
+# De bot: geen antwoord op /health na drie keer → container herstarten.
+# Een 503 telt als antwoord: dan is Slack weg, en dat lost de bot zelf op.
+if curl -s -m 10 -o /dev/null http://localhost:3001/health; then
+  echo 0 > "$STAAT/bot"
+elif [ "$(tel bot)" -ge 3 ]; then
+  logger -t kroketgod-waakhond "bot reageert niet op /health, docker restart"
+  docker restart kroketgod || true
+  echo 0 > "$STAAT/bot"
+fi
+
+# Het internet: na 10 minuten zonder het netwerk opnieuw, na 20 minuten de server opnieuw,
+# maar niet als hij nog geen uur aan staat.
+if ping -c 1 -W 5 1.1.1.1 >/dev/null 2>&1 || ping -c 1 -W 5 8.8.8.8 >/dev/null 2>&1; then
+  echo 0 > "$STAAT/net"
+else
+  n=$(tel net)
+  if [ "$n" -eq 5 ]; then
+    logger -t kroketgod-waakhond "10 minuten geen internet, netwerk opnieuw"
+    systemctl restart wpa_supplicant systemd-networkd 2>/dev/null || netplan apply || true
+  elif [ "$n" -ge 10 ] && [ "$(cut -d. -f1 /proc/uptime)" -gt 3600 ]; then
+    logger -t kroketgod-waakhond "20 minuten geen internet, herstart"
+    echo 0 > "$STAAT/net"
+    systemctl reboot
+  fi
+fi
