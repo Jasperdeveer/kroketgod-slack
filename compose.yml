@@ -1,0 +1,24 @@
+# Hoe de bot op jsprsuperserver draait. Kopie van ~/docker/kroketgod/compose.yml daar; wijzig je
+# iets, doe het op beide plekken en draai daar `docker compose up -d`.
+services:
+  kroketgod:
+    image: node:20-bookworm-slim
+    container_name: kroketgod
+    restart: unless-stopped
+    user: "1000:1000"
+    working_dir: /home/jspr/kroketgod
+    environment:
+      - NODE_ENV=production
+      - HOME=/tmp
+    # Bij elke start: dependencies bijwerken volgens package.json, dan de bot starten
+    command: sh -c "npm install --omit=dev --no-audit --no-fund --loglevel=error && exec node index.js"
+    ports:
+      - "3001:3001"
+    volumes:
+      - /home/jspr/kroketgod:/home/jspr/kroketgod
+    mem_limit: 800m
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"

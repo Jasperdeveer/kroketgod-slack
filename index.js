@@ -13630,7 +13630,7 @@ function inhaalBonus(userId) {
 // Wat dat betekent, zodat niemand het later voor een omissie aanziet: geluk.json WERKT nog steeds (zie
 // getGeluk hierboven — het verschuift duel, roof en troonstrijd), maar niets laat meer zien dát er iets
 // op staat. Wie wil weten of het spel scheef staat, moet het bestand zelf lezen:
-//   ssh kroketpi 'cat kroketgod/geluk.json'   ·   leegmaken: echo "{}" > geluk.json
+//   ssh jspr@100.101.216.108 'cat kroketgod/geluk.json'   ·   leegmaken: echo "{}" > geluk.json
 // Hetzelfde geldt voor fortuin.json (Het Gefluisterde Voorrecht).
 
 function getGeluk(userId) {

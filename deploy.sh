@@ -1,11 +1,13 @@
 #!/bin/bash
 # ─────────────────────────────────────────
-#  Kroket God — deploy naar Raspberry Pi
+#  Kroket God — deploy naar jsprsuperserver
 #  Gebruik: bash deploy.sh [hostname/IP]
-#  Voorbeelden:
-#    bash deploy.sh                    → keuzemenu
-#    bash deploy.sh 192.168.178.80     → direct via IP
-#    bash deploy.sh kroketpi           → via Tailscale
+#    bash deploy.sh                    → jsprsuperserver via Tailscale
+#    bash deploy.sh 192.168.178.x      → een ander adres
+#
+#  De bot draait daar in Docker (container 'kroketgod', zie compose.yml; op de server staat die
+#  in ~/docker/kroketgod). De container doet bij elke start zelf npm install, dus bestanden
+#  kopiëren en herstarten is genoeg. MagicDNS staat uit in de tailnet, daarom het Tailscale-IP.
 # ─────────────────────────────────────────
 
 set -e
@@ -21,68 +23,24 @@ error() { echo -e "${RED}✗${NC} $1"; exit 1; }
 
 # ── Configuratie
 LOKAAL_PAD="$(cd "$(dirname "$0")" && pwd)"
-PI_USER="jspr"
-PI_HOST="${1:-}"
-PM2_NAAM="kroketgod"
-
-# ── Bepaal hostname
-if [[ -z "$PI_HOST" ]]; then
-  echo ""
-  echo "╔══════════════════════════════════════╗"
-  echo "║     Kroket God Deploy Script         ║"
-  echo "╚══════════════════════════════════════╝"
-  echo ""
-  echo "Via welk netwerk verbind je?"
-  echo "  1) Thuis (lokaal netwerk) → 192.168.178.80"
-  echo "  2) Tailscale (overal)     → kroketpi"
-  echo "  3) Handmatig invoeren"
-  echo ""
-  read -rp "Keuze [1/2/3]: " keuze
-  case "$keuze" in
-    1) PI_HOST="192.168.178.80" ;;
-    2) PI_HOST="kroketpi" ;;
-    3) read -rp "Hostname of IP: " PI_HOST ;;
-    *) error "Ongeldige keuze." ;;
-  esac
-fi
+SERVER_USER="jspr"
+SERVER_HOST="${1:-100.101.216.108}"   # jsprsuperserver
+SERVER="${SERVER_USER}@${SERVER_HOST}"
+SERVER_PAD="/home/jspr/kroketgod"
+CONTAINER="kroketgod"
 
 echo ""
-info "Verbinden met: ${PI_USER}@${PI_HOST}"
+info "Verbinden met: ${SERVER}"
 
-# ── Verbinding testen met duidelijke foutmelding
-if ! ssh -o ConnectTimeout=6 -o BatchMode=yes "${PI_USER}@${PI_HOST}" "echo ok" &>/dev/null; then
+if ! ssh -o ConnectTimeout=6 -o BatchMode=yes "$SERVER" "echo ok" &>/dev/null; then
   echo ""
-  error "Kan niet verbinden met ${PI_HOST}.
+  error "Kan niet verbinden met ${SERVER_HOST}.
   Mogelijke oorzaken:
-    - Niet op het thuisnetwerk en Tailscale niet actief
-    - Pi staat uit
-    - Verkeerd IP of gebruikersnaam
-  Probeer: ping ${PI_HOST}"
+    - Tailscale staat niet aan op deze laptop
+    - de server staat uit
+  Probeer: ping ${SERVER_HOST}"
 fi
-
 info "SSH verbinding OK"
-
-# ── nvm-omgeving: zet de nieuwste geïnstalleerde node-bin op PATH zodat node/npm/pm2 ook in
-#    een NON-interactieve SSH-sessie vindbaar zijn. Dit was de oude bug: `which pm2` faalde en
-#    `find` pikte een verkeerd 'pm2'-bestand (logrotate-template) → de bot werd nooit herstart.
-NVM_SETUP='export PATH="$(ls -d "$HOME"/.nvm/versions/node/*/bin 2>/dev/null | sort -V | tail -1):$PATH"'
-
-# ── Verifieer dat pm2 nu bereikbaar is en bepaal het bot-pad
-echo ""
-info "pm2 en bot-pad zoeken op Pi..."
-if ! ssh "${PI_USER}@${PI_HOST}" "${NVM_SETUP}; command -v pm2 >/dev/null 2>&1"; then
-  error "pm2 niet gevonden op de Pi (ook niet via nvm). Is Node.js/pm2 geïnstalleerd?"
-fi
-
-PI_PAD=$(ssh "${PI_USER}@${PI_HOST}" "${NVM_SETUP}
-  PAD=\$(pm2 list --no-color 2>/dev/null | grep -oE '/[^ ]+index\\.js' | head -1 | xargs dirname 2>/dev/null)
-  [[ -z \"\$PAD\" ]] && PAD=\$(find /home -name 'index.js' -path '*kroket*' 2>/dev/null | head -1 | xargs dirname 2>/dev/null)
-  echo \"\${PAD:-/home/jspr/kroketgod}\"
-")
-[[ -z "$PI_PAD" ]] && PI_PAD="/home/jspr/kroketgod"
-
-info "pm2: bereikbaar via nvm op PATH"
-info "Bot: ${PI_PAD}"
 
 # ── Bestanden kopiëren
 echo ""
@@ -90,9 +48,7 @@ info "Bestanden uploaden..."
 
 BESTANDEN=(
   "index.js"
-  # package.json + lock MOETEN mee: de npm install hieronder draait op de Pi tegen dit
-  # bestand. Zonder upload wordt een nieuwe dependency daar nooit geinstalleerd (en kwam
-  # ook het versienummer er niet).
+  # package.json + lock MOETEN mee: de container installeert bij het starten tegen dit bestand.
   "package.json"
   "package-lock.json"
   "dashboard.html"
@@ -102,109 +58,74 @@ BESTANDEN=(
   "tone_of_voice_straattaal.txt"
   "geboden.txt"
   # Legacy-ledenlijst. members.json is de echte bron, maar index.js leest dit bestand nog met
-  # readFileSync zonder try/catch bij het opbouwen van SYSTEM_PROMPT_BASIS — dus zonder upload
-  # start een verse Pi niet op. Stond er niet in; dat viel niet op omdat hij er al stond.
+  # readFileSync zonder try/catch bij het opbouwen van SYSTEM_PROMPT_BASIS.
   "leden.txt"
   # Het Vetgeschrift — de Onderste Codex. MOET mee: index.js leest hem met readFileSync
-  # zonder try/catch, dus zonder dit bestand start de bot op de Pi niet op.
+  # zonder try/catch, dus zonder dit bestand start de bot niet op.
   "vetgeschrift.txt"
   "gepanneerde_rijk.txt"
   "kroketgod.png"
   # Materiaalstaal dat als bijlage meegaat met elke Gemini-beeldopdracht (zie KROKET_REFERENTIE).
-  # Zonder dit bestand op de Pi valt de referentie stil terug op kroketgod.png.
+  # Zonder dit bestand valt de referentie stil terug op kroketgod.png.
   "referentie-kroket.jpg"
 )
 
-# Bestanden waarvan de PI de bron van waarheid is: de bot schrijft ze zelf (aanmelden,
-# rolwissel, profielvelden). Ze worden alleen geüpload als ze op de Pi nog NIET bestaan —
+# Bestanden waarvan de SERVER de bron van waarheid is: de bot schrijft ze zelf (aanmelden,
+# rolwissel, profielvelden). Ze worden alleen geüpload als ze daar nog NIET bestaan —
 # anders zou een deploy vanaf een verouderde laptop-kopie nieuwe leden wegvagen.
 # (Net als .env, die nooit wordt gedeployed.)
-PI_EIGEN=(
+SERVER_EIGEN=(
   "members.json"
 )
 
 for bestand in "${BESTANDEN[@]}"; do
   lokaal="${LOKAAL_PAD}/${bestand}"
   if [[ -f "$lokaal" ]]; then
-    scp -q "$lokaal" "${PI_USER}@${PI_HOST}:${PI_PAD}/${bestand}"
+    scp -q "$lokaal" "${SERVER}:${SERVER_PAD}/${bestand}"
     info "  ${bestand}"
   else
     warn "  ${bestand} niet gevonden, overgeslagen"
   fi
 done
 
-# ── Interne modules (lib/). Alles wat index.js require't moet mee, anders start de bot niet.
-# Bewust de hele map, zodat een nieuwe module niet vergeten kan worden.
-if [[ -d "${LOKAAL_PAD}/lib" ]]; then
-  ssh "${PI_USER}@${PI_HOST}" "mkdir -p '${PI_PAD}/lib'"
-  scp -q "${LOKAAL_PAD}/lib/"*.js "${PI_USER}@${PI_HOST}:${PI_PAD}/lib/"
-  info "  lib/ ($(ls -1 "${LOKAAL_PAD}/lib/"*.js | wc -l | tr -d ' ') modules)"
-else
-  warn "  lib/ niet gevonden"
-fi
+# ── Interne modules (lib/) en het lettertype voor de casinoplaatjes (fonts/). Bewust de hele
+# mappen, zodat een nieuwe module niet vergeten kan worden.
+ssh "$SERVER" "mkdir -p '${SERVER_PAD}/lib' '${SERVER_PAD}/fonts'"
+scp -q "${LOKAAL_PAD}/lib/"*.js "${SERVER}:${SERVER_PAD}/lib/"
+info "  lib/ ($(ls -1 "${LOKAAL_PAD}/lib/"*.js | wc -l | tr -d ' ') modules)"
+scp -q "${LOKAAL_PAD}/fonts/"* "${SERVER}:${SERVER_PAD}/fonts/"
+info "  fonts/"
 
-for bestand in "${PI_EIGEN[@]}"; do
+for bestand in "${SERVER_EIGEN[@]}"; do
   lokaal="${LOKAAL_PAD}/${bestand}"
   [[ -f "$lokaal" ]] || continue
-  if ssh "${PI_USER}@${PI_HOST}" "test -f '${PI_PAD}/${bestand}'"; then
-    info "  ${bestand} overgeslagen (Pi is de bron van waarheid)"
+  if ssh "$SERVER" "test -f '${SERVER_PAD}/${bestand}'"; then
+    info "  ${bestand} overgeslagen (de server is de bron van waarheid)"
   else
-    scp -q "$lokaal" "${PI_USER}@${PI_HOST}:${PI_PAD}/${bestand}"
+    scp -q "$lokaal" "${SERVER}:${SERVER_PAD}/${bestand}"
     info "  ${bestand} (eerste keer aangelegd)"
   fi
 done
 
-# ── npm install
-echo ""
-info "Dependencies controleren..."
-ssh "${PI_USER}@${PI_HOST}" "${NVM_SETUP}; cd '${PI_PAD}' && npm install --silent 2>&1 | tail -2"
-
-# ── Bot herstarten
+# ── Bot herstarten en wachten tot hij wakker is (npm install zit in de start)
 echo ""
 info "Bot herstarten..."
-ssh "${PI_USER}@${PI_HOST}" "${NVM_SETUP}
-  pm2 restart ${PM2_NAAM} --update-env 2>/dev/null \
-    || pm2 start '${PI_PAD}/index.js' --name ${PM2_NAAM}
-  sleep 3
-  pm2 save --force 2>/dev/null || true
-  pm2 status ${PM2_NAAM} --no-color 2>&1 | tail -5
-"
+SINDS=$(ssh "$SERVER" "date -u +%Y-%m-%dT%H:%M:%SZ; docker restart ${CONTAINER} >/dev/null")
 
-# ── Startup check: kijk of bot zonder fouten opstartte
-echo ""
-info "Opstartlog controleren..."
-OPSTART=$(ssh "${PI_USER}@${PI_HOST}" "${NVM_SETUP}; pm2 logs ${PM2_NAAM} --lines 5 --nostream --no-color 2>/dev/null | grep -E 'wakker|Fout|Error|ECONNREFUSED' || true")
+OPSTART=""
+for _ in $(seq 1 30); do
+  sleep 2
+  OPSTART=$(ssh "$SERVER" "docker logs ${CONTAINER} --since ${SINDS} 2>&1" || true)
+  echo "$OPSTART" | grep -q "wakker" && break
+done
 if echo "$OPSTART" | grep -q "wakker"; then
   info "Bot is succesvol opgestart ⚜️"
-elif echo "$OPSTART" | grep -qiE "Fout|Error|ECONNREFUSED"; then
-  warn "Mogelijke opstartfout gedetecteerd:"
-  echo "$OPSTART"
 else
-  warn "Kon opstartbevestiging niet lezen — controleer logs handmatig"
+  warn "Geen opstartbevestiging binnen een minuut. Laatste regels:"
+  echo "$OPSTART" | tail -15
 fi
 
-# ── Samenvatting
-echo ""
-echo "╔══════════════════════════════════════╗"
-echo "║         Deploy geslaagd! ✓           ║"
-echo "╚══════════════════════════════════════╝"
-echo ""
-info "Actieve functies:"
-echo "   • Gemini 2.0 Flash afbeeldingen + Pollinations fallback"
-echo "   • Gespreksgeheugen + context-aware sarcasme"
-echo "   • Dagelijkse stemming (streng/genadig/filosofisch/...)"
-echo "   • Weersverwachting met echt Amsterdams weer"
-echo "   • Airfryer/magnetron detector"
-echo "   • Vrijdag-streak tracking + aankondigingen"
-echo "   • 11:30 reminder + 12:00 heilig moment"
-echo "   • Gele en rode kaarten (geel 1 uur, rood 1 dag geschorst)"
-echo "   • Ban beroep (20% kans op genade)"
-echo "   • 'eer naam1 en naam2' multi-naam support"
-echo "   • Vergrijpentracking, achievements, TTS"
 echo ""
 info "Live logs:"
-echo "   ssh ${PI_USER}@${PI_HOST} 'pm2 logs ${PM2_NAAM}'"
-echo ""
-info "Toekomstige deploys (ook via Tailscale):"
-echo "   bash deploy.sh kroketpi"
+echo "   ssh ${SERVER} 'docker logs -f --tail 50 ${CONTAINER}'"
 echo ""
