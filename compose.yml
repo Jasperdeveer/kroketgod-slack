@@ -1,5 +1,16 @@
-# Hoe de bot op jsprsuperserver draait. Kopie van ~/docker/kroketgod/compose.yml daar; wijzig je
-# iets, doe het op beide plekken en draai daar `docker compose up -d`.
+# Hoe de bot op jsprsuperserver draait: de bot en zijn waakhond, verder niets op de host.
+# deploy.sh zet dit bestand in ~/docker/kroketgod/ en maakt de containers opnieuw aan als het
+# veranderd is. Wijzig het dus alleen hier.
+#
+# Herstellen op een kale server: Docker installeren, /home/jspr/kroketgod terugzetten (code, .env
+# en alle .json; eigenaar uid 1000), dit bestand in ~/docker/kroketgod/ en daar `docker compose up -d`.
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "3"
+
 services:
   kroketgod:
     image: node:20-bookworm-slim
@@ -17,8 +28,45 @@ services:
     volumes:
       - /home/jspr/kroketgod:/home/jspr/kroketgod
     mem_limit: 800m
-    logging:
-      driver: json-file
-      options:
-        max-size: "20m"
-        max-file: "3"
+    # Elk HTTP-antwoord telt als gezond, ook een 503: dan is Slack weg, en dat lost de bot zelf op.
+    # Ruime start_period: bij elke start draait eerst npm install.
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3001/health', () => process.exit(0)).on('error', () => process.exit(1))"]
+      interval: 1m
+      timeout: 10s
+      retries: 3
+      start_period: 3m
+    logging: *logging
+
+  # Herstart alleen de bot: als hij drie healthchecks op rij niet antwoordt, en elke nacht om 03:00
+  # (de inhaalslagen bij het opstarten rekenen daarop). Docker zelf herstart een unhealthy container
+  # niet, daarom deze kleine container met toegang tot de Docker-socket.
+  waakhond:
+    image: docker:29-cli
+    container_name: kroketgod-waakhond
+    restart: unless-stopped
+    environment:
+      - DOEL=kroketgod
+      # Europe/Amsterdam als POSIX-regel: de image heeft geen tijdzonedatabase.
+      - TZ=CET-1CEST,M3.5.0,M10.5.0/3
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    entrypoint:
+      - sh
+      - -c
+      - |
+        echo "waakhond: let op $$DOEL"
+        nacht=""
+        while sleep 60; do
+          if [ "$$(docker inspect -f '{{.State.Health.Status}}' "$$DOEL" 2>/dev/null)" = unhealthy ]; then
+            echo "$$(date '+%F %T') $$DOEL antwoordt niet op /health, herstart"
+            docker restart "$$DOEL" >/dev/null
+          fi
+          if [ "$$(date +%H)" = 03 ] && [ "$$nacht" != "$$(date +%F)" ]; then
+            echo "$$(date '+%F %T') nachtelijke herstart van $$DOEL"
+            docker restart "$$DOEL" >/dev/null
+            nacht=$$(date +%F)
+          fi
+        done
+    mem_limit: 64m
+    logging: *logging

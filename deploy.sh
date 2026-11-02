@@ -5,9 +5,9 @@
 #    bash deploy.sh                    → jsprsuperserver via Tailscale
 #    bash deploy.sh 192.168.178.x      → een ander adres
 #
-#  De bot draait daar in Docker (container 'kroketgod', zie compose.yml; op de server staat die
-#  in ~/docker/kroketgod). De container doet bij elke start zelf npm install, dus bestanden
-#  kopiëren en herstarten is genoeg. MagicDNS staat uit in de tailnet, daarom het Tailscale-IP.
+#  De bot draait daar in Docker (container 'kroketgod' plus 'kroketgod-waakhond', zie compose.yml;
+#  op de server staat die in ~/docker/kroketgod). De container doet bij elke start zelf npm install,
+#  dus bestanden kopiëren en herstarten is genoeg. MagicDNS staat uit in de tailnet, daarom het IP.
 # ─────────────────────────────────────────
 
 set -e
@@ -27,6 +27,7 @@ SERVER_USER="jspr"
 SERVER_HOST="${1:-100.101.216.108}"   # jsprsuperserver
 SERVER="${SERVER_USER}@${SERVER_HOST}"
 SERVER_PAD="/home/jspr/kroketgod"
+COMPOSE_PAD="/home/jspr/docker/kroketgod"
 CONTAINER="kroketgod"
 
 echo ""
@@ -107,10 +108,18 @@ for bestand in "${SERVER_EIGEN[@]}"; do
   fi
 done
 
-# ── Bot herstarten en wachten tot hij wakker is (npm install zit in de start)
+# ── Bot herstarten en wachten tot hij wakker is (npm install zit in de start). Is compose.yml
+# veranderd, dan maakt compose de containers opnieuw aan (dat is meteen de herstart); anders een
+# gewone herstart, die de log van de container laat staan.
 echo ""
-info "Bot herstarten..."
-SINDS=$(ssh "$SERVER" "date -u +%Y-%m-%dT%H:%M:%SZ; docker restart ${CONTAINER} >/dev/null")
+scp -q "${LOKAAL_PAD}/compose.yml" "${SERVER}:${COMPOSE_PAD}/compose.yml.nieuw"
+if ssh "$SERVER" "cmp -s '${COMPOSE_PAD}/compose.yml.nieuw' '${COMPOSE_PAD}/compose.yml'"; then
+  info "Bot herstarten..."
+  SINDS=$(ssh "$SERVER" "rm '${COMPOSE_PAD}/compose.yml.nieuw'; date -u +%Y-%m-%dT%H:%M:%SZ; docker restart ${CONTAINER} >/dev/null")
+else
+  info "compose.yml gewijzigd: containers opnieuw aanmaken..."
+  SINDS=$(ssh "$SERVER" "cd '${COMPOSE_PAD}' && mv compose.yml.nieuw compose.yml && date -u +%Y-%m-%dT%H:%M:%SZ && docker compose up -d --force-recreate --quiet-pull >/dev/null")
+fi
 
 OPSTART=""
 for _ in $(seq 1 30); do

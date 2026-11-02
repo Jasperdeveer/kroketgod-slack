@@ -1,6 +1,0 @@
-[Unit]
-Description=Kroket God waakhond (bot en netwerk)
-
-[Service]
-Type=oneshot
-ExecStart=/usr/local/bin/kroketgod-waakhond

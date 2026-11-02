@@ -1,9 +1,0 @@
-[Unit]
-Description=Kroket God waakhond, elke 2 minuten
-
-[Timer]
-OnBootSec=3min
-OnUnitActiveSec=2min
-
-[Install]
-WantedBy=timers.target
