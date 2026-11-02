@@ -991,6 +991,19 @@ function bumpStatHistorieEvent(type) {
   } catch (_) {}
 }
 
+// Telt een /kroketgod-commando (het eerste woord) bij vandaag. Apart van `events`, want die
+// tekenen de trendgrafiek. Zonder deze teller was niet te zien welke commando's niemand gebruikt.
+function bumpStatHistorieCommando(woord) {
+  try {
+    const data = loadStatHistorie();
+    if (!data.dagen) data.dagen = {};
+    const dag = (data.dagen[amsDatumSleutel()] ||= { events: 0, perType: {} });
+    dag.commandos = { ...dag.commandos, [woord]: (dag.commandos?.[woord] || 0) + 1 };
+    snoeiStatHistorie(data);
+    saveStatHistorie(data);
+  } catch (_) {}
+}
+
 // Schrijft de cumulatieve momentopname (leden, score, bans, …) naar de dag van vandaag.
 // Wordt vanuit het dashboard aangeroepen; de laatste waarde van de dag wint.
 function snapshotStatHistorieVandaag(snap) {
@@ -6298,6 +6311,10 @@ async function voerKroketCommandoUit({ command, respond, client }) {
       await respond({ text: NIET_BESCHIKBAAR, response_type: 'ephemeral' });
       return;
     }
+
+    // Alleen bekende commandowoorden: vrije tekst van leden hoort niet in de statistiek.
+    const commandoWoord = input.toLowerCase().split(/\s+/)[0] || '(leeg)';
+    if (['(leeg)', 'help'].includes(commandoWoord) || bekendeCommandoWoorden(command.user_id).has(commandoWoord)) bumpStatHistorieCommando(commandoWoord);
 
     // Prompt-injectie detectie — vrije tekst in slash commands gaat ook de LLM-prompt in
     if (input && isPromptInjectie(input)) {
