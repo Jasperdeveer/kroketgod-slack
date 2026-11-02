@@ -172,6 +172,7 @@ const {
 } = require('./lib/casinobeeld.js');
 const { GOKPAUZE_DAGEN, naCasinoSpel, opRustdag, moetWaarschuwen, naWaarschuwing, naPoging, zonderRustdag, standVan } = require('./lib/gokpauze.js');
 const { boekSpel: boekCasinoStat, vatSamen: vatCasinoSamen } = require('./lib/casinostats.js');
+const { maxHpVoor, isRazend, slaatTerug, komtTerug, vijandBeurt } = require('./lib/weekvijand.js');
 const { createHash } = require('crypto');
 const {
   VERBOND_MAX, VERZOEK_GELDIG_MS, groepen: verbondGroepen, naarOpslag: verbondNaarOpslag,
@@ -10505,6 +10506,7 @@ const CRON_LABELS = {
   '30 8 * * *':      { label: 'Verjaardagszegen' },
   '0 8 * * *':       { label: 'Verborgen Hand (uitnodiging)' },
   '50 14 * * 5':     { label: 'Weekvijand ontsnapping' },
+  '40 12 * * 2-5':   { label: 'Weekvijand slaat terug' },
   '45 23 * * 0':     { label: 'Kroniek schrijven' },
   '45 10 1-7 * 1':   { label: 'Weefselrapport' },
   '0 9 * * 1':       { label: 'Weekopening' },
@@ -11866,7 +11868,7 @@ planCron('30 10 * * 1', async () => {
 registreerFeature({
   naam: 'bamischijf-raid',
   state: ['bamischijf.json'],
-  help: [{ gebruik: '/kroketgod aanval', verwacht: 'val de vijand van deze week aan (1x/dag; `aanval offer` = extra schade) — of klik ⚔️ op het raid-bord' }],
+  help: [{ gebruik: '/kroketgod aanval', verwacht: 'val de vijand van deze week aan (1x/dag; `aanval offer` = extra schade) — hij slaat terug; of klik ⚔️ op het raid-bord' }],
 });
 
 // ── Weekraid: coöperatieve strijd tegen de vijand van de week ─────────────────
@@ -12145,6 +12147,8 @@ function weekvijandPersona(raidState = null) {
       `en de leden vallen je aan met "/kroketgod aanval". Je staat er op dit moment ${Math.max(0, raid.hp)} van ${raid.maxHp} levenspunten voor.\n` +
       `Je spot met de Kroket God en met zijn volgelingen, maar NOOIT persoonlijk kwetsend over echte mensen — je spot met hun kroket-geloof, ` +
       `niet met wie ze zijn. Je bent een cartooneske schurk, geen pestkop. Je geeft nooit toe dat de kroket lekker is.` +
+      `\n\nJe slaat terug: wie je aanvalt, kan een kroketpunt aan je buit verliezen, en elke middag neem je zelf wraak of lik je je wonden.` +
+      (isRazend(raid) ? ' Je bent zwaar gewond en RAZEND.' : '') +
       (raid.wrok ? `\n\nJe bent hier voor de ${raid.wrok + 1}e week op rij omdat ze je vorige keer niet konden verslaan. Wrijf dat er regelmatig in.` : ''),
   };
 }
@@ -12237,12 +12241,13 @@ async function ochtendgroetTik(client) {
 }
 
 // Laat de vijand iets zeggen onder eigen naam en gezicht.
-async function vijandSpreekt(client, channelId, opdracht, maxTokens = 220, raidState = null) {
+// `naschrift` komt letterlijk onder zijn woorden: de exacte feiten die het model niet mag verdraaien.
+async function vijandSpreekt(client, channelId, opdracht, maxTokens = 220, raidState = null, naschrift = '') {
   const persona = weekvijandPersona(raidState);
   if (!persona) return false;
   try {
     const tekst = await personaResponse(persona, opdracht, maxTokens, 'licht');
-    await postAlsPersona(client, channelId, persona, tekst);
+    await postAlsPersona(client, channelId, persona, tekst + naschrift);
     return true;
   } catch (err) {
     console.warn(`⚠️ Weekvijand (${persona.naam}) kon niet spreken:`, err.message);
@@ -12257,7 +12262,7 @@ async function vijandSpreekt(client, channelId, opdracht, maxTokens = 220, raidS
 // het kanaal schoon blijft. De knoppen delen hun logica met `/kroketgod aanval`.
 
 function bouwRaidBlocks(raid) {
-  const status = raid.hp <= 0 ? '☠️ *VERSLAGEN*' : raid.actief ? '🔥 *ACTIEF*' : '🌫️ *ONTSNAPT*';
+  const status = raid.hp <= 0 ? '☠️ *VERSLAGEN*' : !raid.actief ? '🌫️ *ONTSNAPT*' : isRazend(raid) ? '😡 *RAZEND*' : '🔥 *ACTIEF*';
   const strijderAantal = Object.keys(raid.strijders || {}).length;
   // Identiteit uit de state: elke week een andere snack (zie WEEKVIJANDEN). Een raid van vóór
   // de weekvijand heeft geen `vijand` — dan valt hij terug op de oorspronkelijke Bamischijf.
@@ -12270,10 +12275,10 @@ function bouwRaidBlocks(raid) {
       (raid.wrok ? `_Voor de ${raid.wrok + 1}e week terug — sterker dan daarvoor._\n` : '') +
       (raid.terugkeer ? `_Opgestaan uit de Zegezaal, gewroken en dubbel zo sterk._\n` : '') +
       `*${Math.max(0, raid.hp)}/${raid.maxHp} HP*  ${hpBalk(raid.hp, raid.maxHp)}\n` +
-      `Status: ${status} · Strijders: *${strijderAantal}*` } },
+      `Status: ${status} · Strijders: *${strijderAantal}*` + (raid.buit ? ` · Buit: *${raid.buit}* pt` : '') } },
   ];
   const laatste = (raid.log || []).slice(-5).reverse()
-    .map(l => `> ${l.offer ? '🔥' : '⚔️'} *${l.naam}* — −${l.schade} HP`)
+    .map(l => l.beurt ? `> 🩸 _${l.beurt}_` : `> ${l.offer ? '🔥' : '⚔️'} *${l.naam}* — −${l.schade} HP${l.terug ? ' · ↩️ −1 pt' : ''}`)
     .join('\n');
   if (laatste) blocks.push({ type: 'section', text: { type: 'mrkdwn', text: `*Laatste aanvallen*\n${laatste}` } });
   if (raid.actief && raid.hp > 0) {
@@ -12283,7 +12288,7 @@ function bouwRaidBlocks(raid) {
     ] });
   }
   blocks.push({ type: 'context', elements: [{ type: 'mrkdwn',
-    text: 'Eén aanval per lid per dag · niet verslagen vóór vrijdag 14:50 → plundering · ook via `/kroketgod aanval`' }] });
+    text: 'Eén aanval per lid per dag · hij slaat terug (−1 pt naar zijn buit, terug als hij valt) · elke middag zijn eigen beurt · niet verslagen vóór vrijdag 14:50 → plundering · ook via `/kroketgod aanval`' }] });
   return blocks;
 }
 
@@ -12333,11 +12338,21 @@ async function voerBamischijfAanval(client, userId, metOffer) {
   // Titelvoorrecht: de Slachter der Weekvijand slaat harder — de titel is in de raid verdiend
   // en betaalt zich in de raid terug.
   const schade = (metOffer ? 2 : 1) + Math.floor(Math.random() * 3) + (heeftTitel(userId, 'slachter') ? 1 : 0);
+  const wasRazend = isRazend(raid);
   strijder.schade = (strijder.schade || 0) + schade;
   strijder.laatsteAanval = vandaagKey;
   raid.strijders[userId] = strijder;
   raid.hp = Math.max(0, raid.hp - schade);
-  raid.log = [...(raid.log || []), { naam: bijnaam, schade, offer: metOffer }].slice(-10);
+  raid.sindsBeurt = [...new Set([...(raid.sindsBeurt || []), userId])];
+  // Hij slaat terug (lib/weekvijand.js): 1 punt naar zijn buit, terug als hij valt.
+  const geraakt = slaatTerug(raid, Math.random()) && (loadScores()[userId] || 0) >= 1;
+  if (geraakt) {
+    pasScoreAan(userId, -1);
+    strijder.verloren = (strijder.verloren || 0) + 1;
+    raid.buit = (raid.buit || 0) + 1;
+  }
+  const werdRazend = !wasRazend && isRazend(raid);
+  raid.log = [...(raid.log || []), { naam: bijnaam, schade, offer: metOffer, terug: geraakt }].slice(-10);
   const kanaal = raid.kanaal || process.env.SLACK_CHANNEL_ID;
 
   if (raid.hp <= 0) {
@@ -12354,15 +12369,18 @@ async function voerBamischijfAanval(client, userId, metOffer) {
   await updateRaidBericht(client, raid);
   // Activiteit zichtbaar zonder kanaal-spam: korte reply in de thread onder het bord.
   // Geen bord (raid van vóór de borden)? Dan de oude losse kanaalpost.
+  const terugRegel = (geraakt ? `\n↩️ ${vijandNaam} slaat terug: *${bijnaam}* verliest 1 kroketpunt aan zijn buit.` : '') +
+    (werdRazend ? `\n😡 *${vijandNaam} wordt RAZEND* — hij slaat vanaf nu vaker terug.` : '');
   if (raid.berichtTs) {
     await postToChannel(client, kanaal,
-      `${metOffer ? '🔥' : '⚔️'} *${bijnaam}* ${metOffer ? 'offert een kroketpunt en ' : ''}haalt uit: *−${schade} HP* (${raid.hp}/${raid.maxHp} over).`,
+      `${metOffer ? '🔥' : '⚔️'} *${bijnaam}* ${metOffer ? 'offert een kroketpunt en ' : ''}haalt uit: *−${schade} HP* (${raid.hp}/${raid.maxHp} over).${terugRegel}`,
       { thread_ts: raid.berichtTs });
   } else {
     await postToChannel(client, kanaal,
-      `⚔️ *AANVAL OP ${vijandNaam.toUpperCase()}* ⚔️\n\n> *${bijnaam}* ${metOffer ? 'offert een kroketpunt en ' : ''}haalt uit: *−${schade} HP*.\n> ${vijandNaam}: *${raid.hp}/${raid.maxHp} HP*  ${hpBalk(raid.hp, raid.maxHp)}\n\n— De Hoge Frituurraad`);
+      `⚔️ *AANVAL OP ${vijandNaam.toUpperCase()}* ⚔️\n\n> *${bijnaam}* ${metOffer ? 'offert een kroketpunt en ' : ''}haalt uit: *−${schade} HP*.\n> ${vijandNaam}: *${raid.hp}/${raid.maxHp} HP*  ${hpBalk(raid.hp, raid.maxHp)}${terugRegel}\n\n— De Hoge Frituurraad`);
   }
-  return { ok: true, tekst: `⚔️ _Uw uithaal deed −${schade} HP. ${vijandNaam} staat op ${raid.hp}/${raid.maxHp}._` };
+  return { ok: true, tekst: `⚔️ _Uw uithaal deed −${schade} HP. ${vijandNaam} staat op ${raid.hp}/${raid.maxHp}._` +
+    (geraakt ? `\n↩️ _Hij sloeg terug: u verloor 1 kroketpunt aan zijn buit. U krijgt het terug als hij valt._` : '') };
 }
 
 async function beslechtBamischijfOverwinning(client, channelId, raid, genadeslagId) {
@@ -12375,6 +12393,9 @@ async function beslechtBamischijfOverwinning(client, channelId, raid, genadeslag
   for (const [uid] of strijders) {
     await pasScoreAanMetCheck(client, uid, uid === zwaarste?.[0] ? 3 : 2, { channelId, uitgesteldeZegens });
   }
+  // Zijn buit keert terug naar wie hem verloor: kale boeking, want het is teruggave, geen verdienste.
+  for (const [uid, s] of strijders) if (s.verloren) pasScoreAan(uid, s.verloren);
+  const buitZin = raid.buit ? ` Zijn buit van ${raid.buit} kroketpunten keert terug naar wie hem verloor.` : '';
   const genadeslagNaam = members[genadeslagId]?.bijnaam || 'een volgeling';
   const zwaarsteNaam = members[zwaarste?.[0]]?.bijnaam || genadeslagNaam;
   const strijderNamen = strijders.map(([uid]) => members[uid]?.bijnaam || uid).join(', ');
@@ -12385,10 +12406,10 @@ async function beslechtBamischijfOverwinning(client, channelId, raid, genadeslag
   const tekst = await kroketResponseMetVangnet(
     `OVERWINNING: ${vijandNaam} is VERSLAGEN door de verenigde Kroket Illuminati. ` +
     `${genadeslagNaam} deelde de genadeslag uit; ${zwaarsteNaam} richtte in totaal de meeste schade aan. Strijders: ${strijderNamen}. ` +
-    `Elke strijder ontvangt +2 kroketpunten, de zwaarste slager +3. Bezing de overwinning episch (3-4 zinnen) — het vet komt tot rust, de paneerlaag zegeviert. ` +
+    `Elke strijder ontvangt +2 kroketpunten, de zwaarste slager +3.${buitZin} Bezing de overwinning episch (3-4 zinnen) — het vet komt tot rust, de paneerlaag zegeviert. ` +
     `Gebruik de namen letterlijk. Noem GEEN puntenstanden. Geen inleidingszin.`,
     550, false,
-    `🏆 *${vijandNaam.toUpperCase()} IS VERSLAGEN* 🏆\n\n> De verenigde Illuminati zegeviert — genadeslag door *${genadeslagNaam}*. Elke strijder ontvangt +2 kroketpunten, zwaarste slager *${zwaarsteNaam}* +3.\n\n— De Almachtige Kroket God`
+    `🏆 *${vijandNaam.toUpperCase()} IS VERSLAGEN* 🏆\n\n> De verenigde Illuminati zegeviert — genadeslag door *${genadeslagNaam}*. Elke strijder ontvangt +2 kroketpunten, zwaarste slager *${zwaarsteNaam}* +3.${buitZin}\n\n— De Almachtige Kroket God`
   );
   // Sterfrede: de vijand krijgt het laatste woord, onder eigen naam en gezicht. De raid staat op
   // dit moment al op actief=false met 0 HP, dus de identiteit gaat EXPLICIET mee — anders zwijgt hij.
@@ -20126,6 +20147,8 @@ function bouwAppHomeBlocks(userId, melding = '', extraBlocks = []) {
     const verslagenNu = Object.keys(loadVerslagen()).length;
     blocks.push({ type: 'section', text: { type: 'mrkdwn', text:
       `${hpBalk(raidNu.hp, raidNu.maxHp)}  *${Math.max(0, raidNu.hp)}/${raidNu.maxHp}* HP · uw schade: *${raidNu.strijders?.[userId]?.schade || 0}* · ${Object.keys(raidNu.strijders || {}).length} strijders` +
+      (isRazend(raidNu) ? ' · 😡 razend' : '') +
+      (raidNu.strijders?.[userId]?.verloren ? `\n_In zijn buit: ${raidNu.strijders[userId].verloren} kroketpunt(en) van u — terug als hij valt._` : '') +
       (raidNu.wrok ? `\n_Voor de ${raidNu.wrok + 1}e week terug — hij is niet vergeten dat u faalde._` : '') +
       `\n_Zegezaal: ${verslagenNu}/${WEEKVIJANDEN.length} vijanden voorgoed geveld._` } });
     if (!verbannen && !aanvalGedaan) {
@@ -21206,22 +21229,23 @@ async function spawnWeekvijand(urenTotDeadline = null) {
   writeJSON('bamischijf.json', { ...vorige, bezetting: Date.now() });
   const weekStart = getMondayOfWeek();
 
-  // Ontsnapte de vorige vijand? Dan komt hij terug in plaats van een nieuwe — met wrok.
-  const ontsnapt = vorige.vijand && !vorige.verslagen && (vorige.hp ?? 0) > 0;
+  // Ontsnapte de vorige vijand? Dan komt hij terug in plaats van een nieuwe — met wrok, hooguit
+  // WROK_MAX keer (lib/weekvijand.js); daarna is hij weg en komt er een nieuwe.
+  const ontsnapt = komtTerug(vorige);
   const wrok = ontsnapt ? (vorige.wrok || 0) + 1 : 0;
   const { vijand, terugkeer } = ontsnapt
     ? { vijand: vorige.vijand, terugkeer: false }
     : kiesWeekvijand(weekStart);
 
-  const ledental = Object.keys(loadMembers()).length || 5;
-  // Basis zoals voorheen (ledental × 4, minimaal 12), geschaald met het karakter van de snack
-  // en met een wrok-opslag van 20% per week dat hij ongestraft bleef.
-  const maxHp = Math.max(12, Math.round(ledental * 4 * (vijand.hpFactor || 1) * (1 + 0.2 * wrok)));
+  // Alleen wie mee kán vechten telt: een balling of een lid op vakantie zou HP opleveren die
+  // niemand kan wegslaan.
+  const ledental = vechtbareLeden().length || 5;
+  const maxHp = maxHpVoor(ledental, vijand.hpFactor || 1, wrok);
   const avatarUrl = weekvijandAvatarUrl(vijand);
   const avatarOk = avatarUrl ? await warmAvatarOp(avatarUrl) : false;
 
   const raidState = {
-    actief: true, hp: maxHp, maxHp, strijders: {}, log: [],
+    actief: true, hp: maxHp, maxHp, strijders: {}, log: [], buit: 0, sindsBeurt: [],
     deadlineTs: urenTotDeadline ? Date.now() + urenTotDeadline * 3_600_000 : weekvijandDeadlineTs(),
     kanaal: process.env.SLACK_CHANNEL_ID,
     vijand, weekStart, wrok, terugkeer,
@@ -21233,7 +21257,7 @@ async function spawnWeekvijand(urenTotDeadline = null) {
 
   // De vijand kondigt zich ZELF aan, onder eigen naam en gezicht. Dat is het hele punt: het is
   // geen decreet van de Kroket God maar een vijand die het kanaal binnenkomt.
-  const opdracht = wrok
+  const opdracht = (wrok
     ? `Je bent NIET verslagen en komt voor de ${wrok + 1}e week op rij terug, sterker dan daarvoor (${maxHp} levenspunten). ` +
       `Kondig je terugkeer aan: hoonlachend, wraakzuchtig, en wrijf erin dat de Kroket Illuminati je vorige week niet aankon. ` +
       `Daag ze uit je opnieuw aan te vallen met "/kroketgod aanval". 3-4 zinnen, volledig in jouw karakter. Geen inleidingszin.`
@@ -21242,7 +21266,8 @@ async function spawnWeekvijand(urenTotDeadline = null) {
         `Kondig je wederopstanding aan als een schurk die terugkomt uit de dood. 3-4 zinnen, volledig in jouw karakter. Geen inleidingszin.`
       : `Je rijst deze week op uit de frituur als de vijand van de Kroket Illuminati (${maxHp} levenspunten). ` +
         `Stel jezelf voor, verkondig waarom de kroket-verering moet vallen, en daag de leden uit je aan te vallen met "/kroketgod aanval". ` +
-        `3-4 zinnen, volledig in jouw karakter. Geen inleidingszin.`;
+        `3-4 zinnen, volledig in jouw karakter. Geen inleidingszin.`)
+    + ' Waarschuw ook dat je terugslaat.';
 
   const gesproken = await vijandSpreekt(app.client, process.env.SLACK_CHANNEL_ID, opdracht, 420);
   if (!gesproken) {
@@ -21252,6 +21277,7 @@ async function spawnWeekvijand(urenTotDeadline = null) {
       `${vijand.emoji} *${vijand.naam.toUpperCase()} IS OPGEREZEN* ${vijand.emoji}\n\n` +
       `> De vijand van deze week telt *${maxHp} levenspunten*${wrok ? ` en komt voor de ${wrok + 1}e week terug` : ''}.\n` +
       `> Val aan met \`/kroketgod aanval\` (1× per dag; \`aanval offer\` = krachtiger).\n` +
+      `> Hij slaat terug: wie hij raakt verliest een kroketpunt aan zijn buit — terug als hij valt.\n` +
       `> Niet verslagen vóór vrijdag 14:50 → hij plundert de ranglijst en komt sterker terug.\n\n— De Hoge Frituurraad`);
   }
 
@@ -21425,12 +21451,16 @@ async function beslechtBamischijfOntsnapping(client) {
   raid.verslagen = false; // expliciet: hij leeft nog, dus hij komt terug met wrok
   writeJSON('bamischijf.json', raid);
   const vijandNaam = raid.vijand?.naam || 'De Bamischijf der Duisternis';
+  // Na WROK_MAX weken terug verdwijnt hij; hij blijft in de trekking (niet verslagen), dus 'voorgoed' zou liegen.
+  const keertTerug = komtTerug(raid);
+  const buitZin = raid.buit ? ` Hij neemt ${raid.buit} geroofde kroketpunten mee.` : '';
   // De hoonrede kan nu pas: weekvijandPersona() leest normaal de ACTIEVE state, en die staat
   // inmiddels op false — daarom de identiteit expliciet meegeven (zie weekvijandPersona(raidState)).
   await vijandSpreekt(client, process.env.SLACK_CHANNEL_ID,
     `Je bent NIET verslagen: er restte nog ${raid.hp} van je ${raid.maxHp} levenspunten toen de tijd verstreek. ` +
-    `Je trekt je terug, maar je komt volgende week terug en sterker. Spreek een triomfantelijke hoonrede: ` +
-    `wrijf hun falen erin, in jouw karakter. Maximaal 4 zinnen. Geen inleidingszin.`, 240, raid);
+    (keertTerug ? `Je trekt je terug, maar je komt volgende week terug en sterker. `
+      : `Je verdwijnt ongeslagen in de frituur en laat ze achter met hun falen; of en wanneer je ooit terugkeert, zeg je niet. `) +
+    `Spreek een triomfantelijke hoonrede: wrijf hun falen erin, in jouw karakter. Maximaal 4 zinnen. Geen inleidingszin.`, 240, raid);
   const members = loadMembers();
   // Het monster ontsnapt en plundert de top 3 van de ranglijst: −1 kroketpunt elk.
   const top = Object.entries(loadScores()).filter(([, s]) => s > 0).sort((a, b) => b[1] - a[1]).slice(0, 3);
@@ -21439,10 +21469,13 @@ async function beslechtBamischijfOntsnapping(client) {
   logGebeurtenis('bamischijf', null, `${vijandNaam} ontsnapte met ${raid.hp}/${raid.maxHp} HP en plunderde: ${namen}`);
   const tekst = await kroketResponseMetVangnet(
     `De Kroket Illuminati heeft GEFAALD: ${vijandNaam} is niet verslagen (${raid.hp} van de ${raid.maxHp} HP resteerde) en trekt zich terug in de frituur. ` +
-    `Op zijn terugtocht plundert hij de rijksten van de ranglijst: ${namen} verliezen elk 1 kroketpunt. ` +
-    `Spreek de Raad teleurgesteld en dreigend toe: hij ZAL volgende week terugkeren, en sterker. Geen inleidingszin.`,
+    `Op zijn terugtocht plundert hij de rijksten van de ranglijst: ${namen} verliezen elk 1 kroketpunt.${buitZin} ` +
+    (keertTerug ? `Spreek de Raad teleurgesteld en dreigend toe: hij ZAL volgende week terugkeren, en sterker. Geen inleidingszin.`
+      : `Hij komt maandag NIET terug: hij is ongeslagen in de frituur verdwenen, niemand weet of hij ooit terugkeert. Spreek de Raad teleurgesteld toe over deze schande. Geen inleidingszin.`),
     450, false,
-    `🌫️ *${vijandNaam.toUpperCase()} ONTSNAPT* 🌫️\n\n> Niet verslagen (${raid.hp}/${raid.maxHp} HP restte). Op de terugtocht geplunderd: ${namen} verliezen elk 1 kroketpunt.\n> Hij komt maandag terug — met wrok en meer kracht.\n\n— De Hoge Frituurraad`
+    `🌫️ *${vijandNaam.toUpperCase()} ONTSNAPT* 🌫️\n\n> Niet verslagen (${raid.hp}/${raid.maxHp} HP restte). Op de terugtocht geplunderd: ${namen} verliezen elk 1 kroketpunt.${buitZin}\n` +
+    (keertTerug ? `> Hij komt maandag terug — met wrok en meer kracht.` : `> Hij verdwijnt ongeslagen in de frituur. Of hij ooit terugkeert, weet niemand — de Zegezaal haalt hij zo nooit.`) +
+    `\n\n— De Hoge Frituurraad`
   );
   await updateRaidBericht(client, raid); // bord op "ontsnapt" zetten en de knoppen weghalen
   await postToChannel(client, process.env.SLACK_CHANNEL_ID, tekst);
@@ -21453,6 +21486,62 @@ planCron('50 14 * * 5', async () => {
     await beslechtBamischijfOntsnapping(app.client);
   } catch (err) {
     console.error('Fout bij Bamischijf-deadline:', err);
+  }
+}, { timezone: 'Europe/Amsterdam' });
+
+// Wie mee kan vechten: geen balling, niet op vakantie. Bepaalt de HP bij de opkomst en de
+// "helft" waaronder hij herstelt.
+function vechtbareLeden() {
+  return Object.keys(loadMembers()).filter(uid => !isVerbannen(uid) && !isAfwezig(uid));
+}
+
+// Zijn beurt: elke middag (di–vr) doet de vijand zelf iets — herstellen als minder dan de helft
+// sinds zijn vorige beurt vocht, anders wraak op zijn zwaarste belager (lib/weekvijand.js). Een
+// gemiste beurt (bot plat) wordt bewust niet ingehaald: dan doet hij die dag niets.
+async function weekvijandBeurt(client) {
+  const raid = readJSON('bamischijf.json', {});
+  const dag = dagSleutel();
+  if (!raid.actief || raid.hp <= 0 || raid.laatsteBeurt === dag) return null;
+  if (raid.deadlineTs && Date.now() > raid.deadlineTs) return null;
+  const ledental = vechtbareLeden().length || 5;
+  const beurt = vijandBeurt(raid, ledental, loadScores());
+  const vijandNaam = raid.vijand?.naam || 'De Bamischijf der Duisternis';
+  const naam = loadMembers()[beurt.doelwit]?.bijnaam || 'een volgeling';
+  // Claim vóór de eerste await (atomair binnen één tick), net als de opkomst en de ontsnapping.
+  raid.laatsteBeurt = dag;
+  raid.sindsBeurt = [];
+  let feit, opdracht;
+  if (beurt.soort === 'herstel' && beurt.herstel) {
+    raid.hp += beurt.herstel;
+    raid.log = [...(raid.log || []), { beurt: `herstelt +${beurt.herstel} HP` }].slice(-10);
+    feit = `🩸 *${vijandNaam} herstelt +${beurt.herstel} HP* (${raid.hp}/${raid.maxHp}) — sinds zijn vorige beurt vochten maar ${beurt.vochten} van de ${ledental} leden. Wie niet vecht, voedt hem.`;
+    opdracht = `Sinds gisteren vochten maar ${beurt.vochten} van de ${ledental} leden tegen je: je likt je wonden en herstelt ${beurt.herstel} levenspunten. ` +
+      `Spot met hun lafheid. Maximaal 2 zinnen. Geen inleidingszin.`;
+  } else if (beurt.soort === 'wraak' && beurt.doelwit) {
+    pasScoreAan(beurt.doelwit, -1);
+    raid.strijders[beurt.doelwit].verloren = (raid.strijders[beurt.doelwit].verloren || 0) + 1;
+    raid.buit = (raid.buit || 0) + 1;
+    raid.log = [...(raid.log || []), { beurt: `wraak op ${naam}: −1 pt` }].slice(-10);
+    feit = `🗡️ *${vijandNaam} neemt wraak op ${naam}*, die hem het zwaarst toetakelde: *−1 kroketpunt* naar zijn buit (nu ${raid.buit}). Terug als hij valt.`;
+    opdracht = `Je neemt wraak op ${naam}, die je deze week het zwaarst toetakelde: je steelt 1 kroketpunt voor je buit. ` +
+      `Richt je dreigend tot ${naam}. Maximaal 2 zinnen. Geen inleidingszin.`;
+  }
+  writeJSON('bamischijf.json', raid);
+  if (!feit) return null; // volle HP en niemand gemist, of niemand met punten om te beroven
+  logGebeurtenis('bamischijf', beurt.doelwit, feit.replace(/\*/g, ''));
+  await updateRaidBericht(client, raid);
+  const kanaal = raid.kanaal || process.env.SLACK_CHANNEL_ID;
+  if (!(await vijandSpreekt(client, kanaal, opdracht, 160, null, `\n\n> ${feit}`))) {
+    await postToChannel(client, kanaal, `${feit}\n\n— De Hoge Frituurraad`);
+  }
+  return feit;
+}
+
+planCron('40 12 * * 2-5', async () => {
+  try {
+    await weekvijandBeurt(app.client);
+  } catch (err) {
+    console.error('Fout bij de beurt van de weekvijand:', err);
   }
 }, { timezone: 'Europe/Amsterdam' });
 
@@ -23457,6 +23546,8 @@ async function voerDashboardActie(actie) {
     case 'bamischijfOntsnap':
       await beslechtBamischijfOntsnapping(app.client);
       return 'Bamischijf-ontsnapping afgehandeld.';
+    case 'weekvijandBeurt':
+      return (await weekvijandBeurt(app.client)) || 'Geen beurt: geen actieve vijand, al gedaan vandaag, of niets te doen.';
     case 'veilingOpen':
       return await openGroteVeiling(4);
     case 'beursDecreet':
