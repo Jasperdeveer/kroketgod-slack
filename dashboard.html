@@ -625,7 +625,7 @@ function renderPersonaLijst(d){
       ? '<img src="'+esc(p.icoon)+'" style="width:20px;height:20px;border-radius:4px;object-fit:cover;vertical-align:middle" onerror="this.style.display=\'none\'">'
       : esc(p.icoon||'');
     return '<tr><td>'+avatar+' '+esc(p.naam)+'</td><td class="muted">'+esc(p.trefwoord||'—')+'</td>'
-      +'<td>'+(p.actief!==false?'actief':'uit')+(p.ongevraagd?' · spontaan':'')+'</td>'
+      +'<td>'+(p.actief!==false?'actief':p.vandaag?'🎲 vandaag, door het lot':'uit')+(p.ongevraagd?' · spontaan':'')+'</td>'
       +'<td>'+(p.actief===false&&!p.alleenVoorLid?'<button class="btn gold" onclick="gastTerug(\''+esc(p.id)+'\')">🚪 nodig uit</button> ':'')
       +'<button class="btn" onclick="personaBewerk(\''+esc(p.id)+'\')">bewerk</button> '
       +'<button class="btn" onclick="personaSchakel(\''+esc(p.id)+'\')">'+(p.actief!==false?'zet uit':'zet aan')+'</button> '

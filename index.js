@@ -182,7 +182,7 @@ const {
   vertrekNaWerkdagen, eersteVertrekker, MAX_GASTEN,
 } = require('./lib/gasten.js');
 const { FUNCTIES, uitlichtPrompt, bouwUitlichting } = require('./lib/nieuwtjes.js');
-const { schetsVan, andereGasten, kandidatenVoorOnderling, kiesAntwoorder, kiesInvaller, kiesDaggasten } = require('./lib/gastenkring.js');
+const { schetsVan, andereGasten, kandidatenVoorOnderling, kiesAntwoorder, kiesInvaller, kiesDaggasten, planOchtendgroet, teGroeten } = require('./lib/gastenkring.js');
 const {
   SLIM_PALET, SLIM_KLASSEN, frequentie: emojiFrequentie, kiesRegel: kiesEmojiRegel,
   magReageren: magEmojiReageren, naReactie: naEmojiReactie,
@@ -8294,6 +8294,12 @@ async function voerKroketCommandoUit({ command, respond, client }) {
       return;
     }
 
+    // ── Wie er vandaag als gast in het kanaal is ──────────────────────────────
+    if (/^gasten$/i.test(input)) {
+      await respond({ text: `🚪 *Gasten vandaag*\n\n${gastenVandaagTekst()}`, response_type: 'ephemeral' });
+      return;
+    }
+
     // ── Vakantiestand: wie zijn afwezigheid meldt, wordt niet vervolgd ────────
     if (input === 'aanwezig' || input === 'afwezig' || input.startsWith('afwezig ')) {
       if (!members[command.user_id]) {
@@ -10437,6 +10443,7 @@ const CRON_LABELS = {
   '5 9 * * 1':       { label: 'Seizoensfase' },
   '40 10 * * *':     { label: 'Tribunaalklok' },
   '0 9 * * 2-5':     { label: 'Stemming van de dag' },
+  '0 9 * * 1-5':     { label: 'Gasten van vandaag' },
   '45 9 * * 1-5':    { label: 'Kroket van de dag' },
   '15 10 * * 1,3,4': { label: 'Kroket Quiz' },
   '30 11 * * 5':     { label: 'Vrijdag-reminder' },
@@ -11612,6 +11619,22 @@ planCron('*/5 * * * *', () => laatGastVertrekken(app.client)
   .catch(err => console.error('Fout bij gastvertrek:', err.data?.error || err.message)),
 { timezone: 'Europe/Amsterdam' });
 
+// Werkdagen, elke minuut van 08:00 tot 08:59: de ochtendgroet van de gasten (ochtendgroetTik).
+planCron('* 8 * * 1-5', () => ochtendgroetTik(app.client)
+  .catch(err => console.error('⚠️ Ochtendgroet mislukt:', err.data?.error || err.message)),
+{ timezone: 'Europe/Amsterdam' });
+
+// Werkdagen 09:00: na de ochtendgroet zet de Kroket God op een rij wie er vandaag is.
+planCron('0 9 * * 1-5', async () => {
+  try {
+    if (instelling('stilModus') || instelling('alleenTestkanaal')) return;
+    const gasten = gastenVandaag();
+    if (gasten.length) await postToChannel(app.client, KANAAL(), `🚪 *DE GASTEN VAN VANDAAG* 🚪\n\n${gastenVandaagTekst(gasten)}\n\n— De Kroket God`);
+  } catch (err) {
+    console.error('⚠️ Gasten van vandaag mislukt:', err.data?.error || err.message);
+  }
+}, { timezone: 'Europe/Amsterdam' });
+
 // Elke minuut: is het geplande moment daar? Post dan. Meer dan 6 uur te laat (bot lag eruit,
 // of stille modus duurde lang) → plan vervalt stilletjes tot de volgende maandag.
 planCron('* * * * *', async () => {
@@ -12009,6 +12032,65 @@ function daggastenVandaag() {
   writeJSON('daggasten.json', { dag, ids });
   console.log(`🎲 Daggasten voor ${dag}: ${ids.map(id => personas[id].naam).join(', ') || 'geen'}.`);
   return ids;
+}
+
+// Wie er vandaag is: de uitgenodigde gasten en de daggasten van het lot (`lot: true`), op naam.
+// Zonder de gerichte persona's (die horen bij één lid) en zonder de weekvijand (eigen opkomst).
+function gastenVandaag() {
+  const personas = loadPersonas();
+  const lot = daggastenVandaag();
+  return Object.entries(personas)
+    .filter(([id, p]) => p?.naam && !p.alleenVoorLid && (p.actief !== false || lot.includes(id)))
+    .map(([id, p]) => ({ id, naam: p.naam, lot: p.actief === false }))
+    .sort((a, b) => a.naam.localeCompare(b.naam, 'nl'));
+}
+
+function gastenVandaagTekst(gasten = gastenVandaag()) {
+  const namen = (lijst) => lijst.map(g => ontsnapMrkdwn(g.naam)).join(' · ');
+  const uitgenodigd = gasten.filter(g => !g.lot), lot = gasten.filter(g => g.lot);
+  return [uitgenodigd.length && `> ${namen(uitgenodigd)}`, lot.length && `> Door het lot: ${namen(lot)}`].filter(Boolean).join('\n')
+    || '> Vandaag geen gasten.';
+}
+
+registreerFeature({
+  naam: 'gasten van vandaag',
+  state: ['daggasten.json', 'ochtendgroet.json'],
+  help: [{ gebruik: '/kroketgod gasten', verwacht: 'wie er vandaag als gast in het kanaal is (alleen voor u zichtbaar)' }],
+});
+
+// De ochtendgroet (lib/gastenkring.js): op werkdagen zegt elke gast van vandaag tussen 08:00 en
+// 09:00 goedemorgen, in eigen stem. Het plan staat in ochtendgroet.json, zodat een herstart midden
+// in het uur niemand twee keer laat groeten. Wie vandaag pas binnenkwam, had zijn entree al.
+async function ochtendgroetTik(client) {
+  if (instelling('stilModus') || instelling('alleenTestkanaal')) return;
+  const dag = dagSleutel();
+  const minuut = new Date().getMinutes(); // Amsterdam scheelt hele uren met UTC
+  let staat = readJSON('ochtendgroet.json', {});
+  if (staat.dag !== dag) {
+    const personas = loadPersonas();
+    const ids = gastenVandaag().map(g => g.id).filter(id => !personas[id].uitgenodigdOp || dagSleutel(new Date(personas[id].uitgenodigdOp)) !== dag);
+    staat = { dag, plan: planOchtendgroet(ids, { van: minuut }), gegroet: [], pogingen: {} };
+    writeJSON('ochtendgroet.json', staat);
+  }
+  const maandag = getTijdContext().dag === 1;
+  for (const id of teGroeten(staat, minuut)) {
+    const aanwezig = gastenVandaag().some(g => g.id === id);
+    const persona = { id, ...loadPersonas()[id] };
+    try {
+      if (aanwezig) {
+        const tekst = await personaResponse(persona,
+          `Het is ${getTijdContext().dagNaam}ochtend en je bent vandaag gast in het kanaal van het genootschap. ` +
+          `Spreek een originele welkomstspreuk uit om ${maandag ? 'de week' : 'de dag'} af te trappen: één tot twee zinnen, ` +
+          `helemaal in karakter, gericht aan de leden. Geen inleidingszin.`, 220);
+        await postAlsPersona(client, KANAAL(), persona, `_☀️ Goedemorgen_\n\n${tekst}`);
+      }
+      staat = { ...staat, gegroet: [...staat.gegroet, id] };
+    } catch (err) {
+      console.warn(`⚠️ Ochtendgroet van ${persona.naam} mislukt:`, err.message);
+      staat = { ...staat, pogingen: { ...staat.pogingen, [id]: (staat.pogingen[id] || 0) + 1 } };
+    }
+    writeJSON('ochtendgroet.json', staat);
+  }
 }
 
 // Laat de vijand iets zeggen onder eigen naam en gezicht.
@@ -15303,8 +15385,8 @@ const OPDRACHTEN_PER_WEEK = 2;
 
 const loadOpdrachten = () => readJSON('opdrachten.json', {});
 
-function dagSleutel() {
-  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Amsterdam' }).format(new Date());
+function dagSleutel(d = new Date()) {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Amsterdam' }).format(d);
 }
 
 function fnvHash(sleutel) {
@@ -19739,6 +19821,11 @@ function bouwAppHomeBlocks(userId, melding = '', extraBlocks = []) {
       `🎰 Casino deze week: ${casinoWeek.spellen} ${casinoWeek.spellen === 1 ? 'spel' : 'spellen'} · ` +
       `${casinoWeek.netto > 0 ? `*+${casinoWeek.netto}* gewonnen` : casinoWeek.netto < 0 ? `*${casinoWeek.netto}* verloren` : 'quitte'}` }] });
   }
+  const gastenNu = gastenVandaag();
+  if (gastenNu.length) {
+    blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text:
+      `🚪 Gasten vandaag: ${gastenNu.map(g => ontsnapMrkdwn(g.naam) + (g.lot ? ' _(lot)_' : '')).join(' · ')}` }] });
+  }
 
   // De actieknoppen: onveranderd, want dit is de enige plek op de hele tab waar je iets DOET.
   const cooldowns = readJSON('cooldowns.json', {});
@@ -22912,7 +22999,10 @@ async function bouwDashboardData() {
     llmstats: readJSON('llmstats.json', { dagen: {} }),
     frituurlog: (readJSON('frituurlog.json', { items: [] }).items || []).slice().reverse(),
     auditlog: (readJSON('auditlog.json', { items: [] }).items || []).slice(-20).reverse(),
-    personas: Object.entries(loadPersonas()).map(([id, p]) => ({ id, ...p })),
+    personas: (() => {
+      const vandaag = new Set(gastenVandaag().map(g => g.id));
+      return Object.entries(loadPersonas()).map(([id, p]) => ({ id, ...p, vandaag: vandaag.has(id) }));
+    })(),
     huisonderwerpen: {
       actief: actieveHuisonderwerpen(),
       voorstellen: (loadVoorstellen().voorstellen || []).map(v => ({ ...v, naam: loadMembers()[v.door]?.bijnaam || v.door })),
