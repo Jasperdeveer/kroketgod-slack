@@ -1,6 +1,6 @@
-// ── Tijdzone: dit proces rekent in UTC, wat de Pi ook zegt ──────────────────────
+// ── Tijdzone: dit proces rekent in UTC, wat de host ook zegt ────────────────────
 // De code rekent overal expliciet in Europe/Amsterdam (Intl met timeZone, cron-opties) en ging
-// ervan uit dat de host op UTC staat. De Pi staat echter op Europe/Amsterdam, en dan raakt
+// ervan uit dat de host op UTC staat. jsprsuperserver staat echter op Europe/Amsterdam, en dan raakt
 // node-cron (4.2.1) van de wijs bij de zomertijdwissels: in het herhaalde uur van eind oktober
 // berekent hij een volgende uitvoering die een uur in het verleden ligt, waardoor elke minuut-cron
 // twee uur lang in een strakke lus vuurt (CPU vol, de log loopt vol met "missed execution"); eind
@@ -224,11 +224,11 @@ if (!process.env.DASHBOARD_TOKEN) {
 let isReady = false; // wordt true na app.start() — gebruikt door health endpoint
 
 // ── Waakhond op de Slack-verbinding ───────────────────────────────────────────
-// Aanleiding: de Pi verloor tijdelijk DNS, waardoor de bot `slack.com` niet meer kon opzoeken
+// Aanleiding: de server verloor tijdelijk DNS, waardoor de bot `slack.com` niet meer kon opzoeken
 // (getaddrinfo EAI_AGAIN). Het proces bleef draaien en /health bleef "ok" melden, terwijl de bot
 // in Slack muisstil was — de storing was alleen te zien door in het foutenlog te kijken.
 // Daarom nu: elke minuut een lichte auth.test, /health vertelt de waarheid, en bij aanhoudende
-// onbereikbaarheid stopt het proces zodat pm2 het opnieuw start (met een frisse verbinding).
+// onbereikbaarheid stopt het proces zodat Docker het opnieuw start (met een frisse verbinding).
 let slackLaatstOk = Date.now();
 let slackFouten = 0;
 let slackLaatsteFout = null;
@@ -1470,7 +1470,7 @@ function verplaatsPunten(vanId, naarId, gewenst) {
 // Elk lid krijgt maandag om 08:00 ZAKGELD kroketpunten (regels en waarom: lib/zakgeld.js).
 // Kale boeking, géén pasScoreAanMetCheck: zakgeld levert geen roem, relikwie of verbondszegen op.
 // Eerst de lijst, dan de punten, zonder await ertussen — dus atomair binnen één Node-tick. Die
-// volgorde is bewust: valt de Pi uit tussen de twee writes, dan mist iemand zijn zakgeld (zichtbaar,
+// volgorde is bewust: valt de server uit tussen de twee writes, dan mist iemand zijn zakgeld (zichtbaar,
 // met de hand te herstellen). Andersom zou de hele Raad bij de volgende start opnieuw uitbetaald
 // krijgen, en dat ziet niemand — bijgedrukte punten staan stil in de ranglijst.
 registreerFeature({ naam: 'zakgeld', state: ['zakgeld.json'] });
@@ -3944,7 +3944,7 @@ app.view('modal_verborgenhand', async ({ ack, body, view, client }) => {
 // ── Tijdsbesef ─────────────────────────────────────────────────────────────────
 
 function getTijdContext() {
-  // Gebruik Amsterdam-tijdzone expliciet — de Pi draait op UTC
+  // Gebruik Amsterdam-tijdzone expliciet — het proces draait op UTC
   const parts = new Intl.DateTimeFormat('en-US', {
     timeZone: 'Europe/Amsterdam',
     weekday: 'long', hour: 'numeric', month: 'numeric',
@@ -5464,7 +5464,7 @@ async function maakBeeldBytes(beeldPrompt, { portret = null, vangnetPrompt = bee
     const nr = alleSleutels.indexOf(key) + 1;
     try {
       // De sleutel in een header en niet als ?key= in de URL: node-fetch zet de URL in zijn
-      // foutmeldingen, en die gaan zo de pm2-log in.
+      // foutmeldingen, en die gaan zo de containerlog in.
       const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${geminiBeeldModel}:generateContent`;
       const resp = await fetch(geminiUrl, {
         method: 'POST',
@@ -5982,8 +5982,8 @@ async function controleerVerlopenBan(client, userId) {
 // ── Aanmeld modal ──────────────────────────────────────────────────────────────
 
 // Zit dit lid in het besloten kanaal van het genootschap? true/false, of null als Slack het niet
-// kan zeggen (conversations.members vraagt channels:read/groups:read, en die scope ontbreekt op de
-// Pi vaak). De ledenlijst wordt tien minuten bewaard: aanmelden is zeldzaam, maar een dubbelklik
+// kan zeggen (conversations.members vraagt channels:read/groups:read, en die scope ontbreekt in
+// productie vaak). De ledenlijst wordt tien minuten bewaard: aanmelden is zeldzaam, maar een dubbelklik
 // hoeft geen twee keer de hele lijst op te halen.
 let _kanaalLedenCache = { ts: 0, leden: null };
 async function isKanaalLid(client, userId) {
@@ -6706,7 +6706,7 @@ async function voerKroketCommandoUit({ command, respond, client }) {
 
     // ── Vrijdag countdown
     if (input === 'vrijdag') {
-      // Gebruik Amsterdam-tijd — Pi draait op UTC
+      // Gebruik Amsterdam-tijd — het proces draait op UTC
       const tijdAms = getTijdContext();
       const dag = tijdAms.dag;
       const uur = tijdAms.uur;
@@ -10544,7 +10544,7 @@ function volgendeCronTijd(expr, vanaf = Date.now()) {
 
 planCron('0 12 * * *', async () => {
   try {
-    // Gebruik Amsterdam-tijdzone expliciet — Pi draait op UTC, getDay() geeft UTC-dag
+    // Gebruik Amsterdam-tijdzone expliciet — het proces draait op UTC, getDay() geeft UTC-dag
     const dag = getTijdContext().dag;
     if (dag === 0 || dag === 6) return;
 
@@ -11393,7 +11393,7 @@ const KROKET_EVENTS = [
 
 // Berekent de decreten van dit event en LEGT ZE VAST. Vuurde eerder vijf in-memory
 // setTimeouts over een venster van maximaal zeven uur, terwijl de minuut-cron de weekplanning
-// al als `uitgevoerd` had weggeschreven. Een deploy of de dagelijkse pm2-herstart (03:00)
+// al als `uitgevoerd` had weggeschreven. Een deploy of de nachtelijke herstart (03:00)
 // tussen het eerste en het laatste decreet liet de rest dus verdampen: de ene helft van de
 // leden had zijn punten, de andere niet, en de planning kwam niet terug. Precies de bug die
 // de weekplanning hierboven al persistent maakte — één niveau dieper.
@@ -11511,7 +11511,7 @@ async function voerKroketEventDecretenUit(client) {
 
 // Maandag 09:30 — plan event op willekeurig moment ergens deze week (ma–vr 10:00–17:00).
 // PERSISTENT in kroketevent.json (zoals de Gouden Kroket): een in-memory setTimeout van
-// max. 4,5 dag overleefde de dagelijkse pm2-herstart (03:00) niet, waardoor het event in
+// max. 4,5 dag overleefde de nachtelijke herstart (03:00) niet, waardoor het event in
 // ~80% van de weken nooit vuurde. De minuut-cron voert de planning uit zodra het moment daar is.
 // Eigen minuut (09:31), NIET 09:30: daar hangt de opkomst van de weekvijand aan, en CRON_LABELS is
 // per EXPRESSIE gesleuteld. Met twee taken op één expressie kregen beide de skip-wrapper van het
@@ -11532,7 +11532,7 @@ planCron('31 9 * * 1', () => {
 // ── De Gouden Kroket: wekelijkse schatzoektocht ───────────────────────────────
 // Op een willekeurig moment (ma–vr, 10:00–16:30) verschijnt de Gouden Kroket in het kanaal.
 // De EERSTE volgeling die het bericht met :lekker_kroketje: zegent, grijpt hem (+3).
-// De geplande tijd staat persistent in goudenkroket.json zodat de dagelijkse pm2-herstart
+// De geplande tijd staat persistent in goudenkroket.json zodat de nachtelijke herstart
 // (03:00) hem niet wist; een minuut-cron post zodra het moment daar is.
 
 const loadGoudenKroket = () => readJSON('goudenkroket.json', {});
@@ -13578,7 +13578,7 @@ async function susVete(client, susserId) {
 // ── Geluksfactor (stille inhaalmechaniek) ──────────────────────────────────────
 // Per lid een kansmodificator voor de kansspelen, zodat een pechvogel niet blijft afhaken.
 // Zelfde gedachte als de inhaalweging in planWillekeurigKroketEvent, maar handmatig instelbaar.
-// De WAARDEN staan in geluk.json op de Pi (gitignored, niet in /api/stats, niet in de App Home,
+// De WAARDEN staan in geluk.json op de server (gitignored, niet in /api/stats, niet in de App Home,
 // nergens in een kanaalbericht) — de bot verklapt dus nooit dat iemand bijgestuurd wordt.
 // Bereik wordt geclampt op ±0,25 zodat een spel nooit volledig voorspelbaar wordt.
 //   { "U0XXXX": 0.15 }  → 15 procentpunt meer kans op een gunstige uitkomst
@@ -13650,7 +13650,7 @@ function getGeluk(userId) {
 // het casino: een winnende hand, worp, draai of gok (totWinst, lib/casino.js; elke gok bij hoger/lager
 // is een eigen kansactie). Ook de gokkast-jackpot kan dan vallen, met zijn gewone, kleine kans.
 //
-// De code staat NIET in deze repo: hij komt uit KROKETGOD_FORTUIN_CODE in .env op de Pi. Zonder
+// De code staat NIET in deze repo: hij komt uit KROKETGOD_FORTUIN_CODE in .env op de server. Zonder
 // die env-var bestaat het commando simpelweg niet — er is dan geen invoer die iets doet.
 //
 // Waarom dit iets ánders is dan geluk.json: dat is een blijvende kansverschuiving per lid. Dit is een
@@ -13660,9 +13660,9 @@ function getGeluk(userId) {
 //   · de code wordt nergens gelogd; de fortuin-check staat vóór de injectie-detectie, want die
 //     schrijft afgewezen invoer wél naar de auditlog
 //   · niet in de help, niet in /api/stats, geen dashboardknop; fortuin.json is gitignored
-// Het enige spoor is één regel in de serverconsole op de Pi bij verbruik, die niemand in het
+// Het enige spoor is één regel in de serverconsole bij verbruik, die niemand in het
 // genootschap ziet. Openstaande tekens worden nergens meer gemeld (zie de noot bij getGeluk); wie wil
-// weten of er iets openstaat, leest fortuin.json op de Pi.
+// weten of er iets openstaat, leest fortuin.json op de server.
 //
 // De uitkomst zélf wordt daarna volkomen normaal geboekt en gelogd — een zo gewonnen duel ziet er
 // in het kanaal, het weekoverzicht en het dossier uit als elk ander gewonnen duel.
@@ -14607,7 +14607,7 @@ async function voerOffer(client, userId, inzet, channelId) {
   // redistributie via de puntenbronnen.
   //
   // ── Eenmalige uitkomst-override (admin) ──────────────────────────────────────
-  // vetbadoverride.json op de Pi (gitignored, nergens in de stats, App Home of een kanaalbericht,
+  // vetbadoverride.json op de server (gitignored, nergens in de stats, App Home of een kanaalbericht,
   // net als geluk.json) forceert de uitkomst van het EERSTVOLGENDE offer van één lid en wordt
   // daarbij verbruikt. Handmatig gezet; er is bewust geen dashboardknop, zodat dit geen gewoonte
   // wordt. Vorm: { "U0XXXX": "dubbel" } — geldige waarden: jackpot (= vetpot), dubbel, terug,
@@ -16632,7 +16632,7 @@ async function zorgVoorAmbtsVacatures(client) {
 
 // ── De hertelling: maandag 09:10 ──────────────────────────────────────────────
 // Downtime-proof volgens hetzelfde patroon als zorgVoorWeekvijand: gepoort op de weekstart
-// ÉN op het maandagmoment, zodat de pm2-herstart van 03:00 de verkondiging niet 's nachts doet.
+// ÉN op het maandagmoment, zodat de nachtelijke herstart van 03:00 de verkondiging niet 's nachts doet.
 async function zorgVoorAmbten(client, { stil = false } = {}) {
   const staat = loadAmbten();
   const week = getMondayOfWeek();
@@ -16953,7 +16953,7 @@ async function zorgVoorOpenbaring(client) {
   for (const blad of OPENBARING_BLADEN) {
     if (gepost.has(blad.dag)) continue;
     if (verstreken < blad.dag) return staat;       // nog niet aan de beurt
-    // Niets luidruchtigs vóór 09:00 — de pm2-herstart van 03:00 mag geen blad in de nacht leggen.
+    // Niets luidruchtigs vóór 09:00 — de nachtelijke herstart van 03:00 mag geen blad in de nacht leggen.
     if (!vandaagMomentGeweest(INHAALSLAG_MOMENT.uur, INHAALSLAG_MOMENT.min)) return staat;
     // Vastleggen vóór het posten: valt de LLM-keten of Slack om, dan blijft er geen blad open
     // staan dat de volgende aanroep opnieuw plaatst.
@@ -17157,7 +17157,7 @@ registreerFeature({
 // dagen lang de prijzen in de Aflatenhandel beïnvloedt en in de system prompt doorklinkt.
 //
 // Robuust tegen downtime — net als de opdracht-engine wordt de fase UIT DE DATUM afgeleid
-// (niet uit een cron die gevuurd moet hebben), en de dagelijkse pm2-herstart haalt een gemiste
+// (niet uit een cron die gevuurd moet hebben), en de nachtelijke herstart haalt een gemiste
 // fase-overgang of finale de ochtend erna in.
 
 const SEIZOEN_WEKEN = 6;
@@ -18554,7 +18554,7 @@ async function updateGeleKaartPollBericht(client, poll) {
 }
 
 // Elke minuut: een verstreken stemming sluiten. Een minuut-cron in plaats van een setTimeout,
-// want een setTimeout overleeft de dagelijkse pm2-herstart niet — en een stemming die nooit
+// want een setTimeout overleeft de nachtelijke herstart niet — en een stemming die nooit
 // sluit blokkeert alle volgende voordrachten.
 planCron('* * * * *', async () => {
   try {
@@ -18616,7 +18616,7 @@ const AFWEZIG_MAX_DAGEN         = 60;  // plafond, zodat de vakantiestand geen e
 // (message-handler) en elke spelhandeling (telActie). Geen nieuwe crons.
 //
 // Schrijven wordt GEDEMPT op 60 seconden: dit vuurt op élk bericht, en een fsync per bericht
-// is zonde van de SD-kaart van de Pi. Dagniveau-nauwkeurigheid is ruim genoeg voor een
+// is zonde van de schijf. Dagniveau-nauwkeurigheid is ruim genoeg voor een
 // drempel van 7 dagen.
 
 const loadActiviteit = () => readJSON('activiteit.json', {});
@@ -19287,7 +19287,7 @@ async function verwerkTribunaalKlok(client) {
     const porZwijgen = TRIBUNAAL_WOORD_POR_DAGEN.includes(woord);
     if (!porStilte && !porZwijgen) continue;
     // Eén por per grond per dag. Deze klok loopt niet alleen om 10:40 maar ook bij ELKE opstart
-    // (de inhaalslag), en de bot herstart dagelijks via pm2 — plus bij elke deploy. Zonder deze
+    // (de inhaalslag), en de bot herstart elke nacht om 03:00 — plus bij elke deploy. Zonder deze
     // markering kreeg hetzelfde lid de identieke por zes keer op één dag.
     const soort = porStilte ? 'stilte' : 'zwijgen';
     const dagKey = dagSleutel();
@@ -20788,7 +20788,7 @@ function homeCommandoMenus(userId) {
 
 // `sjabloon` is het commando zoals het in het menu staat (bv. `eer [namen] (voor [reden])`). Alleen
 // dát gaat de log in, nooit de ingevulde tekst: die kan van alles bevatten, tot en met een tikfout
-// in de geheime fortuin-code, en de console op de Pi is geen plek voor vrije invoer.
+// in de geheime fortuin-code, en de console op de server is geen plek voor vrije invoer.
 async function voerHomeCommandoUit(client, userId, tekst, triggerId, sjabloon = null) {
   const antwoorden = [];
   const blokken = [];
@@ -20979,11 +20979,11 @@ planCron('30 9 * * 1', async () => {
 }, { timezone: 'Europe/Amsterdam' });
 
 // Inhaalslag: is het al na maandag 09:30 en waart er niemand rond terwijl deze week nog geen
-// vijand had? Dan alsnog spawnen. Draait bij opstart mee (dagelijkse pm2-herstart), net als de
+// vijand had? Dan alsnog spawnen. Draait bij opstart mee (nachtelijke herstart), net als de
 // weekreset- en seizoens-inhaalslag.
 // Is een gepland maandagmoment van DEZE week al verstreken?
 //
-// Waarom dit bestaat: pm2 herstart de bot elke dag om 03:00, en bij het opstarten lopen de
+// Waarom dit bestaat: de server herstart de bot elke dag om 03:00, en bij het opstarten lopen de
 // inhaalslagen. Maandagochtend betekende dat elke wekelijkse gebeurtenis om 03:00 werd afgevuurd —
 // zes uur vóór het geplande moment, terwijl niemand kijkt en de cron van 09:30 daarna niets meer te
 // doen had. Een inhaalslag hoort te repareren wat GEMIST is, niet over te nemen wat nog moet komen.
@@ -20994,7 +20994,7 @@ function maandagMomentGeweest(uur, min) {
 }
 
 // Is het vandaag al voorbij HH:MM Amsterdamse tijd? Nodig voor de luidruchtige inhaalslagen bij
-// het opstarten. pm2 herstart dagelijks om 03:00, en de weekkampioen én de seizoensfinale —
+// het opstarten. de bot herstart dagelijks om 03:00, en de weekkampioen én de seizoensfinale —
 // de twee grootste momenten van respectievelijk de week en zes weken — werden daar zonder
 // tijdpoort verkondigd. Die landden dus midden in de nacht, precies de bug die drie regels in
 // zorgVoorSeizoen en zorgVoorWeekvijand al voor de fasewissel en de opkomst repareren.
@@ -21012,7 +21012,7 @@ async function zorgVoorWeekvijand() {
     const weekStart = getMondayOfWeek();
     if (raid.weekStart === weekStart) return null; // deze week al gehad (verslagen of ontsnapt)
     if (isWeekendAms()) return null;               // niet in het weekend beginnen
-    // Niet vóór de geplande opkomst inhalen. pm2 herstart dagelijks om 03:00, dus maandagochtend
+    // Niet vóór de geplande opkomst inhalen. de bot herstart dagelijks om 03:00, dus maandagochtend
     // riep deze inhaalslag de vijand om 03:00 op — zes en een half uur te vroeg, terwijl de cron van
     // 09:30 het gewoon zou doen. Een inhaalslag hoort iets te repareren dat GEMIST is, niet iets
     // over te nemen dat nog moet komen.
@@ -21386,7 +21386,7 @@ planCron('30 8 * * *', async () => {
 
 // ── Waakhond: elke minuut controleren of Slack bereikbaar is ───────────────────
 // auth.test is de lichtste call die er is (Tier 4, ruim binnen de limieten) en raakt geen
-// LLM-quota. Bij aanhoudende onbereikbaarheid stopt het proces; pm2 start het opnieuw met een
+// LLM-quota. Bij aanhoudende onbereikbaarheid stopt het proces; Docker start het opnieuw met een
 // frisse Socket Mode-verbinding. Dat is nodig omdat een kapotte verbinding zich niet altijd
 // zelf herstelt: bij de DNS-storing bleef de bot uren stil terwijl het proces gezond leek.
 async function controleerSlackVerbinding() {
@@ -21410,7 +21410,7 @@ async function controleerSlackVerbinding() {
     // vervuilen en de spelstaat-writes onderbreken.
     if (slackFouten >= SLACK_MAX_FOUTEN && Date.now() - laatsteZelfherstart > ZELFHERSTART_PAUZE_MS) {
       laatsteZelfherstart = Date.now();
-      console.error(`🔁 Slack ${SLACK_MAX_FOUTEN} minuten onbereikbaar — proces stopt zodat pm2 opnieuw start.`);
+      console.error(`🔁 Slack ${SLACK_MAX_FOUTEN} minuten onbereikbaar — proces stopt zodat Docker opnieuw start.`);
       setTimeout(() => process.exit(1), 1000); // even ruimte om het log weg te schrijven
     }
   }
@@ -22576,11 +22576,11 @@ app.action(/^verhoor_gok_/, async ({ ack, body, client }) => {
   } catch (err) { console.error('Fout bij verhoorknop:', err); }
 });
 
-// Dagelijks om 03:15 — na de pm2 herstart (03:00) zodat data stabiel is
+// Dagelijks om 03:15 — na de nachtelijke herstart (03:00) zodat data stabiel is
 planCron('15 3 * * *', maakBackup, { timezone: 'Europe/Amsterdam' });
 
 // ── De Voorraadkelder: nachtelijk vooruit genereren ───────────────────────────
-// 03:40, ná de backup (03:15) en ná de pm2-herstart (03:00): de kelder is dan al meegegaan in de
+// 03:40, ná de backup (03:15) en ná de nachtelijke herstart (03:00): de kelder is dan al meegegaan in de
 // backup van vandaag, en er is geen herstart die het vullen halverwege afbreekt.
 //
 // Bewust dezelfde Amsterdamse kalenderdag als de posts die eruit komen (07:30–15:00), zodat de
@@ -22620,7 +22620,7 @@ planCron('40 3 * * *', async () => {
 }, { timezone: 'Europe/Amsterdam' });
 
 // ── Quota-monitor ────────────────────────────────────────────────────────────
-// Logt elk uur hoe vol de providers zitten, zodat je in de pm2-logs ziet wanneer limieten
+// Logt elk uur hoe vol de providers zitten, zodat je in de containerlogs ziet wanneer limieten
 // vollopen/resetten i.p.v. te gokken. Groq via een minimale probe (eigen dag-quota is enorm, dit
 // is verwaarloosbaar); Gemini via de cooldown-state (verbruikt zelf geen quota).
 let laatsteGroqQuota = null; // laatste Groq rate-limit-snapshot (voor het dashboard)
@@ -23352,7 +23352,7 @@ async function openVetpotAlsNodig(client) {
 
 // ── Luide inhaalslagen: de weekkampioen en de seizoensfinale ───────────────────
 // Beide verkondigingen zijn de grootste momenten van hun cyclus (een week, respectievelijk zes
-// weken). Ze stonden zonder tijdpoort in de opstartroutine, en pm2 herstart dagelijks om 03:00 —
+// weken). Ze stonden zonder tijdpoort in de opstartroutine, en de bot herstart dagelijks om 03:00 —
 // dus werden ze 's nachts uitgesproken, in een leeg kanaal, en zag niemand ze. Nu vuren ze pas
 // ná 09:00 Amsterdamse tijd, en haalt de cron van 09:00 in wat de opstart oversloeg.
 //
@@ -23493,14 +23493,14 @@ planCron('7,22,37,52 * * * *', async () => {
 }, { timezone: 'Europe/Amsterdam' });
 
 // ── Crashdetectie ──────────────────────────────────────────────────────────────
-// Vangt onverwachte uitzonderingen op en herstart via PM2.
+// Vangt onverwachte uitzonderingen op en herstart via Docker.
 
 let _rejectionTeller = 0;
 let _rejectionReset  = Date.now();
 
 process.on('uncaughtException', async (err) => {
   console.error('💥 Uncaught exception:', err);
-  // Forceer exit na max 3s, ook als de Slack-post hangt (anders zombie-proces dat pm2 niet
+  // Forceer exit na max 3s, ook als de Slack-post hangt (anders zombie-proces dat Docker niet
   // herstart). unref() zodat deze timer zelf het proces niet kunstmatig in leven houdt.
   setTimeout(() => process.exit(1), 3000).unref();
   try {
@@ -23519,13 +23519,13 @@ process.on('unhandledRejection', (reason) => {
   if (nu - _rejectionReset > 60_000) { _rejectionTeller = 0; _rejectionReset = nu; }
   _rejectionTeller++;
   if (_rejectionTeller > 5) {
-    console.error('💥 Te veel unhandled rejections — geforceerde herstart via PM2.');
+    console.error('💥 Te veel unhandled rejections — geforceerde herstart via Docker.');
     process.exit(1);
   }
 });
 
 // ── Graceful shutdown ──────────────────────────────────────────────────────────
-// systemd (Pi) stuurt SIGTERM voor kill. Zonder handler worden:
+// docker stop/restart stuurt SIGTERM voor kill. Zonder handler worden:
 // - lopende JSON-writes afgekapt (datacorruptie)
 // - de Slack WebSocket niet netjes gesloten (reconnect-delays)
 // - node-cron taken niet gestopt (process hangt)
@@ -23590,7 +23590,7 @@ process.on('SIGINT',  () => gracefulShutdown('SIGINT'));
   await laadTestKanaalIds(app.client); // aanvulling via API (kan op missing_scope falen — niet erg)
   await laadNederlandseFeestdagen(); // feestdagen voor Nager.at integratie
   // Inhaalslag weekreset: was de bot down tijdens de zondag-23:59-cron, dan is er niet gereset,
-  // geen kampioen gekroond en geen profeet gezet. Dankzij de dagelijkse pm2-herstart (03:00)
+  // geen kampioen gekroond en geen profeet gezet. Dankzij de nachtelijke herstart (03:00)
   // draait deze check elke ochtend. Eerste run ooit: marker initialiseren zonder reset.
   // Eerste run ooit: alleen de marker initialiseren, zonder reset en zonder kroning.
   try {

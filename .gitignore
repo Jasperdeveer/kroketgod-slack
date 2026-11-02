@@ -5,7 +5,7 @@ node_modules/
 .DS_Store
 
 # Lokale state — per machine. Mag niet in git anders worden ze overschreven bij git reset.
-# De Pi is de bron van waarheid voor al deze bestanden (zie deploy.sh / PI_EIGEN).
+# De server is de bron van waarheid voor al deze bestanden (zie deploy.sh / SERVER_EIGEN).
 members.json
 scores.json
 geschiedenis.json
@@ -64,7 +64,7 @@ tellers.json
 
 # Ambten en het Vetgeschrift: houderschap, zegels, het openbare ambtsboek en het rollende
 # tellervenster waaruit de aanspraak wordt berekend. Zelfde reden als hierboven — dit is de
-# echte stand op de Pi en een git reset mag hem niet overschrijven.
+# echte stand op de server en een git reset mag hem niet overschrijven.
 ambten.json
 ambtsboek.json
 venstertellers.json
@@ -77,7 +77,7 @@ heldentitels.json
 duelhistorie.json
 
 # Het Grote Archief: elk bericht dat ooit in het kanaal stond. Puur ledengegevens, groeit
-# eeuwig door en de Pi is de enige echte bron — die mag een git reset nooit overschrijven.
+# eeuwig door en de server is de enige echte bron — die mag een git reset nooit overschrijven.
 grootarchief.ndjson
 
 # De Voorraadkelder: vooruit gegenereerde kanaalinhoud, per machine en per dag.
@@ -99,7 +99,7 @@ backups/
 .claude/settings.local.json
 vetbadoverride.json
 
-# Het Gefluisterde Voorrecht: openstaande eenmalige tekens. Hoort nergens buiten de Pi.
+# Het Gefluisterde Voorrecht: openstaande eenmalige tekens. Hoort nergens buiten de server.
 fortuin.json
 
 # De galerij der visioenen: genummerde beelden met hun titels en Slack-file-id's.
