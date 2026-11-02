@@ -180,9 +180,11 @@ const {
   BESCHRIJVING_MAX: GAST_BESCHRIJVING_MAX, normaliseer: normaliseerGastnaam,
   toetsNieuweGast, bekendeGasten, toetsBekendeGast, naamTrefwoorden, kiesTrefwoorden,
   vertrekNaWerkdagen, eersteVertrekker, MAX_GASTEN,
+  KOSTEN_VASTHOUDEN: GAST_KOSTEN_VASTHOUDEN, vertrektVandaag, verlengdVertrek, toetsVasthouden, naDebatWinst,
 } = require('./lib/gasten.js');
 const { FUNCTIES, uitlichtPrompt, bouwUitlichting } = require('./lib/nieuwtjes.js');
-const { schetsVan, andereGasten, kandidatenVoorOnderling, kiesAntwoorder, kiesInvaller, kiesDaggasten, planOchtendgroet, teGroeten } = require('./lib/gastenkring.js');
+const { schetsVan, andereGasten, kandidatenVoorOnderling, kiesAntwoorder, kiesInvaller, kiesDaggasten, telWensen, planOchtendgroet, teGroeten } = require('./lib/gastenkring.js');
+const { STELLINGEN, STEM_A, STEM_B, kiesStelling, kiesDebaters, telDebatStemmen, debatWinnaar } = require('./lib/gastendebat.js');
 const {
   SLIM_PALET, SLIM_KLASSEN, frequentie: emojiFrequentie, kiesRegel: kiesEmojiRegel,
   magReageren: magEmojiReageren, naReactie: naEmojiReactie,
@@ -9228,6 +9230,52 @@ app.action('gast_bekend_kies', async ({ ack, body, client }) => {
   } catch (err) { console.error('Fout bij terughalen bekende gast:', err.data?.error || err.message); }
 });
 
+// Gast vasthouden vanuit de App Home (toetsVasthouden, lib/gasten.js). Toets, betaling en opslag
+// zonder await ertussen: een dubbele klik ziet de nieuwe vertrektijd al.
+app.action(/^gast_vasthouden_\d+$/, async ({ ack, body, action, client }) => {
+  await ack();
+  const userId = body.user.id;
+  try {
+    const lid = loadMembers()[userId];
+    if (!lid || isVerbannen(userId)) return;
+    const personas = loadPersonas();
+    const toets = toetsVasthouden({ id: action.value, personas, saldo: loadScores()[userId] || 0 });
+    if (!toets.ok) { await publiceerAppHome(client, userId, `_${ontsnapMrkdwn(toets.reden)}_`); return; }
+    const id = action.value;
+    pasScoreAan(userId, -GAST_KOSTEN_VASTHOUDEN);
+    personas[id] = { ...personas[id], vertrekOp: verlengdVertrek(personas[id]) };
+    savePersonas(personas);
+    logAudit('persona', `${personas[id].naam} (${id}) een werkdag langer vastgehouden door ${lid.bijnaam}`);
+    await publiceerAppHome(client, userId, `🔒 *${ontsnapMrkdwn(personas[id].naam)} blijft een werkdag langer.* Er gingen ${GAST_KOSTEN_VASTHOUDEN} kroketpunten af.`);
+    await laatGastBlijven(client, { id, ...personas[id] }, lid.bijnaam);
+  } catch (err) { console.error('Fout bij gast vasthouden:', err.data?.error || err.message); }
+});
+
+// Net als de entree: in de stem van de gast zelf, en lukt die niet, dan een kale melding.
+async function laatGastBlijven(client, persona, lid) {
+  let tekst = null;
+  try {
+    tekst = await personaResponse(persona, `${lid} heeft kroketpunten betaald zodat je een werkdag langer in het kanaal van het genootschap mag blijven. Reageer daarop in één tot twee zinnen, helemaal in karakter. Geen inleidingszin.`, 220);
+  } catch (err) { console.warn(`⚠️ ${persona.naam} kon niet reageren op het vasthouden:`, err.message); }
+  await postAlsPersona(client, KANAAL(), persona, `_🔒 Blijft een werkdag langer, dankzij ${lid}_\n\n${tekst || `_${persona.naam} blijft._`}`);
+}
+
+// Een wens voor het lot (kiesDaggasten, lib/gastenkring.js): één per lid, te wijzigen tot de trekking.
+app.action('gast_wens', async ({ ack, body, action, client }) => {
+  await ack();
+  const userId = body.user.id;
+  try {
+    if (!loadMembers()[userId] || isVerbannen(userId)) return;
+    const id = action.selected_option?.value;
+    const p = loadPersonas()[id];
+    if (!p || p.actief !== false || p.alleenVoorLid) { await publiceerAppHome(client, userId, '_Die gast is er al, of bestaat niet meer._'); return; }
+    daggastenVandaag(); // eerst het lot van vandaag trekken, anders schuift deze wens de oudere een dag op
+    const w = readJSON('gastwensen.json', {});
+    writeJSON('gastwensen.json', { dag: dagSleutel(), wensen: { ...(w.wensen || {}), [userId]: id } });
+    await publiceerAppHome(client, userId, `🎲 *Genoteerd: u wenst ${ontsnapMrkdwn(p.naam)}.* Het lot van de volgende werkdag weegt uw wens mee, maar beslist zelf.`);
+  } catch (err) { console.error('Fout bij wens voor het lot:', err.data?.error || err.message); }
+});
+
 // ── De classificatiepoort ─────────────────────────────────────────────────────
 // Eén ingang voor élke ja/nee- of welke-categorie-vraag aan een model.
 //
@@ -10461,6 +10509,8 @@ const CRON_LABELS = {
   '40 10 * * *':     { label: 'Tribunaalklok' },
   '0 9 * * 2-5':     { label: 'Stemming van de dag' },
   '0 9 * * 1-5':     { label: 'Gasten van vandaag' },
+  '0 15 * * 3':      { label: 'Gastendebat' },
+  '0 17 * * 3':      { label: 'Gastendebat (uitslag)' },
   '45 9 * * 1-5':    { label: 'Kroket van de dag' },
   '15 10 * * 1,3,4': { label: 'Kroket Quiz' },
   '30 11 * * 5':     { label: 'Vrijdag-reminder' },
@@ -11159,7 +11209,7 @@ async function stuurWeekSamenvatting(client, { reset = true } = {}) {
     1100, false, 'slim', { lang: true }
   );
 
-  await postToChannel(client, process.env.SLACK_CHANNEL_ID, tekst);
+  await postToChannel(client, process.env.SLACK_CHANNEL_ID, tekst + casinoWeekRegel());
 
   // Reset voor volgende week — alleen bij de officiële (cron-)aanroep
   if (reset) {
@@ -11641,6 +11691,74 @@ planCron('* 8 * * 1-5', () => ochtendgroetTik(app.client)
   .catch(err => console.error('⚠️ Ochtendgroet mislukt:', err.data?.error || err.message)),
 { timezone: 'Europe/Amsterdam' });
 
+// Het gastendebat (lib/gastendebat.js): woensdag 15:00 begint het, 17:00 telt de Kroket God. De stand
+// staat in gastendebat.json, zodat een herstart ertussen niets uitmaakt. Wie tijdens het debat zou
+// vertrekken, doet niet mee.
+const DEBAT_DUUR_MS = 2 * 3_600_000;
+async function startGastendebat(client) {
+  if (instelling('stilModus') || instelling('alleenTestkanaal')) return;
+  const dag = dagSleutel();
+  const vorig = readJSON('gastendebat.json', {});
+  if (vorig.dag === dag) return;
+  const nu = Date.now();
+  const paar = kiesDebaters(gastenVandaag().filter(g => !g.vertrekOp || g.vertrekOp > nu + DEBAT_DUUR_MS).map(g => g.id));
+  if (!paar) { console.log('⚖️ Gastendebat: minder dan twee gasten, dus geen debat.'); return; }
+  const personas = loadPersonas();
+  const [a, b] = paar.map(id => ({ id, ...personas[id] }));
+  const nr = kiesStelling(vorig.gebruikt || []);
+  const stelling = STELLINGEN[nr];
+  const res = await postToChannel(client, KANAAL(),
+    `⚖️ *GASTENDEBAT* ⚖️\n\n> _${stelling}_\n> 1️⃣ *${ontsnapMrkdwn(a.naam)}* verdedigt de stelling · 2️⃣ *${ontsnapMrkdwn(b.naam)}* valt haar aan\n\n` +
+    `Stem met 1️⃣ of 2️⃣ onder dit bericht; het debat zelf staat in de thread. Om 17:00 telt de Kroket God, en de winnaar blijft een werkdag langer.\n\n— De Kroket God`);
+  if (!res?.ts) return;
+  writeJSON('gastendebat.json', { dag, kanaal: KANAAL(), ts: res.ts, a: a.id, b: b.id, stelling, gebruikt: [...(vorig.gebruikt || []), nr].slice(-15), gesloten: false });
+  for (const emoji of [STEM_A, STEM_B]) {
+    await slackLimiter.schedule(() => client.reactions.add({ channel: KANAAL(), timestamp: res.ts, name: emoji })).catch(() => {});
+  }
+  const kader = (tegen) => `Je debatteert in het kanaal van het genootschap tegen ${tegen.naam}, over de stelling "${stelling}".`;
+  const gezegd = {};
+  const beurt = async (spreker, opdracht) => {
+    try { gezegd[spreker.id] = await personaResponse(spreker, `${opdracht} Helemaal in karakter, geen inleidingszin.`, 260); }
+    catch (err) { console.warn(`⚠️ Debatbeurt van ${spreker.naam} mislukt:`, err.message); gezegd[spreker.id] = null; }
+    await postAlsPersona(client, KANAAL(), spreker, gezegd[spreker.id] || `_${spreker.naam} schraapt zijn keel, maar er komt niets uit._`, { thread_ts: res.ts, onderling: true });
+  };
+  await beurt(a, `${kader(b)} Jij verdedigt de stelling. Geef je openingsbetoog in twee tot drie zinnen.`);
+  await beurt(b, `${kader(a)} Jij bent tegen de stelling. Geef je openingsbetoog in twee tot drie zinnen.`);
+  const weerwoord = (spreker, tegen) => beurt(spreker, `${kader(tegen)} ${wrapOnvertrouwd('Wat je tegenstander net zei', gezegd[tegen.id] || '(niets)')} Weerleg dat in één tot twee zinnen.`);
+  await weerwoord(a, b);
+  await weerwoord(b, a);
+}
+
+async function sluitGastendebat(client) {
+  if (instelling('stilModus') || instelling('alleenTestkanaal')) return;
+  const d = readJSON('gastendebat.json', {});
+  if (d.dag !== dagSleutel() || d.gesloten) return;
+  writeJSON('gastendebat.json', { ...d, gesloten: true });
+  const res = await slackLimiter.schedule(() => client.reactions.get({ channel: d.kanaal, timestamp: d.ts, full: true }));
+  const members = loadMembers();
+  const stemmen = telDebatStemmen(res.message?.reactions || [], u => u !== BOT_USER_ID && !!members[u] && !isVerbannen(u));
+  const winnaar = debatWinnaar(stemmen);
+  const personas = loadPersonas();
+  const naam = (id) => ontsnapMrkdwn(personas[id]?.naam || 'een vertrokken gast');
+  let regel = stemmen.a + stemmen.b ? 'Gelijkspel: niemand wint iets, en de stelling blijft onbeslist.' : 'Niemand stemde. De stelling blijft onbeslist.';
+  if (winnaar && personas[d[winnaar]]) {
+    const id = d[winnaar];
+    personas[id] = naDebatWinst(personas[id]);
+    savePersonas(personas);
+    logAudit('persona', `${personas[id].naam} (${id}) won het gastendebat (${stemmen.a}-${stemmen.b})`);
+    regel = `*${naam(id)}* wint en blijft een werkdag langer.`;
+  }
+  await postToChannel(client, d.kanaal,
+    `⚖️ *UITSLAG GASTENDEBAT* ⚖️\n\n> _${d.stelling}_\n> 1️⃣ ${naam(d.a)}: *${stemmen.a}* · 2️⃣ ${naam(d.b)}: *${stemmen.b}*\n> ${regel}\n\n— De Kroket God`);
+}
+
+planCron('0 15 * * 3', () => startGastendebat(app.client)
+  .catch(err => console.error('⚠️ Gastendebat mislukt:', err.data?.error || err.message)),
+{ timezone: 'Europe/Amsterdam' });
+planCron('0 17 * * 3', () => sluitGastendebat(app.client)
+  .catch(err => console.error('⚠️ Uitslag gastendebat mislukt:', err.data?.error || err.message)),
+{ timezone: 'Europe/Amsterdam' });
+
 // Werkdagen 09:00: na de ochtendgroet zet de Kroket God op een rij wie er vandaag is.
 planCron('0 9 * * 1-5', async () => {
   try {
@@ -12045,8 +12163,13 @@ function daggastenVandaag() {
   const dag = dagSleutel();
   if (opgeslagen.dag === dag) return opgeslagen.ids || [];
   const personas = loadPersonas();
-  const ids = kiesDaggasten(personas, { vorige: opgeslagen.ids || [] });
+  // Wensen voor het lot (gastwensen.json) gelden voor de eerstvolgende werkdag en zijn daarna op.
+  // Een wens van vandaag zelf (na middernacht, vóór de trekking) bewaart zich voor morgen.
+  const w = readJSON('gastwensen.json', {});
+  const wensenTellen = !isWeekendAms() && !!w.dag && w.dag < dag;
+  const ids = kiesDaggasten(personas, { vorige: opgeslagen.ids || [], wensen: wensenTellen ? telWensen(w.wensen) : {} });
   writeJSON('daggasten.json', { dag, ids });
+  if (wensenTellen) writeJSON('gastwensen.json', {});
   console.log(`🎲 Daggasten voor ${dag}: ${ids.map(id => personas[id].naam).join(', ') || 'geen'}.`);
   return ids;
 }
@@ -12058,12 +12181,12 @@ function gastenVandaag() {
   const lot = daggastenVandaag();
   return Object.entries(personas)
     .filter(([id, p]) => p?.naam && !p.alleenVoorLid && (p.actief !== false || lot.includes(id)))
-    .map(([id, p]) => ({ id, naam: p.naam, lot: p.actief === false }))
+    .map(([id, p]) => ({ id, naam: p.naam, lot: p.actief === false, vertrekOp: p.vertrekOp || null, afscheid: vertrektVandaag(p) }))
     .sort((a, b) => a.naam.localeCompare(b.naam, 'nl'));
 }
 
 function gastenVandaagTekst(gasten = gastenVandaag()) {
-  const namen = (lijst) => lijst.map(g => ontsnapMrkdwn(g.naam)).join(' · ');
+  const namen = (lijst) => lijst.map(g => ontsnapMrkdwn(g.naam) + (g.afscheid ? ' _(neemt vandaag afscheid)_' : '')).join(' · ');
   const uitgenodigd = gasten.filter(g => !g.lot), lot = gasten.filter(g => g.lot);
   return [uitgenodigd.length && `> ${namen(uitgenodigd)}`, lot.length && `> Door het lot: ${namen(lot)}`].filter(Boolean).join('\n')
     || '> Vandaag geen gasten.';
@@ -12071,7 +12194,7 @@ function gastenVandaagTekst(gasten = gastenVandaag()) {
 
 registreerFeature({
   naam: 'gasten van vandaag',
-  state: ['daggasten.json', 'ochtendgroet.json'],
+  state: ['daggasten.json', 'ochtendgroet.json', 'gastwensen.json', 'gastendebat.json'],
   help: [{ gebruik: '/kroketgod gasten', verwacht: 'wie er vandaag als gast in het kanaal is (alleen voor u zichtbaar)' }],
 });
 
@@ -14568,6 +14691,17 @@ app.action('open_casino', async ({ ack, body, client }) => {
   } catch (err) { console.error('Fout bij de casinoknop:', err.data?.error || err.message); }
 });
 
+// Eén vaste regel voor het weekoverzicht van vrijdag. Buiten het taalmodel om: de weekrede zit al
+// tegen Groqs tokenplafond, en cijfers hoort het model toch niet te verzinnen.
+function casinoWeekRegel() {
+  const w = vatCasinoSamen(readJSON('casinostats.json', {}), getMondayOfWeek(), dagSleutel());
+  if (!w.spellen) return '';
+  const huis = w.netto < 0 ? `het huis won *${-w.netto}*` : w.netto > 0 ? `het huis verloor *${w.netto}*` : 'het huis speelde quitte';
+  const g = w.grootste;
+  const winst = g ? ` Grootste winst: *+${g.netto}* voor ${ontsnapMrkdwn(loadMembers()[g.userId]?.bijnaam || 'een volgeling')} (${CASINO_SPELLEN[g.spel]?.naam || g.spel}).` : '';
+  return `\n\n🎰 _Casino deze week: ${w.spellen} ${w.spellen === 1 ? 'spel' : 'spellen'}, ${huis}${w.netto ? ' kroketpunten' : ''}._${winst}`;
+}
+
 // Wat het dashboard over het casino laat zien (bouwDashboardData) en kan (/api/casino).
 function casinoDashboardData(naam) {
   const dag = dagSleutel();
@@ -15140,6 +15274,8 @@ async function koopAandeel(client, koperId, doelId, aantal = 1) {
 async function verkoopAandeel(client, koperId, doelId, aantal = 1) {
   const members = loadMembers();
   if (!members[koperId]) return { ok: false, tekst: '_Alleen leden van de Kroket Illuminati worden op de beurs toegelaten._' };
+  const pauze = await gokpauzeWeigering(koperId, 'aandelen te verkopen op de Frituurbeurs');
+  if (pauze) return { ok: false, tekst: pauze };
   if (beursWachtOpAfrekening()) return { ok: false, tekst: '_De beurs van vorige week is nog niet afgerekend. Zodra dat gebeurd is, opent de handel weer._' };
 
   const { posities, inzet, vandaag, geteld } = beursDezeWeek();
@@ -19838,11 +19974,6 @@ function bouwAppHomeBlocks(userId, melding = '', extraBlocks = []) {
       `🎰 Casino deze week: ${casinoWeek.spellen} ${casinoWeek.spellen === 1 ? 'spel' : 'spellen'} · ` +
       `${casinoWeek.netto > 0 ? `*+${casinoWeek.netto}* gewonnen` : casinoWeek.netto < 0 ? `*${casinoWeek.netto}* verloren` : 'quitte'}` }] });
   }
-  const gastenNu = gastenVandaag();
-  if (gastenNu.length) {
-    blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text:
-      `🚪 Gasten vandaag: ${gastenNu.map(g => ontsnapMrkdwn(g.naam) + (g.lot ? ' _(lot)_' : '')).join(' · ')}` }] });
-  }
 
   // De actieknoppen: onveranderd, want dit is de enige plek op de hele tab waar je iets DOET.
   const cooldowns = readJSON('cooldowns.json', {});
@@ -19912,6 +20043,33 @@ function bouwAppHomeBlocks(userId, melding = '', extraBlocks = []) {
   if (eretitels.length) {
     blocks.push({ type: 'divider' });
     blocks.push({ type: 'section', text: { type: 'mrkdwn', text: `*ACTIEF OP U*\n${eretitels.map(t => `> ${t}`).join('\n')}` } });
+  }
+
+  // ── De gasten van vandaag: wie er is, wie vertrekt (vasthouden) en een wens voor het lot ──
+  const gastenNu = gastenVandaag();
+  const personasNu = loadPersonas();
+  const wensbaar = Object.entries(personasNu).filter(([, p]) => p?.naam && p.actief === false && !p.alleenVoorLid)
+    .sort(([, a], [, b]) => a.naam.localeCompare(b.naam, 'nl')).slice(0, 100);
+  if (gastenNu.length || wensbaar.length) {
+    blocks.push(...homeKaartKop('🚪 DE GASTEN VAN VANDAAG'));
+    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: gastenVandaagTekst(gastenNu) } });
+    if (!verbannen) {
+      const elementen = gastenNu.filter(g => g.afscheid).slice(0, 4).map((g, i) => ({ type: 'button',
+        text: { type: 'plain_text', text: `🔒 Houd ${g.naam} vast (${GAST_KOSTEN_VASTHOUDEN} pt)`.slice(0, 75), emoji: true },
+        action_id: `gast_vasthouden_${i}`, value: g.id }));
+      const wensen = readJSON('gastwensen.json', {}).wensen || {};
+      const optie = ([id, p]) => ({ text: { type: 'plain_text', text: p.naam.slice(0, 75) }, value: id });
+      const eigen = wensbaar.find(([id]) => id === wensen[userId]);
+      if (wensbaar.length) elementen.push({ type: 'static_select', action_id: 'gast_wens',
+        placeholder: { type: 'plain_text', text: '🎲 Wens een gast voor het lot' },
+        options: wensbaar.map(optie), ...(eigen ? { initial_option: optie(eigen) } : {}) });
+      if (elementen.length) blocks.push({ type: 'actions', elements: elementen });
+      const [topId, topAantal] = Object.entries(telWensen(wensen)).sort(([, a], [, b]) => b - a)[0] || [];
+      blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text:
+        'Elke wens vergroot de kans dat het lot die gast bij de volgende werkdag meebrengt.' +
+        (eigen ? ` U wenst *${ontsnapMrkdwn(eigen[1].naam)}*.` : '') +
+        (personasNu[topId] ? ` Meest gewenst: ${ontsnapMrkdwn(personasNu[topId].naam)} (${topAantal}).` : '') }] });
+    }
   }
 
   // ── Wat er lóópt ──────────────────────────────────────────────────────────
