@@ -385,7 +385,8 @@ function render(d){
       +'<table style="margin-top:8px"><tr><th></th><th>Spellen</th><th>Ingezet</th><th>Uitbetaald</th><th>Huis</th></tr>'+rij('Vandaag',cs.vandaag)+rij('Deze week',cs.week)+'</table>'
       +(perSpel?'<div class="lbl" style="margin-top:10px">Per spel, deze week</div><table>'+perSpel+'</table>':'')
       +(perLid?'<div class="lbl" style="margin-top:10px">Per lid, deze week</div><table><tr><th>Lid</th><th>Spellen</th><th>Netto</th></tr>'+perLid+'</table>':'<div class="muted" style="margin-top:8px">deze week nog niet gespeeld</div>')
-      +(gw?'<div style="margin-top:8px">🏆 Grootste winst: <b>'+esc(gw.naam)+'</b> +'+gw.netto+' aan '+esc(gw.spel)+'</div>':''));
+      +(gw?'<div style="margin-top:8px">🏆 Grootste winst: <b>'+esc(gw.naam)+'</b> +'+gw.netto+' aan '+esc(gw.spel)+'</div>':'')
+      +(cs.feiten&&cs.feiten.length?'<div class="lbl" style="margin-top:10px">Gefluister deze week'+tip('Wat de casinoroddel van dinsdag 16:30 kan vertellen. Die kiest er vier, over de afgelopen zeven dagen.')+'</div>'+cs.feiten.map(function(f){return '<div>'+esc(f).replace(/\*([^*]+)\*/g,'<b>$1</b>')+'</div>';}).join(''):''));
     var gp=cs.gokpauze.map(function(g){
       var status=g.rustdag===cs.dag?'<b style="color:var(--red)">rustdag vandaag</b>'+(g.pogingen?' · '+g.pogingen+'× geprobeerd':'')
         :g.rustdag?'rustdag '+new Date(g.rustdag+'T12:00:00Z').toLocaleDateString('nl-NL',{weekday:'long'})+(g.gewaarschuwd?' · gewaarschuwd':' · nog niet gewaarschuwd')
