@@ -386,6 +386,7 @@ function render(d){
       +(perSpel?'<div class="lbl" style="margin-top:10px">Per spel, deze week</div><table>'+perSpel+'</table>':'')
       +(perLid?'<div class="lbl" style="margin-top:10px">Per lid, deze week</div><table><tr><th>Lid</th><th>Spellen</th><th>Netto</th></tr>'+perLid+'</table>':'<div class="muted" style="margin-top:8px">deze week nog niet gespeeld</div>')
       +(gw?'<div style="margin-top:8px">🏆 Grootste winst: <b>'+esc(gw.naam)+'</b> +'+gw.netto+' aan '+esc(gw.spel)+'</div>':'')
+      +(cs.loterij?'<div style="margin-top:8px">🎟️ Frituurloterij: pot <b>'+cs.loterij.pot+'</b> · '+cs.loterij.loten+' loten van '+cs.loterij.deelnemers+' leden · trekking vrijdag 16:00'+(cs.loterij.laatste?' · laatst gewonnen door <b>'+esc(cs.loterij.laatste.naam)+'</b> (+'+cs.loterij.laatste.pot+')':'')+'</div>':'')
       +(cs.feiten&&cs.feiten.length?'<div class="lbl" style="margin-top:10px">Gefluister deze week'+tip('Wat de casinoroddel van dinsdag 16:30 kan vertellen. Die kiest er vier, over de afgelopen zeven dagen.')+'</div>'+cs.feiten.map(function(f){return '<div>'+esc(f).replace(/\*([^*]+)\*/g,'<b>$1</b>')+'</div>';}).join(''):''));
     var gp=cs.gokpauze.map(function(g){
       var status=g.rustdag===cs.dag?'<b style="color:var(--red)">rustdag vandaag</b>'+(g.pogingen?' · '+g.pogingen+'× geprobeerd':'')

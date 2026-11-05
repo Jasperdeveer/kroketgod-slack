@@ -172,6 +172,7 @@ const {
 } = require('./lib/casinobeeld.js');
 const { GOKPAUZE_DAGEN, schuif: schuifDag, naCasinoSpel, opRustdag, moetWaarschuwen, naWaarschuwing, naPoging, zonderRustdag, standVan } = require('./lib/gokpauze.js');
 const { boekSpel: boekCasinoStat, vatSamen: vatCasinoSamen, feiten: casinoFeiten, kiesFeiten: kiesCasinoFeiten } = require('./lib/casinostats.js');
+const { LOT_PRIJS, stand: loterijStand, koopLot, trek: trekLoterij } = require('./lib/loterij.js');
 const { gaveVan, maxHpVoor, isRazend, slaatTerug, terugslagBuit, schadeNaGave, komtTerug, vijandBeurt } = require('./lib/weekvijand.js');
 const { createHash } = require('crypto');
 const {
@@ -10543,6 +10544,7 @@ const CRON_LABELS = {
   '0 11 * * 3':      { label: 'Premiejacht (kans)' },
   '0 11 * * 4':      { label: 'Het Verhoor' },
   '30 16 * * 2':     { label: 'Casinoroddel' },
+  '0 16 * * 5':      { label: 'Frituurloterij (trekking)' },
   '20 9 * * 1':      { label: 'Kroketkroniek' },
 };
 const geplandeCronMeta = []; // { key, label, vast, taak, toonTaak }
@@ -14386,6 +14388,9 @@ const gokpauzeWeigering = async (userId, actie) => (opGokpauze(userId) ? gokpauz
 // of een gesloten venster eet de inzet niet op (wie terugkomt, speelt het af), en een dubbele klik
 // vindt de tweede keer geen spel meer en betaalt dus niet twee keer uit.
 registreerFeature({ naam: 'casino', state: ['casino.json', 'casinobonus.json', 'casinostats.json'] });
+// De Frituurloterij (regels: lib/loterij.js): een lot kopen in de lobby, de trekking vrijdag 16:00.
+registreerFeature({ naam: 'loterij', state: ['loterij.json'] });
+const loadLoterij = () => readJSON('loterij.json', { loten: [], historie: [] });
 const loadCasinoHanden = () => readJSON('casino.json', {});
 const saveCasinoHanden = (d) => writeJSON('casino.json', d);
 const CASINO_VERKONDIG_VANAF = 10; // nettowinst waarvoor het kanaal het hoort
@@ -14566,9 +14571,13 @@ function casinoVenster(userId, { spel = 'lobby', inzet = 1, beeld = null, meldin
   if (bezig) {
     blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: bezig }] });
   } else if (spel === 'lobby') {
-    blocks.push(casinoTekst(`🎰 *Welkom in het Casino van de Kroket God.* Het huis wint altijd, behalve als het even niet oplet.\n${casinoStand(userId)}` +
-      (hand ? `\n_U heeft nog een open spel: ${CASINO_SPELLEN[hand.spel].naam}._` : '')));
+    blocks.push(casinoTekst([melding, `🎰 *Welkom in het Casino van de Kroket God.* Het huis wint altijd, behalve als het even niet oplet.\n${casinoStand(userId)}` +
+      (hand ? `\n_U heeft nog een open spel: ${CASINO_SPELLEN[hand.spel].naam}._` : '')].filter(Boolean).join('\n')));
     blocks.push({ type: 'actions', elements: Object.entries(CASINO_SPELLEN).map(([id, s]) => casinoKnop(`casino_naar_${id}`, s.naam, 'primary')) });
+    const lot = loterijStand(loadLoterij(), userId, dagSleutel());
+    blocks.push(casinoTekst(`🎟️ *Frituurloterij:* de pot staat op *${lot.pot}* (${lot.loten} ${lot.loten === 1 ? 'lot' : 'loten'}). Vrijdag om 16:00 wordt er één getrokken; de winnaar krijgt alles.` +
+      (lot.mijnLoten ? ` U heeft er ${lot.mijnLoten}.` : '') + (lot.vandaagGekocht ? ' _Morgen kunt u er weer een kopen._' : '')));
+    if (!lot.vandaagGekocht) blocks.push({ type: 'actions', elements: [casinoKnop('casino_zet_lot', `🎟️ Koop een lot (${LOT_PRIJS} punt)`)] });
   } else if (hand?.spel === spel) {
     blocks.push(casinoTekst([melding, `*${CASINO_SPELLEN[spel].naam}*`, tafelTekst(hand)].filter(Boolean).join('\n')));
     blocks.push({ type: 'actions', elements: spelKnoppen(userId, hand) });
@@ -14680,6 +14689,15 @@ function voerCasinoZetUit(userId, meta, soort, zet, waarde) {
   const fout = (tekst) => ({ meta: { ...meta, melding: `⚠️ _${tekst}_` }, teken: undefined });
 
   if (soort === 'inzet') return { meta: { ...meta, inzet: Math.min(Math.max(1, Number(zet) || 1), casinoMax()) }, teken: undefined };
+  if (soort === 'zet' && zet === 'lot') {
+    if ((loadScores()[userId] || 0) < LOT_PRIJS) return fout('U heeft geen punt om een lot van te kopen.');
+    const { staat, fout: nee } = koopLot(loadLoterij(), userId, dagSleutel());
+    if (nee) return fout(nee);
+    writeJSON('loterij.json', staat);
+    pasScoreAan(userId, -LOT_PRIJS);
+    const lot = loterijStand(staat, userId, dagSleutel());
+    return { meta: { ...meta, spel: 'lobby', melding: `🎟️ *Lot gekocht.* U heeft ${lot.mijnLoten} van de ${lot.loten} loten in de mand: ${Math.round(100 * lot.mijnLoten / lot.loten)}% kans op de pot van ${lot.pot}, zolang niemand er nog een bijkoopt.` }, teken: undefined };
+  }
   if (soort === 'naar') {
     if (zet === 'lobby') return { meta: { spel: 'lobby', inzet }, teken: () => lobbyBeeld() };
     if (!CASINO_SPELLEN[zet]) return null;
@@ -14817,6 +14835,31 @@ planCron('30 16 * * 2', async () => {
   } catch (err) { console.error('Fout bij de casinoroddel:', err); }
 }, { timezone: 'Europe/Amsterdam' });
 
+// ── Cron: vrijdag 16:00 — de trekking van de Frituurloterij ───────────────────
+// Na het weekoverzicht van 15:00. Eerst opslaan en uitbetalen, dan posten: een mislukte post mag de
+// trekking niet laten herhalen. In stilmodus geen trekking; de pot wacht dan een week.
+planCron('0 16 * * 5', async () => {
+  try {
+    if (instelling('stilModus') || instelling('alleenTestkanaal')) return;
+    const { staat, uitslag } = trekLoterij(loadLoterij(), dagSleutel(), Math.random, (id) => !!loadMembers()[id] && !isVerbannen(id));
+    if (!uitslag) return;
+    if (uitslag.doorgeschoven) {
+      await postToChannel(app.client, KANAAL(), `🎟️ *Frituurloterij:* vandaag geen trekking. ${uitslag.deelnemers ? 'Er deed maar één volgeling mee' : 'Er deed geen enkele volgeling mee'}, en tegen jezelf loten is geen loterij. De pot van *${uitslag.pot}* schuift door naar volgende vrijdag. Een lot kost ${LOT_PRIJS} punt in de casinolobby (\`/kroketgod casino\`).`);
+      return;
+    }
+    writeJSON('loterij.json', staat);
+    pasScoreAan(uitslag.winnaar, uitslag.pot);
+    const bijnaam = loadMembers()[uitslag.winnaar]?.bijnaam || 'een volgeling';
+    logGebeurtenis('loterij', uitslag.winnaar, `${bijnaam} won de Frituurloterij: ${uitslag.pot} punten`);
+    await postToChannel(app.client, KANAAL(),
+      `🎟️ *TREKKING VAN DE FRITUURLOTERIJ* 🎟️\n\n` +
+      `> De Kroket God steekt zijn hand in de frituurmand: ${uitslag.loten} loten van ${uitslag.deelnemers} volgelingen.\n` +
+      `> Hij draait er één om, en het lot is van… *${ontsnapMrkdwn(bijnaam)}*! Goed voor *${uitslag.pot} kroketpunten*` +
+      (uitslag.winnendeLoten > 1 ? `, met ${uitslag.winnendeLoten} van de ${uitslag.loten} loten.` : ', met één enkel lot.') +
+      `\n\n_Volgende trekking: vrijdag om 16:00. Een lot kost ${LOT_PRIJS} punt in de casinolobby (\`/kroketgod casino\`), één per dag._`);
+  } catch (err) { console.error('Fout bij de trekking van de loterij:', err); }
+}, { timezone: 'Europe/Amsterdam' });
+
 // Wat het dashboard over het casino laat zien (bouwDashboardData) en kan (/api/casino).
 function casinoDashboardData(naam) {
   const dag = dagSleutel();
@@ -14833,6 +14876,7 @@ function casinoDashboardData(naam) {
     vandaag: metNamen(vatCasinoSamen(stats, dag, dag)),
     week: metNamen(vatCasinoSamen(stats, getMondayOfWeek(), dag)),
     feiten: casinoFeiten(vatCasinoSamen(stats, getMondayOfWeek(), dag), { naam, plek: (spel) => CASINO_SPELLEN[spel]?.plek || spel }),
+    loterij: (({ laatste, ...lot }) => ({ ...lot, laatste: laatste && { ...laatste, naam: naam(laatste.winnaar) } }))(loterijStand(loadLoterij(), null, dag)),
     gokpauze: Object.entries(pauze).map(([id, rec]) => ({ userId: id, naam: naam(id), ...standVan(rec, dag) }))
       .filter(r => r.reeks > 0 || r.rustdag).sort((a, b) => (b.rustdag ? 1 : 0) - (a.rustdag ? 1 : 0) || b.reeks - a.reeks),
     reeksLengte: GOKPAUZE_DAGEN,
@@ -14876,7 +14920,7 @@ app.action(/^casino_(naar|inzet|zet)_/, async ({ ack, body, action, client }) =>
   if (!CASINO_SPELLEN[meta.spel]) meta.spel = 'lobby';
   meta.inzet = Math.min(Math.max(1, Number(meta.inzet) || 1), casinoMax());
   if (soort === 'zet' && !CASINO_OPEN_ZETTEN.has(zet) && opGokpauze(userId)) {
-    const melding = await gokpauzeToespraak(userId, 'een spel te beginnen in het casino');
+    const melding = await gokpauzeToespraak(userId, zet === 'lot' ? 'een lot te kopen voor de Frituurloterij' : 'een spel te beginnen in het casino');
     if (_casinoKlikken.get(userId) === nr) await toonCasino(client, body.view.id, userId, { ...meta, melding });
     return;
   }
