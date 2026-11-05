@@ -191,7 +191,7 @@ const { schetsVan, andereGasten, kandidatenVoorOnderling, kiesAntwoorder, kiesIn
 const { STELLINGEN, STEM_A, STEM_B, kiesStelling, kiesDebaters, telDebatStemmen, debatWinnaar } = require('./lib/gastendebat.js');
 const {
   SLIM_PALET, SLIM_KLASSEN, frequentie: emojiFrequentie, kiesRegel: kiesEmojiRegel,
-  magReageren: magEmojiReageren, naReactie: naEmojiReactie,
+  magReageren: magEmojiReageren, naReactie: naEmojiReactie, slimEmoji,
 } = require('./lib/emojireacties.js');
 const {
   DECREET_MAX, HEFTIGHEDEN, HEFTIGHEID_STANDAARD, heftigheidLabel,
@@ -10124,13 +10124,16 @@ const _ongeldigeEmoji = new Set(); // namen die Slack weigerde (bv. een verdwene
 // variabele is er voor de test.
 const EMOJI_VERTRAGING_MS = Number(process.env.KROKET_EMOJI_VERTRAGING_MS ?? 5000);
 const QUINTY_ID = 'U085E5Y3PAB'; // voor de :quintrippy:-regel
+const SANDER_ID = 'U09L37GRASZ'; // voor :santi-jatoch: (zie slimEmoji)
+// Bij Sander kijkt de slimme laag vaker mee, anders komt het "eens"-oordeel bijna nooit.
+const SANDER_SLIM_KANS = 0.3;
 
 function amsUur(nu = new Date()) {
   return Number(new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Amsterdam', hour: '2-digit', hourCycle: 'h23' }).format(nu));
 }
 
 // De slimme laag: een klein model kiest uit het vaste palet, of "geen" (meestal het juiste antwoord).
-async function slimmeEmoji(tekst) {
+async function slimmeEmoji(tekst, ctx = {}) {
   const palet = Object.entries(SLIM_PALET).map(([klasse, p]) => `- ${klasse}: ${p.betekenis}`).join('\n');
   const recent = getRecenteContext(4);
   const systeem = `${DEFENSIEVE_INSTRUCTIE}\n\nJe beoordeelt één bericht uit de Slack-groep van een vriendengroep. ` +
@@ -10139,7 +10142,7 @@ async function slimmeEmoji(tekst) {
   const vraag = `${recent ? `${wrapOnvertrouwd('Het gesprek van zojuist', recent)}\n\n` : ''}` +
     `${wrapOnvertrouwd('Het bericht', tekst)}\n\nWelke reactie? Eén woord.`;
   const klasse = await classificeer(systeem, vraag, { klassen: SLIM_KLASSEN, vangnet: 'geen' });
-  return SLIM_PALET[klasse]?.emoji || null;
+  return slimEmoji(klasse, ctx);
 }
 
 async function overwegEmojiReactie(client, event, { isTestKanaalMsg = false } = {}) {
@@ -10162,8 +10165,10 @@ async function overwegEmojiReactie(client, event, { isTestKanaalMsg = false } = 
   const regel = regelsAan ? kiesEmojiRegel(tekst, ctx, { factor: freq.regelFactor }) : null;
   let emoji = regel?.emoji || null;
   // Een regel die raak was maar wiens worp misliep, laat het bericht met rust: geen slimme laag.
-  if (!regel && slimAan && tekst.trim().split(/\s+/).length >= 4 && Math.random() < freq.slimKans) {
-    emoji = await slimmeEmoji(tekst);
+  const sander = event.user === SANDER_ID;
+  const slimKans = sander ? Math.max(freq.slimKans, SANDER_SLIM_KANS) : freq.slimKans;
+  if (!regel && slimAan && tekst.trim().split(/\s+/).length >= 4 && Math.random() < slimKans) {
+    emoji = await slimmeEmoji(tekst, { sander });
   }
   if (!emoji || _ongeldigeEmoji.has(emoji)) return;
   // Opnieuw toetsen: tijdens de slimme laag kan een ander bericht de ruimte al hebben genomen.
