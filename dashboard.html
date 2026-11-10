@@ -381,7 +381,7 @@ function render(d){
     var perLid=cs.week.perLid.map(function(l){return '<tr><td>'+esc(l.naam)+'</td><td>'+l.spellen+'</td><td>'+(l.netto>0?'+':'')+l.netto+'</td></tr>';}).join('');
     var gw=cs.week.grootste;
     shtml+=card('🎰 Casino'+tip('Wat er in het casino gespeeld is. "Huis" is wat het casino aan de spelers verdiende (groen) of verloor (rood). De cijfers tellen vanaf 29 oktober 2026. Instellen kan bij Beheer → Instellingen.'),
-      '<div class="muted">'+(cs.aan?'open':'<b style="color:var(--red)">gesloten</b>')+' · max '+cs.maxInzet+' per spel · '+cs.perDag+' spellen per dag'+(cs.bonusVandaag?' <b style="color:var(--gold)">+'+cs.bonusVandaag+' extra vandaag</b>':'')+'</div>'
+      '<div class="muted">'+(cs.aan?'open':'<b style="color:var(--red)">gesloten</b>')+' · max '+cs.maxInzet+' per spel · '+cs.perDag+' spellen per dag'+(cs.bonusVandaag?' <b style="color:var(--gold)">+'+cs.bonusVandaag+' extra vandaag</b>':'')+(cs.schuifkast!=null?' · schuifkast: '+cs.schuifkast+' munten op de tafel':'')+'</div>'
       +'<table style="margin-top:8px"><tr><th></th><th>Spellen</th><th>Ingezet</th><th>Uitbetaald</th><th>Huis</th></tr>'+rij('Vandaag',cs.vandaag)+rij('Deze week',cs.week)+'</table>'
       +(perSpel?'<div class="lbl" style="margin-top:10px">Per spel, deze week</div><table>'+perSpel+'</table>':'')
       +(perLid?'<div class="lbl" style="margin-top:10px">Per lid, deze week</div><table><tr><th>Lid</th><th>Spellen</th><th>Netto</th></tr>'+perLid+'</table>':'<div class="muted" style="margin-top:8px">deze week nog niet gespeeld</div>')

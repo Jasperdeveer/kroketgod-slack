@@ -164,11 +164,11 @@ const {
   MAX_INZET: CASINO_MAX_INZET, LOS_GETAL_MAX, INZETSOORTEN, handWaarde, isBlackjack, deel, kaart, verdubbel, speelBank, magVerdubbelen,
   blackjackUitbetaling, kleurVan, draai, rouletteUitbetaling, toetsRoulette,
   GOKKAST, trekHendel, gokkastFactor, gokkastUitbetaling, HL_MAX, hlFactor, hlGelijk, hlStart, hlRaad, hlUitbetaling,
-  DOBBELKEUZES, werp, dobbelUitbetaling, totWinst,
+  DOBBELKEUZES, werp, dobbelUitbetaling, totWinst, skNieuweTafel, skGooi,
 } = require('./lib/casino.js');
 const {
-  blackjackBeeld, rouletteBeeld, gokkastBeeld, hogerLagerBeeld, dobbelBeeld, lobbyBeeld, naarPng,
-  blackjackFilm, rouletteFilm, gokkastFilm, hogerLagerFilm, dobbelFilm, naarGif,
+  blackjackBeeld, rouletteBeeld, gokkastBeeld, hogerLagerBeeld, dobbelBeeld, schuifkastBeeld, lobbyBeeld, naarPng,
+  blackjackFilm, rouletteFilm, gokkastFilm, hogerLagerFilm, dobbelFilm, schuifkastFilm, naarGif,
 } = require('./lib/casinobeeld.js');
 const { GOKPAUZE_DAGEN, schuif: schuifDag, naCasinoSpel, opRustdag, moetWaarschuwen, naWaarschuwing, naPoging, zonderRustdag, standVan } = require('./lib/gokpauze.js');
 const { boekSpel: boekCasinoStat, vatSamen: vatCasinoSamen, feiten: casinoFeiten, kiesFeiten: kiesCasinoFeiten } = require('./lib/casinostats.js');
@@ -13920,7 +13920,7 @@ function getGeluk(userId) {
 // de jackpot, die is hoogstens één keer per week en niet af te dwingen),
 // troonstrijd (aanval én verdediging), beroep vanuit ballingschap en uitbraakpoging, en elk spel in
 // het casino: een winnende hand, worp, draai of gok (totWinst, lib/casino.js; elke gok bij hoger/lager
-// is een eigen kansactie). Ook de gokkast-jackpot kan dan vallen, met zijn gewone, kleine kans.
+// is een eigen kansactie). Niet in de schuifkast en de loterij: daar is de pot van andere leden. Ook de gokkast-jackpot kan dan vallen, met zijn gewone, kleine kans.
 //
 // De code staat NIET in deze repo: hij komt uit KROKETGOD_FORTUIN_CODE in .env op de server. Zonder
 // die env-var bestaat het commando simpelweg niet — er is dan geen invoer die iets doet.
@@ -14387,11 +14387,21 @@ const gokpauzeWeigering = async (userId, actie) => (opGokpauze(userId) ? gokpauz
 // Een open spel (blackjack, hoger/lager) staat in casino.json en niet in het venster: een herstart
 // of een gesloten venster eet de inzet niet op (wie terugkomt, speelt het af), en een dubbele klik
 // vindt de tweede keer geen spel meer en betaalt dus niet twee keer uit.
-registreerFeature({ naam: 'casino', state: ['casino.json', 'casinobonus.json', 'casinostats.json'] });
+registreerFeature({ naam: 'casino', state: ['casino.json', 'casinobonus.json', 'casinostats.json', 'schuifkast.json'] });
 // De Frituurloterij (regels: lib/loterij.js): een lot kopen in de lobby, de trekking vrijdag 16:00.
 registreerFeature({ naam: 'loterij', state: ['loterij.json'] });
 const loadLoterij = () => readJSON('loterij.json', { loten: [], historie: [] });
 const loadCasinoHanden = () => readJSON('casino.json', {});
+// De gedeelde tafel van de schuifkast (lib/casino.js). Bij de eerste keer legt het huis er munten op,
+// en die tafel blijft: anders liep hij bij elk bezoek opnieuw vol.
+function laadSchuifkast() {
+  const tafel = readJSON('schuifkast.json', null);
+  if (Array.isArray(tafel?.munten)) return tafel;
+  const nieuw = skNieuweTafel(Math.random);
+  writeJSON('schuifkast.json', nieuw);
+  return nieuw;
+}
+const SCHUIFKAST_LAWINE = 10; // zoveel munten in de bak in één worp: een lawine voor de roddels
 const saveCasinoHanden = (d) => writeJSON('casino.json', d);
 const CASINO_VERKONDIG_VANAF = 10; // nettowinst waarvoor het kanaal het hoort
 const CASINO_TITEL = { type: 'plain_text', text: 'Casino' };
@@ -14408,6 +14418,8 @@ const CASINO_SPELLEN = {
     uitleg: `Raad of de volgende kaart hoger of lager is. Een gelijke kaart telt niet: de pot blijft staan en u raadt opnieuw. Elke goede gok laat de pot groeien; cash wanneer u wilt, hoogstens ${HL_MAX}× uw inzet. Een restje achter de komma wordt met zoveel procent kans een punt extra.` },
   dobbelen: { naam: '🎲 Dobbelen', plek: 'de dobbeltafel',
     uitleg: 'Twee stenen. Onder of boven 7 betaalt 1:1 en een 7 geeft de inzet terug; precies 7 betaalt 4:1.' },
+  schuifkast: { naam: '🪙 Schuifkast', plek: 'de schuifkast',
+    uitleg: 'Uw inzet gaat als munten de kast in en de schuif duwt de hele stapel naar voren. Wat over de rand valt, is voor u; wat in een zijgat valt, is van het huis. De tafel is van iedereen: wat blijft liggen, duwt de volgende eraf. Kijk dus goed hoe vol de rand ligt.' },
 };
 const ROULETTE_KNOPPEN = { rood: '🔴 Rood', zwart: '⚫ Zwart', even: 'Even', oneven: 'Oneven', laag: '1–18', hoog: '19–36', dozijn1: '1e 12', dozijn2: '2e 12', dozijn3: '3e 12' };
 const GOKKAST_RUST = Array(3).fill(GOKKAST.at(-1).emoji); // de kast in rust toont de jackpot
@@ -14540,6 +14552,7 @@ function startKnoppen(spel, inzet) {
   if (spel === 'blackjack') return [rij([casinoKnop('casino_zet_deel', `🃏 Deel (${inzet})`, 'primary')])];
   if (spel === 'gokkast') return [rij([casinoKnop('casino_zet_hendel', `🎰 Trek aan de hendel (${inzet})`, 'primary')])];
   if (spel === 'hogerlager') return [rij([casinoKnop('casino_zet_start', `🃏 Deel een kaart (${inzet})`, 'primary')])];
+  if (spel === 'schuifkast') return [rij([casinoKnop('casino_zet_gooi', `🪙 Gooi ${inzet} ${inzet === 1 ? 'munt' : 'munten'}`, 'primary')])];
   if (spel === 'dobbelen') return [rij(Object.entries(DOBBELKEUZES).map(([k, naam]) => casinoKnop(`casino_zet_${k}`, `${naam} · ${k === 'zeven' ? '4:1' : '1:1'}`, 'primary')))];
   return [
     rij(Object.entries(ROULETTE_KNOPPEN).map(([k, naam]) => casinoKnop(`casino_zet_${k}`, naam))),
@@ -14630,6 +14643,7 @@ async function openCasino(client, triggerId, userId) {
 const CASINO_BEZIG = {
   blackjack: '🃏 _De croupier legt de kaarten…_', hogerlager: '🃏 _De kaart draait om…_',
   roulette: '🎡 _Het balletje rolt…_', gokkast: '🎰 _De rollen draaien…_', dobbelen: '🎲 _De stenen rollen…_',
+  schuifkast: '🪙 _De munten rollen…_',
 };
 // `voor`: de blackjackhand vóór de zet (null bij het delen); zonder `film` geen film (een geweigerde zet).
 const handFilm = (hand, voor) => () => (hand.spel === 'hogerlager' ? hogerLagerFilm(hand) : blackjackFilm(voor, hand));
@@ -14702,6 +14716,7 @@ function voerCasinoZetUit(userId, meta, soort, zet, waarde) {
     if (zet === 'lobby') return { meta: { spel: 'lobby', inzet }, teken: () => lobbyBeeld() };
     if (!CASINO_SPELLEN[zet]) return null;
     if (hand) return { meta: { spel: hand.spel, inzet, melding: hand.spel === zet ? null : '_Speel eerst uw open spel af._' }, teken: () => tafelBeeld(hand) };
+    if (zet === 'schuifkast') return { meta: { spel: zet, inzet }, teken: () => schuifkastBeeld(laadSchuifkast().munten) };
     return { meta: { spel: zet, inzet }, teken: zet === 'gokkast' ? (p) => gokkastBeeld(GOKKAST_RUST, p) : null };
   }
 
@@ -14733,6 +14748,7 @@ function voerCasinoZetUit(userId, meta, soort, zet, waarde) {
   const spel = meta.spel;
   const getal = zet === 'getal' ? Number(waarde) : null;
   const geldig = (spel === 'blackjack' && zet === 'deel') || (spel === 'hogerlager' && zet === 'start') || (spel === 'gokkast' && zet === 'hendel')
+    || (spel === 'schuifkast' && zet === 'gooi')
     || (spel === 'dobbelen' && DOBBELKEUZES[zet]) || (spel === 'roulette' && INZETSOORTEN[zet]);
   if (!geldig) return null;
   const reden = casinoInzetFout(userId, inzet) || (spel === 'roulette' ? toetsRoulette(zet, inzet, getal)?.tekst : null);
@@ -14758,6 +14774,22 @@ function voerCasinoZetUit(userId, meta, soort, zet, waarde) {
     const { tekst, netto } = boekCasinoUitslag(userId, 'gokkast', inzet, gokkastUitbetaling(rollen, inzet), rollen.join(' '), { bijzonder: jackpot ? 'jackpot' : null });
     const kop = jackpot ? 'JACKPOT' : new Set(rollen).size === 1 ? 'DRIE GELIJK' : factor ? 'TWEE GELIJK' : 'NIETS';
     return { meta: { ...meta, melding: `🎰 ${rollen.map(r => `:${r}:`).join(' ')}  *${kop}*\n${tekst}` }, teken: (p) => gokkastBeeld(rollen, p, { uitslag: { kop, netto } }), film: (p) => gokkastFilm(rollen, p), netto };
+  }
+  if (spel === 'schuifkast') {
+    // Geen Gefluisterd Voorrecht: de munten op de tafel zijn van andere leden.
+    const worp = skGooi(laadSchuifkast(), inzet, Math.random);
+    writeJSON('schuifkast.json', worp.tafel);
+    const { winst, huis } = worp;
+    const { tekst, netto } = boekCasinoUitslag(userId, 'schuifkast', inzet, winst, `${winst} munten in de bak`,
+      { bijzonder: winst >= SCHUIFKAST_LAWINE ? 'lawine' : null });
+    const kop = `${winst >= SCHUIFKAST_LAWINE ? 'LAWINE · ' : ''}${winst} IN DE BAK`;
+    const munten = (n) => `${n} ${n === 1 ? 'munt' : 'munten'}`;
+    return {
+      meta: { ...meta, melding: `🪙 U gooide ${munten(inzet)} in de kast. De schuif duwde ${munten(winst)} in de bak${huis ? ` en ${munten(huis)} in de zijgaten` : ''}; er liggen nu ${munten(worp.tafel.munten.length)} op de tafel.\n${tekst}` },
+      teken: () => schuifkastBeeld(worp.tafel.munten, { bak: winst, huis, inzet, uitslag: { kop, netto } }),
+      film: () => schuifkastFilm(worp, { inzet }),
+      netto,
+    };
   }
   if (spel === 'dobbelen') {
     const trek = () => werp(Math.random);
@@ -14872,6 +14904,7 @@ function casinoDashboardData(naam) {
   const pauze = loadGokpauze();
   return {
     dag, aan: instelling('casinoAan') !== false, maxInzet: casinoMax(), perDag: casinoPerDag(), bonusVandaag: casinoBonusVandaag(),
+    schuifkast: laadSchuifkast().munten.length,
     spelNamen: Object.fromEntries(Object.entries(CASINO_SPELLEN).map(([id, s]) => [id, s.naam])),
     vandaag: metNamen(vatCasinoSamen(stats, dag, dag)),
     week: metNamen(vatCasinoSamen(stats, getMondayOfWeek(), dag)),
