@@ -14,6 +14,7 @@ const cron = require('node-cron');
 const fs = require('fs');
 const path = require('path');
 const fetch = require('node-fetch');
+const { zetOpR2 } = require('./lib/r2');
 const {
   DEFENSIEVE_INSTRUCTIE,
   wrapOnvertrouwd,
@@ -4922,8 +4923,17 @@ async function zetAvatarOnline(client, bestand, naam) {
 // Een plaatje openbaar zetten op imgbb; geeft de directe link terug.
 // `verloopS`: imgbb gooit het plaatje na zoveel seconden weg (het casino); zonder blijft het staan.
 async function zetOpImgbb(buf, naam, { verloopS = null, timeout = 30000 } = {}) {
-  if (!process.env.IMGBB_API_KEY) throw new Error('geen IMGBB_API_KEY');
   if (buf.length > GAST_AVATAR_MAX_BYTES) throw new Error('te groot');
+  // R2 als dat ingesteld is (imgbb blokkeerde de server in nov 2026). Met verloopS gaat het naar
+  // casino/, dat de lifecycle-regel van de bucket na een dag opruimt; de rest (gasten/) blijft staan.
+  if (process.env.R2_BUCKET) {
+    const soort = buf.subarray(0, 4).toString('hex') === '89504e47' ? ['png', 'image/png']
+      : buf.subarray(0, 3).toString('hex') === 'ffd8ff' ? ['jpg', 'image/jpeg']
+      : buf.subarray(0, 3).toString() === 'GIF' ? ['gif', 'image/gif'] : ['webp', 'image/webp'];
+    const sleutel = `${verloopS ? 'casino' : 'gasten'}/${createHash('sha1').update(buf).digest('hex')}.${soort[0]}`;
+    return zetOpR2(buf, sleutel, soort[1], { fetch, timeout });
+  }
+  if (!process.env.IMGBB_API_KEY) throw new Error('geen IMGBB_API_KEY');
   const form = new URLSearchParams({ image: buf.toString('base64'), name: slugifyPersonaId(naam, new Set()) });
   const verloop = verloopS ? `&expiration=${verloopS}` : '';
   const up = await fetch(`https://api.imgbb.com/1/upload?key=${encodeURIComponent(process.env.IMGBB_API_KEY)}${verloop}`, {
@@ -14484,9 +14494,6 @@ async function verkondigCasinoWinst(client, userId, spel, netto) {
 // ze na een dag weg; de bot vergeet ze na twaalf uur.
 const CASINO_BEELD_VERLOOP_S = 24 * 3600;
 const CASINO_BEELD_GELDIG_MS = 12 * 3600_000;
-// Zo lang na het tonen van een film komt de uitslag, bovenop de duur van de film zelf: Slack moet de
-// GIF eerst ophalen.
-const CASINO_FILM_LAADTIJD_MS = 1500;
 const _casinoBeelden = new Map(); // sha1 van de svg → { url, ts }
 
 async function casinoBeeldUrl(svg) {
@@ -14497,13 +14504,6 @@ async function casinoBeeldUrl(svg) {
   _casinoBeelden.set(sleutel, { url, ts: Date.now() });
   if (_casinoBeelden.size > 300) _casinoBeelden.delete(_casinoBeelden.keys().next().value);
   return url;
-}
-
-// Een film (lib/casinobeeld.js) als GIF op imgbb. Elke film is anders (hij eindigt op de uitkomst),
-// dus geen geheugen zoals bij de plaatjes. Geeft { url, duurMs }.
-async function casinoFilmUrl(film) {
-  const { buf, duurMs } = await naarGif(film);
-  return { url: await zetOpImgbb(buf, 'casino', { verloopS: CASINO_BEELD_VERLOOP_S, timeout: 15000 }), duurMs };
 }
 
 // De symbolen van de gokkast als data-URL, uit de eigen emoji van de werkruimte (emoji:read).
@@ -14964,22 +14964,9 @@ app.action(/^casino_(naar|inzet|zet)_/, async ({ ack, body, action, client }) =>
     uit.meta.melding = [waarschuwing, uit.meta.melding].filter(Boolean).join('\n\n');
     postEphemeral(client, KANAAL(), userId, waarschuwing).catch(err => console.warn('⚠️ Gokwaarschuwing fluisteren mislukt:', err.message));
   }
-  const plaatjes = uit.teken || uit.film ? await casinoPlaatjes(client) : {};
-  // Het eindplaatje alvast, terwijl de film loopt.
+  const plaatjes = uit.teken ? await casinoPlaatjes(client) : {};
+  // Geen films meer (GIF's per zet joegen imgbb door zijn rate limit): alleen het eindplaatje.
   const eindbeeld = uit.teken ? casinoBeeldUrl(uit.teken(plaatjes)).catch(err => { console.warn('⚠️ Casinoplaatje mislukt:', err.message); return null; }) : null;
-  if (uit.film) {
-    // Meteen beweging in het venster (de knoppen weg, dus geen tweede klik), dan de film zonder
-    // uitslag, en pas als die gespeeld heeft de uitslag. Lukt de film niet, dan meteen de uitslag.
-    const bezig = { ...uit.meta, melding: null, beeld: meta.beeld || null, bezig: CASINO_BEZIG[uit.meta.spel] };
-    if (_casinoKlikken.get(userId) === nr) await toonCasino(client, body.view.id, userId, bezig);
-    try {
-      const { url, duurMs } = await casinoFilmUrl(uit.film(plaatjes));
-      if (_casinoKlikken.get(userId) === nr) {
-        await toonCasino(client, body.view.id, userId, { ...bezig, beeld: url });
-        await new Promise(r => setTimeout(r, duurMs + CASINO_FILM_LAADTIJD_MS));
-      }
-    } catch (err) { console.warn('⚠️ Casinofilm mislukt:', err.message); }
-  }
   const beeld = uit.teken === undefined ? meta.beeld || null : uit.teken ? await eindbeeld : null;
   if (_casinoKlikken.get(userId) === nr) await toonCasino(client, body.view.id, userId, { ...uit.meta, beeld });
   if (uit.netto != null) await verkondigCasinoWinst(client, userId, uit.meta.spel, uit.netto);
