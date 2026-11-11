@@ -23550,6 +23550,9 @@ function planVerkondiging(tekst, kanaalKeuze, wanneerTs) {
   if (!ts || Number.isNaN(ts)) throw new Error('Ongeldig tijdstip');
   if (ts < Date.now() - 60_000) throw new Error('Kies een tijdstip in de toekomst');
   const data = loadGeplandeBerichten();
+  // Hetzelfde bericht op hetzelfde tijdstip niet twee keer (op 11 nov 2026 ging er een drie keer uit).
+  const dubbel = data.berichten.find(b => b.status === 'wacht' && b.ts === ts && b.tekst === schoon && b.kanaal === (kanaalKeuze === 'test' ? 'test' : 'hoofd'));
+  if (dubbel) return dubbel.id;
   const id = 'b' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
   data.berichten.push({
     id, ts, tekst: schoon, kanaal: kanaalKeuze === 'test' ? 'test' : 'hoofd',

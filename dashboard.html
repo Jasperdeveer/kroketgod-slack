@@ -796,11 +796,11 @@ function renderInstellingen(d){
     +'<textarea id="i_v_in" rows="2" placeholder="bv. vergeet niet dat het vrijdag kroketdag is"></textarea>'
     +'<div style="display:flex;gap:8px;align-items:center;margin-top:6px;flex-wrap:wrap"><select id="i_v_kanaal" style="width:auto"><option value="hoofd">Hoofdkanaal</option><option value="test">Testkanaal</option></select>'
     +'<button class="btn" data-verkondig="vertaal">✨ Vertaal</button>'
-    +'<button class="btn gold" data-verkondig="post">📜 Verkondig nu</button></div>'
+    +'<button class="btn gold" data-verkondig="post">📜 Verkondig nu</button><span class="v_status muted"></span></div>'
     +'<textarea id="i_v_out" rows="3" placeholder="(hier verschijnt de Kroket God-versie — je kunt nog bijschaven voor je verkondigt)" style="margin-top:6px"></textarea>'
     +'<div style="display:flex;gap:8px;align-items:center;margin-top:6px;flex-wrap:wrap"><span class="lbl" style="margin:0">🗓️ Inplannen op'+tip('Kies een datum/tijd in de toekomst om de verkondiging dan automatisch te plaatsen. Een 1-minuut-controle verstuurt geplande berichten op tijd. Ingeplande berichten verschijnen in de "Ingepland"-kaart en kun je daar overslaan.')+'</span>'
     +'<input type="datetime-local" id="i_v_tijd" style="width:auto;background:#16100a;color:var(--txt);border:1px solid var(--line);border-radius:8px;padding:6px 8px;font:inherit">'
-    +'<button class="btn" data-verkondig="plan">🗓️ Inplannen</button></div>'
+    +'<button class="btn" data-verkondig="plan">🗓️ Inplannen</button><span class="v_status muted"></span></div>'
     +'<div class="lbl" style="margin-top:16px;border-top:1px solid var(--line);padding-top:13px">🛒 Aflatenhandel — beheer'+tip('Geef of verwijder een power-up bij een lid zonder kroketpunten te rekenen. Met "aankondigen" plaatst de Frituurraad dezelfde plechtige melding in het hoofdkanaal als bij een echte aankoop; bij een vloek blijft de afzender ook dan verborgen voor het kanaal. Alles komt in de aankoophistorie en het audit-log.')+'</div>'
     +'<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><select id="w_lid" style="width:auto">'+wLeden+'</select>'
     +'<select id="w_item" style="width:auto">'+wItems+'</select>'
@@ -828,8 +828,12 @@ function bewaar(){
 }
 function doeActie(a){post('/api/actie',{actie:a},'Uitgevoerd','i_actiestatus');}
 function skip(soort,key,ts,id){post('/api/overslaan',{soort:soort,key:key?decodeURIComponent(key):'',ts:ts,id:id},'Overgeslagen');}
+var verkondigBezig=false;
 function verkondig(modus){
-  var st=document.getElementById('i_status');
+  if(verkondigBezig)return;
+  var spans=document.querySelectorAll('.v_status');
+  var st={set textContent(t){spans.forEach(function(s){s.textContent=t;});}};
+  var klaar=function(){verkondigBezig=false;};
   if(modus==='vertaal'){
     var inp=document.getElementById('i_v_in').value.trim();
     if(!inp){if(st)st.textContent='Typ eerst een boodschap.';return;}
@@ -845,9 +849,9 @@ function verkondig(modus){
       if(!tv){if(st)st.textContent='Kies eerst een datum/tijd om in te plannen.';return;}
       var ms=new Date(tv).getTime();
       if(!ms||ms<Date.now()){if(st)st.textContent='Kies een tijdstip in de toekomst.';return;}
-      post('/api/verkondig',{tekst:out,kanaal:kanaal,vertaal:false,wanneer:ms},'Ingepland');
+      verkondigBezig=true;post('/api/verkondig',{tekst:out,kanaal:kanaal,vertaal:false,wanneer:ms},'Ingepland',st).then(klaar,klaar);
     }else{
-      post('/api/verkondig',{tekst:out,kanaal:kanaal,vertaal:false},'Verkondigd');
+      verkondigBezig=true;post('/api/verkondig',{tekst:out,kanaal:kanaal,vertaal:false},'Verkondigd',st).then(klaar,klaar);
     }
   }
 }
@@ -879,7 +883,7 @@ function testPrompt(){
     .then(function(j){if(j.error&&j.error.indexOf('DASHBOARD_TOKEN')!==-1){showLogin();out.textContent='';return;}out.textContent=j.ok?j.antwoord:('Fout: '+(j.error||''));})
     .catch(function(){out.textContent='Fout bij aanroep';});
 }
-function post(url,body,okmsg,statusId){var st=document.getElementById(statusId||'i_status');if(st)st.textContent='…';var tok=getToken();fetch(url,{method:'POST',headers:{'Content-Type':'application/json','Authorization':tok?'Bearer '+tok:''},body:JSON.stringify(body)}).then(function(r){return r.json();}).then(function(j){if(j.error&&j.error.indexOf('DASHBOARD_TOKEN')!==-1){showLogin();return;}if(st)st.textContent=(j.ok?((j.bericht||okmsg)+' ✓'):('Fout: '+(j.error||'')));}).catch(function(){if(st)st.textContent='Fout';});}
+function post(url,body,okmsg,statusId){var st=typeof statusId==='object'?statusId:document.getElementById(statusId||'i_status');if(st)st.textContent='…';var tok=getToken();return fetch(url,{method:'POST',headers:{'Content-Type':'application/json','Authorization':tok?'Bearer '+tok:''},body:JSON.stringify(body)}).then(function(r){return r.json();}).then(function(j){if(j.error&&j.error.indexOf('DASHBOARD_TOKEN')!==-1){showLogin();return;}if(st)st.textContent=(j.ok?((j.bericht||okmsg)+' ✓'):('Fout: '+(j.error||'')));}).catch(function(){if(st)st.textContent='Fout';});}
 function showLogin(){var el=document.getElementById('login_overlay');if(el)el.style.display='flex';}
 function saveToken(){var t=document.getElementById('login_token').value.trim();if(t){localStorage.setItem('dashboard_token',t);document.getElementById('login_overlay').style.display='none';}}
 function tick(){var tok=getToken();fetch('/api/stats',{headers:tok?{'Authorization':'Bearer '+tok}:{}}).then(function(r){if(r.status===401){showLogin();document.getElementById('status').textContent='toegangscode vereist';document.getElementById('status').className='pill off';return null;}return r.json();}).then(function(d){if(!d)return;render(d);if(!ingesteld){renderInstellingen(d);ingesteld=true;}if(!personasIngesteld){renderPersonaForm();personasIngesteld=true;}renderPersonaLijst(d);}).catch(function(){document.getElementById('status').textContent='offline';document.getElementById('status').className='pill off';});}
