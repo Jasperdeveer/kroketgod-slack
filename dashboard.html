@@ -389,13 +389,14 @@ function render(d){
       +(cs.loterij?'<div style="margin-top:8px">🎟️ Frituurloterij: pot <b>'+cs.loterij.pot+'</b> · '+cs.loterij.loten+' loten van '+cs.loterij.deelnemers+' leden · trekking vrijdag 16:00'+(cs.loterij.laatste?' · laatst gewonnen door <b>'+esc(cs.loterij.laatste.naam)+'</b> (+'+cs.loterij.laatste.pot+')':'')+'</div>':'')
       +(cs.feiten&&cs.feiten.length?'<div class="lbl" style="margin-top:10px">Gefluister deze week'+tip('Wat de casinoroddel van dinsdag 16:30 kan vertellen. Die kiest er vier, over de afgelopen zeven dagen.')+'</div>'+cs.feiten.map(function(f){return '<div>'+esc(f).replace(/\*([^*]+)\*/g,'<b>$1</b>')+'</div>';}).join(''):''));
     var gp=cs.gokpauze.map(function(g){
-      var status=g.rustdag===cs.dag?'<b style="color:var(--red)">rustdag vandaag</b>'+(g.pogingen?' · '+g.pogingen+'× geprobeerd':'')
-        :g.rustdag?'rustdag '+new Date(g.rustdag+'T12:00:00Z').toLocaleDateString('nl-NL',{weekday:'long'})+(g.gewaarschuwd?' · gewaarschuwd':' · nog niet gewaarschuwd')
+      var dg=function(d){return new Date(d+'T12:00:00Z').toLocaleDateString('nl-NL',{weekday:'short',day:'numeric',month:'short'})};
+      var status=g.rustdag&&g.rustdag<=cs.dag?'<b style="color:var(--red)">casinoverbod t/m '+dg(g.rustTot)+'</b>'+(g.pogingen?' · '+g.pogingen+'× geprobeerd':'')
+        :g.rustdag?'verbod '+dg(g.rustdag)+' t/m '+dg(g.rustTot)+(g.gewaarschuwd?' · gewaarschuwd':' · nog niet gewaarschuwd')
         :'';
       return '<tr><td>'+esc(g.naam)+'</td><td>'+(g.rustdag?'—':g.reeks+'/'+cs.reeksLengte)+'</td><td>'+status+'</td><td>'
         +(g.rustdag?'<button class="skip" onclick="gokpauzeOpheffen(\''+esc(g.userId)+'\',\''+esc(g.naam).replace(/'/g,'')+'\')">opheffen</button>':'')+'</td></tr>';
     }).join('');
-    shtml+=card('🕯️ Gokpauze <span id="gp_status" class="muted" style="font-weight:400;text-transform:none;margin-left:8px"></span>'+tip('De onzichtbare reeks: wie '+cs.reeksLengte+' dagen op rij in het casino speelt, krijgt een privé-waarschuwing en de dag erna een rustdag zonder casino, Vetbad, gok, duel, roof, troon en aandelen kopen. De leden zien hun reeks niet; jij wel. "Opheffen" haalt een rustdag weg.'),
+    shtml+=card('🕯️ Gokpauze <span id="gp_status" class="muted" style="font-weight:400;text-transform:none;margin-left:8px"></span>'+tip('De onzichtbare reeks: wie '+cs.reeksLengte+' werkdagen op rij in het casino speelt (het weekend telt niet), komt op de zwarte lijst: een privé-waarschuwing, een openbare melding in het kanaal en de twee werkdagen erna een verbod op casino, Vetbad, gok, duel, roof, troon en aandelen kopen. De leden zien hun reeks niet; jij wel. "Opheffen" haalt een verbod weg.'),
       gp?'<table><tr><th>Lid</th><th>Reeks</th><th>Status</th><th></th></tr>'+gp+'</table>':'<div class="muted">niemand in een reeks</div>');
   }
   var troonInhoud=sp.troon

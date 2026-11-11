@@ -171,7 +171,7 @@ const {
   blackjackBeeld, rouletteBeeld, gokkastBeeld, hogerLagerBeeld, dobbelBeeld, schuifkastBeeld, lobbyBeeld, naarPng,
   blackjackFilm, rouletteFilm, gokkastFilm, hogerLagerFilm, dobbelFilm, schuifkastFilm, naarGif,
 } = require('./lib/casinobeeld.js');
-const { GOKPAUZE_DAGEN, schuif: schuifDag, naCasinoSpel, opRustdag, moetWaarschuwen, naWaarschuwing, naPoging, zonderRustdag, standVan } = require('./lib/gokpauze.js');
+const { GOKPAUZE_DAGEN, GOKPAUZE_VERBOD, rustEinde, schuif: schuifDag, naCasinoSpel, opRustdag, moetWaarschuwen, naWaarschuwing, naPoging, zonderRustdag, standVan } = require('./lib/gokpauze.js');
 const { boekSpel: boekCasinoStat, vatSamen: vatCasinoSamen, feiten: casinoFeiten, kiesFeiten: kiesCasinoFeiten } = require('./lib/casinostats.js');
 const { LOT_PRIJS, stand: loterijStand, koopLot, trek: trekLoterij } = require('./lib/loterij.js');
 const { gaveVan, maxHpVoor, isRazend, slaatTerug, terugslagBuit, schadeNaGave, komtTerug, vijandBeurt } = require('./lib/weekvijand.js');
@@ -14323,9 +14323,9 @@ const VETBAD_MAX_INZET = 10;
 const VETBAD_BASIS_PER_DAG = 3;
 
 // ── De Gokpauze (regels en waarom: lib/gokpauze.js) ───────────────────────────
-// Vijf casinodagen op rij → een officiële waarschuwing en de dag erna een rustdag zonder gokken.
-// Alles privé: de waarschuwing in het casinovenster en als fluisterbericht, de toespraken bij een
-// poging als antwoord op die poging. Elke gok-actie vraagt gokpauzeWeigering vóór ze iets boekt.
+// Vijf casinowerkdagen op rij → de zwarte lijst: een officiële waarschuwing (privé), een openbare
+// melding in het kanaal, en de twee werkdagen erna een casinoverbod. De toespraken bij een poging
+// blijven privé, als antwoord op die poging. Elke gok-actie vraagt gokpauzeWeigering vóór ze iets boekt.
 registreerFeature({ naam: 'gokpauze', state: ['gokpauze.json'] });
 const loadGokpauze = () => readJSON('gokpauze.json', {});
 const saveGokpauze = (d) => writeJSON('gokpauze.json', d);
@@ -14344,21 +14344,36 @@ function neemGokWaarschuwing(userId) {
   if (!moetWaarschuwen(rec)) return null;
   d[userId] = naWaarschuwing(rec);
   saveGokpauze(d);
-  const datum = new Date(`${rec.rustdag}T12:00:00Z`).toLocaleDateString('nl-NL', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'Europe/Amsterdam' });
   const bijnaam = ontsnapMrkdwn(loadMembers()[userId]?.bijnaam || 'Volgeling');
   return `:illuminati-kroket: *Officiële waarschuwing van de Hoge Frituurraad* :illuminati-kroket:\n` +
-    `> ${bijnaam}, de Raad heeft u ${GOKPAUZE_DAGEN} dagen op rij aan de tafels van het casino gezien. Eén avond is vermaak; ${GOKPAUZE_DAGEN} dagen achter elkaar is een gewoonte, en een gewoonte die punten kost, begint aan een mens te trekken.\n` +
-    `> Daarom is *${datum}* voor u een verplichte rustdag. Die dag blijven het casino, het Grote Vetbad, de voorspelling over de Kroket van de Dag, duels, roven, de troon en het kopen van aandelen voor u gesloten. Vandaag mag u nog spelen.\n` +
+    `> ${bijnaam}, de Raad heeft u ${GOKPAUZE_DAGEN} werkdagen op rij aan de tafels van het casino gezien. Eén avond is vermaak; ${GOKPAUZE_DAGEN} dagen achter elkaar is een gewoonte, en een gewoonte die punten kost, begint aan een mens te trekken.\n` +
+    `> Daarom staat u op de zwarte lijst van het casino, en dat weet het genootschap nu ook. ${gokverbodPeriode(rec)} blijven het casino, het Grote Vetbad, de voorspelling over de Kroket van de Dag, duels, roven, de troon en het kopen van aandelen voor u gesloten. Vandaag mag u nog spelen.\n` +
     '> De Kroket God legt u deze dag op omdat hij u ook volgende maand nog aan zijn tafel wil zien, met een heldere kop.\n' +
     '— De Almachtige Kroket God';
 }
 
+const gokDatum = (dag) => new Date(`${dag}T12:00:00Z`).toLocaleDateString('nl-NL', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'Europe/Amsterdam' });
+// "Van maandag 2 november tot en met dinsdag 3 november" (of één dag bij een oud record).
+const gokverbodPeriode = (rec) => (rustEinde(rec) === rec.rustdag ? `Op ${gokDatum(rec.rustdag)}` : `Van ${gokDatum(rec.rustdag)} tot en met ${gokDatum(rustEinde(rec))}`);
+
+// De openbare melding als iemand op de zwarte lijst komt (wens van de eigenaar, nov 2026).
+async function meldZwarteLijst(client, userId) {
+  const rec = loadGokpauze()[userId];
+  if (!rec?.rustdag) return;
+  const bijnaam = ontsnapMrkdwn(loadMembers()[userId]?.bijnaam || 'Een volgeling');
+  try {
+    await postToChannel(client, KANAAL(), `🚫 *De zwarte lijst van het Casino van de Kroket God*\n` +
+      `${bijnaam} zat ${GOKPAUZE_DAGEN} werkdagen op rij aan de tafels. De Hoge Frituurraad grijpt in: ${gokverbodPeriode(rec).toLowerCase()} ` +
+      `geldt een casinoverbod. Geen casino, geen Vetbad, geen duels, geen roof en geen aandelen. Het genootschap wordt verzocht deze volgeling een echte kroket aan te bieden in plaats van een fiche.`);
+  } catch (err) { console.warn('⚠️ Zwarte lijst verkondigen mislukt:', err.message); }
+}
+
 // Als de keten zwijgt. Oplopend: de laatste blijft staan voor elke volgende poging.
 const GOKPAUZE_VANGNET = [
-  'Vandaag is uw rustdag, volgeling. Vijf dagen achter elkaar aan de tafel is geen toeval meer. De frituur loopt niet weg: haal vandaag een echte kroket, zonder inzet.',
+  'U staat op de zwarte lijst, volgeling. Vijf werkdagen achter elkaar aan de tafel is geen toeval meer. De frituur loopt niet weg: haal vandaag een echte kroket, zonder inzet.',
   'Alweer? Dit is uw tweede poging vandaag, en de Raad ziet het. Wie geen dag zonder gokken kan, gokt niet meer voor zijn plezier. Leg de fiches neer en spreek vandaag een medelid over iets anders dan punten.',
-  'Ik spreek u nu niet als rechter toe, maar als iemand die het beste met u voorheeft. Dit is precies het moment waarop een spel een last wordt. Sluit het venster, doe iets met uw handen, en kom morgen terug als de olie weer helder is.',
-  'U blijft aankloppen bij een deur die vandaag dicht is. Dat zegt meer over de drang dan over het spel. Morgen gaat de deur weer open; vandaag blijft hij dicht.',
+  'Ik spreek u nu niet als rechter toe, maar als iemand die het beste met u voorheeft. Dit is precies het moment waarop een spel een last wordt. Sluit het venster, doe iets met uw handen, en kom terug als het verbod voorbij is en de olie weer helder.',
+  'U blijft aankloppen bij een deur die vandaag dicht is. Dat zegt meer over de drang dan over het spel. Na het verbod gaat de deur weer open; tot die tijd blijft hij dicht.',
 ];
 
 // De privé-toespraak bij een poging op de rustdag. `actie`: wat het lid probeerde, als bijzin
@@ -14368,17 +14383,18 @@ async function gokpauzeToespraak(userId, actie) {
   d[userId] = naPoging(d[userId]);
   saveGokpauze(d);
   const poging = d[userId].pogingen;
+  const tot = gokDatum(rustEinde(d[userId]));
   const vangnet = GOKPAUZE_VANGNET[Math.min(poging, GOKPAUZE_VANGNET.length) - 1];
   const tekst = await kroketResponseMetVangnet(
-    `Een volgeling heeft ${GOKPAUZE_DAGEN} dagen op rij gegokt in het casino van de Kroket God en heeft vandaag een verplichte rustdag. ` +
-    `Toch probeert deze volgeling nu ${actie}. Dit is poging ${poging} van vandaag. ` +
+    `Een volgeling heeft ${GOKPAUZE_DAGEN} werkdagen op rij gegokt in het casino van de Kroket God en staat op de zwarte lijst: een casinoverbod van ${GOKPAUZE_VERBOD} werkdagen, tot en met ${tot}. ` +
+    `Toch probeert deze volgeling nu ${actie}. Dit is poging ${poging} tijdens dit verbod. ` +
     'Spreek de volgeling privé toe, met "u", als herder en niet als rechter: je wilt voorkomen dat dit uitgroeit tot een echte gokverslaving. ' +
     'Warm maar onverbiddelijk: vandaag wordt er niet gegokt. Geef één concreet alternatief voor vandaag, iets zonder punten of kans. ' +
-    (poging > 1 ? 'Er is vandaag al eerder een poging gedaan: wees dringender en persoonlijker dan de vorige keer. ' : '') +
+    (poging > 1 ? 'Er is tijdens dit verbod al eerder een poging gedaan: wees dringender en persoonlijker dan de vorige keer. ' : '') +
     'Drie tot vijf zinnen. Geen inleidingszin, geen ondertekening.',
     260, false, vangnet, 'licht');
   const hulp = poging >= 3 ? '\n_Speelt dit ook buiten de frituur? Bij loketkansspel.nl praat u anoniem met iemand die er verstand van heeft._' : '';
-  return `🕯️ ${tekst}\n\n_Uw rustdag duurt tot middernacht. Morgen gaat alles weer open._${hulp}`;
+  return `🕯️ ${tekst}\n\n_Uw casinoverbod loopt tot en met ${tot}. Daarna gaat alles weer open._${hulp}`;
 }
 
 // Voor elke gok-actie: null als het mag, anders de toespraak.
@@ -14453,7 +14469,7 @@ function casinoToegangReden(userId) {
 function casinoInzetFout(userId, inzet) {
   const reden = casinoToegangReden(userId);
   if (reden) return reden;
-  if (opGokpauze(userId)) return 'Vandaag is uw rustdag. Het casino blijft voor u dicht tot middernacht.';
+  if (opGokpauze(userId)) return `U staat op de zwarte lijst. Het casino blijft voor u dicht tot en met ${gokDatum(rustEinde(loadGokpauze()[userId]))}.`;
   if (casinoResterend(userId) < 1) return `U speelde vandaag al ${casinoLimiet()} spellen. Het casino gaat morgen weer open.`;
   const max = casinoPlafond(userId);
   if (max < 1) return 'U heeft geen kroketpunten om in te zetten.';
@@ -14926,10 +14942,10 @@ function voerCasinoBeheerUit({ soort, aantal, userId }) {
   }
   if (soort === 'opheffen') {
     const d = loadGokpauze();
-    if (!d[userId]?.rustdag) throw new Error('Dit lid heeft geen rustdag');
+    if (!d[userId]?.rustdag) throw new Error('Dit lid heeft geen casinoverbod');
     d[userId] = zonderRustdag(d[userId]);
     saveGokpauze(d);
-    return `Rustdag van ${loadMembers()[userId]?.bijnaam || userId} opgeheven`;
+    return `Casinoverbod van ${loadMembers()[userId]?.bijnaam || userId} opgeheven`;
   }
   throw new Error('Onbekende casino-actie');
 }
@@ -14963,6 +14979,7 @@ app.action(/^casino_(naar|inzet|zet)_/, async ({ ack, body, action, client }) =>
   if (waarschuwing) {
     uit.meta.melding = [waarschuwing, uit.meta.melding].filter(Boolean).join('\n\n');
     postEphemeral(client, KANAAL(), userId, waarschuwing).catch(err => console.warn('⚠️ Gokwaarschuwing fluisteren mislukt:', err.message));
+    meldZwarteLijst(client, userId);
   }
   const plaatjes = uit.teken ? await casinoPlaatjes(client) : {};
   // Geen films meer (GIF's per zet joegen imgbb door zijn rate limit): alleen het eindplaatje.
@@ -18359,7 +18376,7 @@ function persoonlijkeStatus(userId) {
     cooldowns.push({
       naam: 'Casino', gebruikt: casinoGebruikt, limiet: casinoLimiet(),
       restMs: casinoGebruikt >= casinoLimiet() ? msTotDagreset() : 0, per: 'dag',
-      extra: rustdag ? 'rustdag' : casinoPlafond(userId) > 0 ? `max ${casinoPlafond(userId)} punten inzet` : 'te weinig punten',
+      extra: rustdag ? 'casinoverbod' : casinoPlafond(userId) > 0 ? `max ${casinoPlafond(userId)} punten inzet` : 'te weinig punten',
     });
   }
 
