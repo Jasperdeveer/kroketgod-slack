@@ -24,6 +24,7 @@ Draaien (vanuit de repo-root): `node scripts/rooktest/<script>.js`. Het harnas s
 - `lees(bestand)` en `schrijf(bestand, data)`: de JSON-state in de tijdelijke map.
 - `posts` (alle `chat.postMessage`, met `text`, `blocks`, `thread`, `ts`) en `updates` (alle `chat.update`).
 - `ok(voorwaarde, omschrijving)`: print ✔ of ✖ en zet de exitcode op 1 bij een falende voorwaarde.
+- `gebeurtenis(naam, event)`: vuurt een Slack-event af (`app.event`), bijvoorbeeld `gebeurtenis('message', { user, text, channel: 'CKANAAL', ts })`.
 - `wacht(ms)`, `client` (de nep-Slack-client), `index` (wat `index.js` exporteert onder `KROKET_ROOKTEST`: `regieTik`, `bouwRegieStand`, `voerIngreepUit`, `UITVOERDERS`, `regieStaat`, `bewaarRegie`, `mogAutonoomPosten`, `werkdagenStil`), `state` en `uitmap` (de paden), `r2` (de nep-uploads), `handlers`, `schakel.faalPost` (zet op `true` en `chat.postMessage` gooit, om een mislukte post te testen).
 
 Opties: `harnas(test, { opstartMs })` wacht standaard 2500 ms op de opstart van de bot.

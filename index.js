@@ -9629,6 +9629,8 @@ app.event('message', async ({ event, client }) => {
       // een verborgen uitnodiging, in de draad waarin dat bericht stond. Niet awaiten: het
       // bericht zelf hoeft daar niet op te wachten.
       if (event.channel === process.env.SLACK_CHANNEL_ID) {
+        // Een lopende verrassing van de regisseur (flitsopdracht, raadsel, puntenregen, woede): één leesactie en terug als er niets loopt.
+        await regieBericht(client, event).catch(err => console.error('⚠️ Verrassing (bericht) mislukt:', err.message));
         nodigVerborgenHandUit(client, event.channel, { userId: event.user, threadTs: event.thread_ts })
           .catch(err => console.error('⚠️ Verborgen uitnodiging mislukt:', err.message));
       }
@@ -12332,6 +12334,7 @@ async function voerDuel(client, userId, doelId, channelId, wapenId = null) {
     else if (regel) naspelRegel(naspel, regel);
   }
   catch (err) { console.error('Fout bij de uitdaging van de regisseur:', err?.message || err); }
+  await regieFlitsGedaan(client, 'duel', winId).catch((err) => console.error('Fout bij de flitsopdracht (duel):', err?.message || err));
   // Alles wat hierboven iets meldde, in één antwoord in de thread onder het vonnis.
   await postNaspel(client, channelId, hoofd?.ts, naspel);
   return { ok: true, tekst: `⚔️ _Het duel is beslecht: *${winNaam}* won. Zie het kanaal voor het vonnis._` };
@@ -14384,10 +14387,16 @@ async function voerIngreepUit(client, keuze, stand, nu = Date.now()) {
     (uit.afgeketst ? 'De straf is niet aangekomen: spot daarmee en noem geen reden alsof het lid gestraft is.\n' : '') +
     'Voeg geen punten, namen of feiten toe die hierboven niet staan.';
   // Een uitvoerder mag `tekst` teruggeven: die staat dan letterlijk in het kanaal, zonder aankondiging (praatjes, knopberichten).
-  const tekst = uit.tekst !== undefined ? uit.tekst : await kroketResponseMetVangnet(prompt, 200, false, vangnet, 'licht');
+  const gegenereerd = uit.tekst !== undefined ? uit.tekst : await kroketResponseMetVangnet(prompt, 200, false, vangnet, 'licht');
+  // Een verrassing meldt zich groots: `kop` (vaste kopregel) boven de tekst en `staart` (vaste regels met de spelregels) eronder.
+  const tekst = gegenereerd && (uit.kop || uit.staart) ? [uit.kop, gegenereerd, uit.staart].filter(Boolean).join('\n') : gegenereerd;
   // Het effect is al gebeurd en geboekt: een mislukte post verandert daar niets aan.
-  try { if (tekst) await postToChannel(client, KANAAL(), tekst, uit.knoppen ? { knoppen: uit.knoppen } : {}); }
-  catch (err) { console.error(`Fout bij het aankondigen van ${ingreep.id}:`, err?.message || err); }
+  try {
+    if (tekst) {
+      const verstuurd = await postToChannel(client, KANAAL(), tekst, uit.knoppen ? { knoppen: uit.knoppen } : {});
+      if (uit.naPost) await uit.naPost(verstuurd); // bv. de ts van het bericht in de staat van de verrassing zetten
+    }
+  } catch (err) { console.error(`Fout bij het aankondigen van ${ingreep.id}:`, err?.message || err); }
   return uit;
 }
 
@@ -14415,8 +14424,202 @@ planCron('*/20 8-17 * * 1-5', async () => {
   catch (err) { console.error('Fout bij de regisseur:', err); }
 }, { timezone: 'Europe/Amsterdam' });
 
+// ── Verrassingen (zeldzaam), deel A: hete kroket, flitsopdracht, raadsel, puntenregen, woede bij stilte ──
+// De staat van een lopende verrassing staat in regie.json onder `verrassing` ({ id, start, tot, kanaal, ts, data }), nooit in een
+// setTimeout: de minuutklok (regieKlok) handelt verlopen tijden af, ook na een herstart. De kiezer start geen tweede verrassing
+// zolang er een loopt. Uitbetalingen via betaalNawerking (P16), straffen via neemVoorSchatkist + boekNawerking.
+const VERRASSING_KOP = {
+  hete_kroket: '🔥 *DE HETE KROKET* 🔥', flitsopdracht: '⚡ *FLITSOPDRACHT* ⚡', raadsel: '🧩 *HET RAADSEL VAN DE KROKET GOD* 🧩',
+  puntenregen: '🌧️ *PUNTENREGEN* 🌧️', woede_bij_stilte: '😤 *DE WOEDE VAN DE KROKET GOD* 😤',
+};
+const verrassingStaat = (id) => { const v = regieStaat().verrassing || null; return v && (!id || v.id === id) ? v : null; };
+const wisVerrassing = () => bewaarRegie({ ...regieStaat(), verrassing: null });
+const wijzigVerrassing = (wijzig) => { // sync lezen-wijzigen-schrijven; geeft de nieuwe verrassing of null
+  const s = regieStaat();
+  if (!s.verrassing) return null;
+  const v = wijzig(s.verrassing);
+  bewaarRegie({ ...s, verrassing: v });
+  return v;
+};
+function startVerrassing(id, nu, duurMinuten, data = {}) {
+  const v = { id, start: nu, tot: nu + duurMinuten * 60_000, kanaal: KANAAL(), ts: null, data };
+  bewaarRegie({ ...regieStaat(), verrassing: v });
+  return v;
+}
+// De ts van het aankondigingsbericht in de staat zetten (voor chat.update en draadantwoorden).
+const bewaarVerrassingTs = (id) => async (verstuurd) => { if (verstuurd?.ts) wijzigVerrassing((v) => (v.id === id ? { ...v, ts: verstuurd.ts } : v)); };
+const verrassingPost = (client, tekst, opties = {}) => postToChannel(client, KANAAL(), `${tekst}`, opties)
+  .catch((err) => console.error('Fout bij een verrassingsbericht:', err?.message || err));
+const alsLid = (id) => !!loadMembers()[id];
+
+function heteKroketBericht(d, nu) {
+  return `${VERRASSING_KOP.hete_kroket}\n<@${d.houder}> houdt een gloeiende kroket vast. Geef hem door vóór *${hhmmAms(d.deadline)}*, anders ontploft hij meteen; uiterlijk ontploft hij om *${hhmmAms(d.einde)}*. ` +
+    `Elke keer doorgeven geeft 10 minuten extra. Wie hem opgeblazen in handen heeft, draagt 3 punten af; wie hem het vaakst doorgaf, krijgt 1.` +
+    (d.doorgaven.length ? `\n_Al ${d.doorgaven.length} keer doorgegeven._` : '');
+}
+const heteKroketBlocks = (tekst) => [{ type: 'divider' }, { type: 'section', text: { type: 'mrkdwn', text: tekst } },
+  { type: 'actions', elements: regieKnopTekst('Geef door', 'regie_hete_kroket', 'hete', 'danger') }];
+async function werkHeteKroketBij(client, v, nu = Date.now()) {
+  if (!v.ts) return;
+  const text = heteKroketBericht(v.data, nu);
+  await client.chat.update({ channel: v.kanaal, ts: v.ts, text, blocks: heteKroketBlocks(text) }).catch(() => {});
+}
+async function heteKroketOntplof(client, nu = Date.now()) {
+  const v = verrassingStaat('hete_kroket');
+  if (!v) return;
+  wisVerrassing(); // eerst wissen: een tweede aanroep (klik + klok) betaalt nooit dubbel
+  const { houder } = v.data;
+  const verlies = neemVoorSchatkist({ doel: houder, punten: -3 }, nu);
+  const n = -(verlies.punten || 0);
+  if (n > 0) bewaarRegie(regie.boekNawerking(regieStaat(), { nu, id: 'hete_kroket', doel: houder, punten: -n }));
+  const top = regie.heteKroketTopDoorgever(v.data);
+  const bonus = top ? betaalNawerking({ nu, id: 'hete_kroket', doel: top, punten: 1 }) : 0;
+  logAudit('regie', `hete_kroket ontploft bij ${houder}: -${n}${top ? `, ${top} +${bonus}` : ''}`);
+  const tekst = `💥 *DE HETE KROKET ONTPLOFT* 💥\n<@${houder}> hield hem vast en ${n > 0 ? `draagt *${n} punt${n === 1 ? '' : 'en'}* af aan de Schatkist` : verlies.afgeketst && heeftPowerup(houder, 'zegen') ? 'ontsnapt aan de explosie dankzij de Zegen van de Paneerlaag' : 'komt er zonder schade vanaf'}.` +
+    (top && bonus ? ` <@${top}> gaf hem het vaakst door en krijgt *${bonus} punt*.` : '');
+  if (v.ts) await client.chat.update({ channel: v.kanaal, ts: v.ts, text: tekst, blocks: [{ type: 'divider' }, { type: 'section', text: { type: 'mrkdwn', text: tekst } }] }).catch(() => {});
+  else await verrassingPost(client, tekst);
+}
+
+app.action('regie_hete_kroket', async ({ ack, body, client }) => {
+  await ack();
+  const zeg = (text, blocks) => client.chat.postEphemeral({ channel: body.channel?.id || KANAAL(), user: body.user.id, text, ...(blocks ? { blocks } : {}) }).catch(() => {});
+  const v = verrassingStaat('hete_kroket');
+  if (!v) return zeg('_De kroket is al ontploft of koud._');
+  if (v.data.houder !== body.user.id) return zeg('_U houdt de kroket niet vast._');
+  const nu = Date.now();
+  if (regie.heteKroketOntploft(v.data, nu)) return heteKroketOntplof(client, nu);
+  return zeg('Aan wie geeft u de kroket door?', [{ type: 'section', text: { type: 'mrkdwn', text: 'Aan wie geeft u de kroket door?' },
+    accessory: { type: 'users_select', action_id: 'regie_hete_kroket_kies', placeholder: { type: 'plain_text', text: 'Kies een lid' } } }]);
+});
+
+app.action('regie_hete_kroket_kies', async ({ ack, body, action, client }) => {
+  await ack();
+  const zeg = (text) => client.chat.postEphemeral({ channel: body.channel?.id || KANAAL(), user: body.user.id, text }).catch(() => {});
+  const nu = Date.now();
+  const v = verrassingStaat('hete_kroket');
+  if (!v) return zeg('_De kroket is al ontploft of koud._');
+  if (regie.heteKroketOntploft(v.data, nu)) return heteKroketOntplof(client, nu);
+  const naar = action.selected_user;
+  const lid = bouwRegieStand(nu).leden.find((l) => l.id === naar);
+  if (v.data.houder !== body.user.id) return zeg('_U houdt de kroket niet vast._');
+  if (!lid || lid.verbannen || lid.afwezig || naar === body.user.id) return zeg('_Aan dit lid kunt u de kroket niet doorgeven. Kies een ander lid dat er is._');
+  const nieuw = wijzigVerrassing((x) => ({ ...x, data: regie.heteKroketGeefDoor(x.data, body.user.id, naar) || x.data }));
+  await werkHeteKroketBij(client, nieuw, nu);
+  logAudit('regie', `hete_kroket: ${body.user.id} gaf hem door aan ${naar}`);
+  return zeg(`🔥 U gaf de kroket door aan <@${naar}>. Nieuwe uiterste tijd: *${hhmmAms(nieuw.data.deadline)}*.`);
+});
+
+// Flitsopdracht: de eerste die de opdracht doet, krijgt 3. `soort` = woord (bericht), duel (winnaar) of offer.
+async function regieFlitsGedaan(client, soort, userId, tekst = '') {
+  const v = verrassingStaat('flitsopdracht');
+  if (!v || v.data.soort !== soort || Date.now() >= v.tot || !alsLid(userId)) return;
+  if (soort === 'woord' && !regie.bevatWoord(tekst, v.data.woord)) return;
+  wisVerrassing(); // de eerste wint: daarna is er niets meer te halen
+  const n = betaalNawerking({ id: 'flitsopdracht', doel: userId, punten: 3 });
+  logAudit('regie', `flitsopdracht (${soort}) gedaan door ${userId}: +${n}`);
+  await verrassingPost(client, `⚡ *FLITSOPDRACHT GEDAAN* ⚡\n<@${userId}> was de eerste en ${n ? `krijgt *${n} punten* van de Kroket God` : 'krijgt niets: de Schatkist is voor vandaag leeg'}.`);
+}
+
+// De haak in de berichtafhandeling: alleen echte leden in het hoofdkanaal; zonder lopende verrassing meteen terug.
+async function regieBericht(client, event) {
+  const v = verrassingStaat();
+  if (!v || !event.text || !alsLid(event.user) || Date.now() >= v.tot) return;
+  if (v.id === 'flitsopdracht') return regieFlitsGedaan(client, 'woord', event.user, event.text);
+  if (v.id === 'raadsel') {
+    if (!v.ts || event.thread_ts !== v.ts || !regie.raadselGoed(v.data.idx, event.text)) return;
+    wisVerrassing();
+    const n = betaalNawerking({ id: 'raadsel', doel: event.user, punten: 5 });
+    logAudit('regie', `raadsel opgelost door ${event.user}: +${n}`);
+    return verrassingPost(client, `🧩 Juist, <@${event.user}>! ${n ? `De Kroket God schenkt u *${n} punten*.` : 'De Schatkist is voor vandaag leeg, maar de eer is de uwe.'}`, { thread_ts: v.ts });
+  }
+  if (v.id === 'puntenregen') {
+    if (v.data.gehad.includes(event.user)) return;
+    const n = betaalNawerking({ id: 'puntenregen', doel: event.user, punten: 1 });
+    if (!n) return;
+    const nieuw = wijzigVerrassing((x) => ({ ...x, data: { ...x.data, gehad: [...x.data.gehad, event.user] } }));
+    client.reactions.add({ channel: event.channel, timestamp: event.ts, name: 'rain_cloud' }).catch(() => {});
+    if (nieuw.data.gehad.length >= 3) {
+      wisVerrassing();
+      await verrassingPost(client, `🌧️ De regen is voorbij. Een punt voor ${nieuw.data.gehad.map((id) => `<@${id}>`).join(', ')}.`);
+    }
+    return;
+  }
+  if (v.id === 'woede_bij_stilte') {
+    wisVerrassing();
+    const n = betaalNawerking({ id: 'woede_bij_stilte', doel: event.user, punten: 1 });
+    logAudit('regie', `woede bezworen door ${event.user}: +${n}`);
+    return verrassingPost(client, `😤 <@${event.user}> doorbrak de stilte, en de Kroket God is gesust. ${n ? '*1 punt* voor de moedige.' : 'Verder niets.'} Niemand verliest iets.`);
+  }
+}
+
+// Het verlopen van een verrassing (de minuutklok). Gebeurt niets zonder lopende verrassing.
+async function regieKlok(client, { nu = Date.now() } = {}) {
+  const v = verrassingStaat();
+  if (!v || !mogAutonoomPosten(nu, { weekendTelt: false })) return;
+  if (v.id === 'hete_kroket') { if (regie.heteKroketOntploft(v.data, nu)) await heteKroketOntplof(client, nu); return; }
+  if (nu < v.tot) return;
+  wisVerrassing();
+  if (v.id === 'flitsopdracht') await verrassingPost(client, '⚡ De flitsopdracht is verlopen: niemand was snel genoeg.');
+  else if (v.id === 'raadsel') {
+    const r = regie.RAADSELS[v.data.idx];
+    await verrassingPost(client, `🧩 Het uur is om. Het antwoord was: *${r.antwoorden[0]}*.`, v.ts ? { thread_ts: v.ts } : {});
+  } else if (v.id === 'woede_bij_stilte') {
+    // Iedereen die er telt verliest 1, hoogste score eerst, zo ver de ruimte reikt (P17); de Zegen beschermt.
+    let totaal = 0;
+    const namen = [];
+    for (const l of bouwRegieStand(nu).leden.filter((x) => !x.gast && !x.verbannen && !x.afwezig).sort((a, b) => b.score - a.score)) {
+      const uit = neemVoorSchatkist({ doel: l.id, punten: -1 }, nu);
+      if (uit.punten < 0) {
+        bewaarRegie(regie.boekNawerking(regieStaat(), { nu, id: 'woede_bij_stilte', doel: l.id, punten: uit.punten }));
+        totaal -= uit.punten;
+        namen.push(l.id);
+      }
+    }
+    logAudit('regie', `woede bij stilte: ${namen.length} leden verloren elk 1 (${totaal} naar de Schatkist)`);
+    await verrassingPost(client, `😤 *DE WOEDE VALT NEER* 😤\nDe stilte werd niet doorbroken. ${namen.length ? `${namen.length} lid${namen.length === 1 ? '' : 'en'} dragen elk *1 punt* af aan de Schatkist.` : 'Er viel niets te halen.'}`);
+  } // puntenregen: verloopt stil
+}
+
+Object.assign(UITVOERDERS, {
+  hete_kroket: async (client, keuze, stand, nu) => {
+    const v = startVerrassing('hete_kroket', nu, 90, regie.heteKroketStart(keuze.doel, nu));
+    return { kop: VERRASSING_KOP.hete_kroket, feiten: 'Een gloeiende kroket is uit de frituur gesprongen en ligt bij een lid. Hij moet worden doorgegeven, anders ontploft hij.',
+      staart: `<@${keuze.doel}> houdt hem vast. Geef hem door vóór *${hhmmAms(v.data.deadline)}*; elke keer doorgeven geeft 10 minuten extra, uiterlijk ontploft hij om *${hhmmAms(v.data.einde)}*. De houder verliest dan 3 punten, wie hem het vaakst doorgaf krijgt er 1.`,
+      knoppen: regieKnopTekst('Geef door', 'regie_hete_kroket', 'hete', 'danger'), naPost: bewaarVerrassingTs('hete_kroket') };
+  },
+  flitsopdracht: async (client, keuze, stand, nu) => {
+    const idx = Math.min(regie.FLITSOPDRACHTEN.length - 1, Math.floor(Math.random() * regie.FLITSOPDRACHTEN.length));
+    const opdracht = regie.FLITSOPDRACHTEN[idx];
+    const v = startVerrassing('flitsopdracht', nu, 10, { soort: opdracht.soort, woord: opdracht.woord || null });
+    return { kop: VERRASSING_KOP.flitsopdracht, feiten: 'De Kroket God verveelt zich en geeft een snelle opdracht. Noem de opdracht zelf niet; die staat eronder.',
+      staart: `${opdracht.tekst} De eerste die het doet, krijgt *3 punten*. Tot *${hhmmAms(v.tot)}*.` };
+  },
+  raadsel: async (client, keuze, stand, nu) => {
+    const idx = Math.min(regie.RAADSELS.length - 1, Math.floor(Math.random() * regie.RAADSELS.length));
+    startVerrassing('raadsel', nu, 60, { idx });
+    return { kop: VERRASSING_KOP.raadsel, feiten: 'De Kroket God heeft een schat verstopt en een raadsel opgesteld. Verklap niets en noem de vraag niet zelf; die staat eronder.',
+      staart: `> ${regie.RAADSELS[idx].vraag}\n_Antwoord in de draad onder dit bericht. De eerste goede antwoorder krijgt *5 punten*. Over een uur verklapt de Kroket God het antwoord._`,
+      naPost: bewaarVerrassingTs('raadsel') };
+  },
+  puntenregen: async (client, keuze, stand, nu) => {
+    startVerrassing('puntenregen', nu, 120, { gehad: [] });
+    return { kop: VERRASSING_KOP.puntenregen, feiten: 'Het regent kroketpunten.', staart: 'De eerste drie leden die iets zeggen in het kanaal krijgen elk *1 punt*.' };
+  },
+  woede_bij_stilte: async (client, keuze, stand, nu) => {
+    const v = startVerrassing('woede_bij_stilte', nu, 15, {});
+    return { kop: VERRASSING_KOP.woede_bij_stilte, feiten: 'Het kanaal is al drie uur stil geweest en de Kroket God is daar boos over.',
+      staart: `Zegt iemand voor *${hhmmAms(v.tot)}* iets, dan krijgt die *1 punt* en is de woede bezworen. Blijft het stil, dan verliest iedereen 1 punt.` };
+  },
+});
+
+planCron('* * * * *', async () => {
+  try { await regieKlok(app.client); }
+  catch (err) { console.error('Fout bij de verrassingsklok:', err); }
+}, { timezone: 'Europe/Amsterdam' });
+
 // De rooktests (scripts/rooktest/) komen zo bij de regisseur.
-if (process.env.KROKET_ROOKTEST) module.exports = { voerBamischijfAanval, bouwDashboardData, voerDashboardActie, saveInstellingen, casinoOpen, regieTik, bouwRegieStand, voerIngreepUit, UITVOERDERS, regieStaat, bewaarRegie, mogAutonoomPosten, werkdagenStil, casinoToegangReden, casinoMax, casinoPlafond, boekCasinoUitslag, casinoOpen, sluitGeleKaartPoll, voerDuel, voerEer, winkelPrijs, prijsRedenen, prijsToelichting, CRON_LABELS, geplandeCronMeta };
+if (process.env.KROKET_ROOKTEST) module.exports = { regieKlok, voerOffer, voerBamischijfAanval, bouwDashboardData, voerDashboardActie, saveInstellingen, casinoOpen, regieTik, bouwRegieStand, voerIngreepUit, UITVOERDERS, regieStaat, bewaarRegie, mogAutonoomPosten, werkdagenStil, casinoToegangReden, casinoMax, casinoPlafond, boekCasinoUitslag, casinoOpen, sluitGeleKaartPoll, voerDuel, voerEer, winkelPrijs, prijsRedenen, prijsToelichting, CRON_LABELS, geplandeCronMeta };
 
 // Wat het dashboard over het casino laat zien (bouwDashboardData) en kan (/api/casino).
 function casinoDashboardData(naam) {
@@ -14658,6 +14861,7 @@ async function voerOffer(client, userId, inzet, channelId) {
     `⚜️ *HET GROTE VETBAD* ⚜️\n\n${kop}\n\n> ${regel}\n\n_Nieuwe stand: *${nieuweStand} kroketpunten*_\n${potRegel}${dubbelRegel}\n\n— De Hoge Frituurraad${naspelMenties(naspel)}`,
     knoppen ? { knoppen } : {});
   await telActie(client, userId, 'offer', 1, naspel);
+  await regieFlitsGedaan(client, 'offer', userId).catch((err) => console.error('Fout bij de flitsopdracht (offer):', err?.message || err));
   await postNaspel(client, channelId, hoofd?.ts, naspel);
   updateWereldbord(client).catch(() => {}); // de pot staat op het bord
   return { ok: true, tekst: `_Het Vetbad heeft gesproken: ${delta > 0 ? `+${delta}` : delta} kroketpunt${Math.abs(delta) === 1 ? '' : 'en'}. Nieuwe stand: ${nieuweStand}.` +
