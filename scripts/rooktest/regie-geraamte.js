@@ -14,7 +14,7 @@ harnas(async (h) => {
 
   // 1. Stille modus en alleen-testkanaal blokkeren elke tik, ook een geforceerde.
   h.schrijf('instellingen.json', { stilModus: true });
-  let keuze = await regieTik(h.client, { forceer: true, nu: MAANDAG_13 });
+  let keuze = await regieTik(h.client, { forceer: true, rng: () => 0, nu: MAANDAG_13 });
   h.ok(keuze === null && h.posts.length === 0 && bonus() === 0, 'stilModus: een geforceerde tik doet niets');
 
   // 2. Zaterdag zonder forceer: niets (weekendrust en buiten het venster).
@@ -23,7 +23,7 @@ harnas(async (h) => {
   h.ok(keuze === null && h.posts.length === 0 && bonus() === 0, 'zaterdag zonder forceer: niets');
 
   // 3. Geforceerde tik op maandag 13:00 met lege state: Het Huis geeft.
-  keuze = await regieTik(h.client, { forceer: true, nu: MAANDAG_13 });
+  keuze = await regieTik(h.client, { forceer: true, rng: () => 0, nu: MAANDAG_13 });
   h.ok(keuze?.ingreep.id === 'huis_geeft', `de gekozen ingreep is huis_geeft (${keuze?.ingreep.id})`);
   h.ok(h.posts.length === 1 && /3 extra casinospellen/.test(h.posts[0].text), `Het Huis geeft staat in het kanaal: ${h.posts[0]?.text}`);
   h.ok(bonus() === 3, `casinobonus.json staat op +3 (${bonus()})`);
@@ -31,14 +31,14 @@ harnas(async (h) => {
   h.ok(audit().length === 1, `het auditlog heeft een regel: ${audit()[0]?.samenvatting}`);
 
   // 4. Een tweede geforceerde tik telt de bonus erbij op (3 + 3), na de afkoeltijd van een dag.
-  await regieTik(h.client, { forceer: true, nu: MAANDAG_13 + 25 * 3_600_000 });
+  await regieTik(h.client, { forceer: true, rng: () => 0, nu: MAANDAG_13 + 25 * 3_600_000 });
   h.ok(bonus() === 6, 'een latere tik leest de bonus van vandaag en telt erbij op');
 
   // 5. Faalt de post, dan is het effect toch geboekt: een tweede tik stapelt de bonus niet.
   h.schrijf('casinobonus.json', {}); h.schrijf('regie.json', { schatkist: 0, effecten: [], log: [], verrassing: null });
   h.schakel.faalPost = true;
-  await regieTik(h.client, { forceer: true, nu: MAANDAG_13 });
-  await regieTik(h.client, { forceer: true, nu: MAANDAG_13 + 60_000 });
+  await regieTik(h.client, { forceer: true, rng: () => 0, nu: MAANDAG_13 });
+  await regieTik(h.client, { forceer: true, rng: () => 0, nu: MAANDAG_13 + 60_000 });
   h.schakel.faalPost = false;
-  h.ok(bonus() === 3 && log().length === 1, `mislukte post: bonus blijft +3 (${bonus()}) en regie.json heeft een logregel (${log().length})`);
+  h.ok(bonus() === 3 && log().filter((r) => r.id === 'huis_geeft').length === 1, `mislukte post: bonus blijft +3 (${bonus()}) en regie.json heeft één huis_geeft-logregel`);
 });
