@@ -14165,28 +14165,60 @@ const UITVOERDERS = {
     regieEffect('goudenUur', keuze.duurMinuten || 60);
     return { feiten: 'Een uur lang betaalt een gewonnen spel in het casino anderhalf keer uit, met hoogstens 5 extra punten per spel.' };
   },
+  belasting: async (client, keuze, stand, nu) => neemVoorSchatkist(keuze, nu),
+  beslag: async (client, keuze, stand, nu) => neemVoorSchatkist(keuze, nu),
+  schorsing: async (client, keuze, stand, nu) => {
+    const doel = keuze.doel;
+    if (heeftPowerup(doel, 'gouden_korst')) {
+      verwijderPowerup(doel, 'gouden_korst');
+      return { afgeketst: true, schorsing: false, feiten: 'De schorsing glijdt af van de Gouden Korst die dit lid draagt: geen ban, en de Korst is nu op. Spot met de poging.' };
+    }
+    if (isVerbannen(doel)) return { afgeketst: true, schorsing: false, feiten: 'Dit lid zit al buiten de frituurtafel: een tweede schorsing voegt niets toe.' };
+    const verbanning = loadVerbanning();
+    verbanning[doel] = { tot: new Date(nu + 3_600_000).toISOString(), reden: keuze.reden || 'besluit van de Kroket God', citaat: null, dagen: null, opgelegd: new Date(nu).toISOString() };
+    saveVerbanning(verbanning);
+    return { schorsing: true, feiten: 'Het lid is een uur geschorst: een uur buiten de frituurtafel, zonder kaart.' };
+  },
 };
+
+// Belasting en beslag: punten van het doelwit naar de Schatkist. Een Zegen vangt de straf op. Het bedrag wordt
+// hier opnieuw begrensd (score en plafonds kunnen sinds het kiezen veranderd zijn), zonder bijwerkingen als relieken.
+function neemVoorSchatkist(keuze, nu) {
+  if (heeftPowerup(keuze.doel, 'zegen')) {
+    return { afgeketst: true, punten: 0, feiten: 'De straf ketst af op de Zegen van de Paneerlaag: er wordt niets afgenomen en de Zegen blijft. Spot met de poging.' };
+  }
+  const ruim = regie.ruimte(regieStaat(), nu);
+  const n = Math.min(-keuze.punten, loadScores()[keuze.doel] || 0, ruim.nemen, ruim.nemenVan(keuze.doel));
+  if (n <= 0) return { afgeketst: true, punten: 0, feiten: 'Er viel niets meer te halen.' };
+  pasScoreAan(keuze.doel, -n);
+  bewaarRegie(regie.stort(regieStaat(), n));
+  return { punten: -n, feiten: `Het lid draagt ${n} punt${n === 1 ? '' : 'en'} af aan de Schatkist.` };
+}
 
 // Voert de ingreep uit, kondigt hem aan in het kanaal en boekt hem. Geeft de uitkomst terug.
 async function voerIngreepUit(client, keuze, stand, nu = Date.now()) {
   const { ingreep } = keuze;
-  const uit = await UITVOERDERS[ingreep.id](client, keuze, stand);
+  const uit = await UITVOERDERS[ingreep.id](client, keuze, stand, nu);
   const reden = uit.reden ?? keuze.reden;
-  const straf = ingreep.soort === 'nemen' || !!ingreep.schorsing;
+  // Een uitvoerder mag `punten` en `schorsing` overschrijven; `afgeketst` = de straf is niet aangekomen (spotten, geen reden).
+  const punten = uit.punten ?? keuze.punten;
+  const straf = (ingreep.soort === 'nemen' || !!ingreep.schorsing) && !uit.afgeketst;
   const doelNaam = keuze.doel ? (loadMembers()[keuze.doel]?.bijnaam || 'een volgeling') : null;
-  const vangnet = `🔱 ${ingreep.opdracht}${doelNaam ? ` Het treft *${ontsnapMrkdwn(doelNaam)}*.` : ''}${straf && reden ? ` Reden: ${reden}.` : ''}`;
+  const vangnet = `🔱 ${ingreep.opdracht}${doelNaam ? ` Het treft *${ontsnapMrkdwn(doelNaam)}*.` : ''}${straf && reden ? ` Reden: ${reden}.` : uit.afgeketst ? ' Maar de straf ketst af.' : ''}`;
   const prompt = `Kondig in het kanaal aan wat je als Kroket God net hebt gedaan, in één tot drie korte zinnen in je eigen stem.\n` +
     `Wat er gebeurd is: ${uit.feiten}\n` +
     (doelNaam ? `Het treft: ${wrapOnvertrouwd('Naam van het lid', doelNaam)}\n` : '') +
     (reden ? `Reden: ${reden}\n` : '') +
     (straf ? 'Dit is een straf: noem de reden uitdrukkelijk.\n' : '') +
+    (uit.afgeketst ? 'De straf is niet aangekomen: spot daarmee en noem geen reden alsof het lid gestraft is.\n' : '') +
     'Voeg geen punten, namen of feiten toe die hierboven niet staan.';
   const tekst = await kroketResponseMetVangnet(prompt, 200, false, vangnet, 'licht');
   // Het effect is al gebeurd: boeken gaat altijd door, ook als de post faalt (anders komt dezelfde ingreep terug).
   try { await postToChannel(client, KANAAL(), tekst, uit.knoppen ? { knoppen: uit.knoppen } : {}); }
   catch (err) { console.error(`Fout bij het aankondigen van ${ingreep.id}:`, err?.message || err); }
-  bewaarRegie(regie.boek(regieStaat(), keuze, { nu }));
-  logAudit('regie', `${ingreep.id}${keuze.doel ? ` -> ${doelNaam}` : ''}${keuze.punten ? ` (${keuze.punten > 0 ? '+' : ''}${keuze.punten})` : ''}: ${reden || ''}`);
+  const geboekt = uit.schorsing === false ? { ...keuze, ingreep: { ...ingreep, schorsing: false } } : keuze;
+  bewaarRegie(regie.boek(regieStaat(), geboekt, { nu, punten }));
+  logAudit('regie', `${ingreep.id}${keuze.doel ? ` -> ${doelNaam}` : ''}${punten ? ` (${punten > 0 ? '+' : ''}${punten})` : ''}${uit.afgeketst ? ' (afgeketst)' : ''}: ${reden || ''}`);
   return uit;
 }
 
@@ -14210,7 +14242,7 @@ planCron('*/20 8-17 * * 1-5', async () => {
 }, { timezone: 'Europe/Amsterdam' });
 
 // De rooktests (scripts/rooktest/) komen zo bij de regisseur.
-if (process.env.KROKET_ROOKTEST) module.exports = { regieTik, bouwRegieStand, voerIngreepUit, UITVOERDERS, regieStaat, bewaarRegie, mogAutonoomPosten, werkdagenStil, casinoToegangReden, casinoMax, casinoPlafond, boekCasinoUitslag, casinoOpen };
+if (process.env.KROKET_ROOKTEST) module.exports = { regieTik, bouwRegieStand, voerIngreepUit, UITVOERDERS, regieStaat, bewaarRegie, mogAutonoomPosten, werkdagenStil, casinoToegangReden, casinoMax, casinoPlafond, boekCasinoUitslag, casinoOpen, sluitGeleKaartPoll };
 
 // Wat het dashboard over het casino laat zien (bouwDashboardData) en kan (/api/casino).
 function casinoDashboardData(naam) {
@@ -16756,7 +16788,7 @@ function bouwGeleKaartPollBlocks(poll) {
     blocks.push({ type: 'section', text: { type: 'mrkdwn', text:
       `${kop}\n` +
       `> Terecht: *${u.terecht ?? 0}* · Onterecht: *${u.onterecht ?? 0}*\n` +
-      `> De Kroket God stemde *${u.god || '?'}* (dubbel geteld).` } });
+      (u.regisseur ? `> 🔱 De Kroket God overrulet de Raad: de uitslag is omgedraaid.` : `> De Kroket God stemde *${u.god || '?'}* (dubbel geteld).`) } });
   }
   blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text:
     `De voordracht is anoniem — de aanklacht moet op eigen benen staan. Alleen leden stemmen mee; ${naam} mag zelf ook stemmen. ` +
@@ -16801,7 +16833,7 @@ async function leesGeleKaartStemmen(client, poll) {
 }
 
 // Sluit de stemming, laat de Kroket God stemmen en voert de uitkomst uit.
-async function sluitGeleKaartPoll(client) {
+async function sluitGeleKaartPoll(client, { rng = Math.random } = {}) {
   const poll = loadGeleKaartPoll();
   if (!poll?.actief) return null;
   const members = loadMembers();
@@ -16825,7 +16857,20 @@ async function sluitGeleKaartPoll(client) {
     : Math.random() < GELEKAART_GOD_KANS;
   const totaalTerecht = terecht + (godTerecht ? GELEKAART_GOD_GEWICHT : 0);
   const totaalOnterecht = onterecht + (godTerecht ? 0 : GELEKAART_GOD_GEWICHT);
-  const toegekend = totaalTerecht > totaalOnterecht; // gelijkspel → geen kaart
+  let toegekend = totaalTerecht > totaalOnterecht; // gelijkspel → geen kaart
+
+  // De Kroket God overrulet de Raad: kans 0,2, hoogstens 1 keer per week en alleen als de plafonds van de regisseur het toelaten.
+  // Een kaart erdoor drukken telt als de schorsing van de dag; een kaart tegenhouden kost niets.
+  let regisseur = false;
+  const regieNu = Date.now(), regieWeek = regie.amsMoment(regieNu).week;
+  const rs = regieStaat();
+  if ((toegekend || regie.ruimte(rs, regieNu).schorsing > 0)
+      && !rs.log.some((r) => r.id === 'overrule' && regie.amsMoment(r.ts).week === regieWeek)
+      && rng() < 0.2) {
+    regisseur = true;
+    toegekend = !toegekend;
+    bewaarRegie(regie.boekNawerking(rs, { nu: regieNu, id: 'overrule', doel: poll.doelwitId, punten: 0, schorsing: toegekend }));
+  }
 
   poll.actief = false;
   poll.uitkomst = toegekend ? 'terecht' : 'onterecht';
@@ -16834,6 +16879,7 @@ async function sluitGeleKaartPoll(client) {
     terecht: totaalTerecht, onterecht: totaalOnterecht,
     ledenTerecht: terecht, ledenOnterecht: onterecht,
     god: godTerecht ? 'terecht' : 'onterecht',
+    ...(regisseur ? { regisseur: true } : {}),
   };
   saveGeleKaartPoll(poll); // vóór de trage acties: idempotent, een tweede aanroep valt op !actief
   await updateGeleKaartPollBericht(client, poll);
@@ -16847,13 +16893,16 @@ async function sluitGeleKaartPoll(client) {
   const stemBlok =
     `\n\n⚖️ *DE STEMMING*\n` +
     `> Terecht: *${totaalTerecht}* · Onterecht: *${totaalOnterecht}*\n` +
-    `> De Kroket God stemde *${godTerecht ? 'terecht' : 'onterecht'}* — zijn stem weegt dubbel.`;
+    (regisseur
+      ? `> 🔱 *De Kroket God overrulet de Raad:* de uitslag is omgedraaid.`
+      : `> De Kroket God stemde *${godTerecht ? 'terecht' : 'onterecht'}* — zijn stem weegt dubbel.`);
+  const godToelichting = regisseur ? 'u heeft de uitslag van de Raad zelf omgedraaid' : null;
 
   if (!toegekend) {
     logGebeurtenis('gelekaart', poll.doelwitId, `Voordracht tegen ${naam} verworpen (${totaalTerecht}-${totaalOnterecht})`);
     const tekst = await kroketResponseMetVangnet(
       `De Raad heeft gestemd over een voorgedragen gele kaart tegen ${naam}${poll.reden ? ' wegens de hieronder aangehaalde reden' : ''} en de voordracht VERWORPEN ` +
-      `(${totaalTerecht} terecht tegen ${totaalOnterecht} onterecht; uw eigen stem woog dubbel en was "${godTerecht ? 'terecht' : 'onterecht'}"). ` +
+      `(${totaalTerecht} terecht tegen ${totaalOnterecht} onterecht; ${godToelichting || `uw eigen stem woog dubbel en was "${godTerecht ? 'terecht' : 'onterecht'}"`}). ` +
       `Spreek dit uit als een mild maar gezaghebbend oordeel: geen kaart, de zaak is gesloten. 3-4 zinnen. Geen inleidingszin.` + redenBlok,
       400, false,
       `🟩 *DE VOORDRACHT IS VERWORPEN* 🟩\n\n> *${naam}* krijgt geen gele kaart. De zaak is gesloten.`
@@ -16886,7 +16935,7 @@ async function sluitGeleKaartPoll(client) {
   const terugTijd = eindeUtc.toLocaleTimeString('nl-NL', { timeZone: 'Europe/Amsterdam', hour: '2-digit', minute: '2-digit' });
   const tekst = await kroketResponseMetVangnet(
     `De Raad heeft gestemd en een gele kaart voor ${naam} TOEGEKEND${poll.reden ? ' wegens de hieronder aangehaalde reden' : ''} ` +
-    `(${totaalTerecht} terecht tegen ${totaalOnterecht} onterecht; uw eigen stem woog dubbel en was "terecht"). ` +
+    `(${totaalTerecht} terecht tegen ${totaalOnterecht} onterecht; ${godToelichting || 'uw eigen stem woog dubbel en was "terecht"'}). ` +
     `Een gele kaart betekent een uur schorsing: ${naam} zit vanaf nu een uur buiten de frituurtafel. ` +
     `Een tweede gele kaart deze week wordt automatisch rood: een volle dag geschorst. ` +
     `Spreek plechtig maar nog niet veroordelend — de HERDER past hier beter dan de RECHTER. 3-5 zinnen. Geen inleidingszin.` + redenBlok,
