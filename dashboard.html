@@ -132,6 +132,11 @@
   .tab:hover{border-color:var(--gold);color:var(--txt)}
   .tab.act{background:linear-gradient(180deg,var(--gold),var(--gold2));color:#1a1208;border-color:var(--gold);font-weight:700;box-shadow:0 0 14px rgba(240,192,96,.35)}
   .tab .cnt{display:inline-block;min-width:16px;margin-left:5px;padding:0 4px;border-radius:99px;background:rgba(0,0,0,.25);font-size:10px;font-weight:700;vertical-align:middle}
+  .chips{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 10px}
+  .chip{background:#221809;border:1px solid var(--line);color:var(--dim);border-radius:99px;padding:3px 11px;font-size:12px;text-decoration:none}
+  .chip:hover{border-color:var(--gold);color:var(--txt)}
+  .statbar{flex-basis:100%;text-align:center;font-size:11px;min-height:0}
+  [id^="k-"]{scroll-margin-top:90px}
   .tabpane{display:none}.tabpane.act{display:block}
   /* KPI-tegels (2.0) */
   .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(118px,1fr));gap:10px;margin-bottom:10px}
@@ -165,7 +170,7 @@
 <main>
 <div class="card nubezig" id="nubezig">
   <div class="nb_kop"><b>🔱 Nu bezig</b>
-    <label>niveau <select id="i_regieNiveau" onchange="nbNiveau(this.value)"><option>uit</option><option>laag</option><option>normaal</option><option>wild</option></select></label>
+    <label>niveau <select id="i_regieNiveau" onchange="nbNiveau(this.value)"><option>uit</option><option>laag</option><option selected>normaal</option><option>wild</option></select></label>
     <span id="nb_info" class="muted"></span>
     <button class="btn" onclick="regieNu()">🔱 Laat hem nu iets doen</button> <span id="rg_status" class="muted"></span></div>
   <div id="nb_items"></div>
@@ -173,22 +178,25 @@
 <nav class="tabs" id="tabs">
   <button class="tab act" data-tab="overzicht">📊 Overzicht</button>
   <button class="tab" data-tab="spel">🎮 Spel</button>
-  <button class="tab" data-tab="llm">🤖 LLM &amp; systeem</button>
-  <button class="tab" data-tab="beheer">🛠️ Beheer</button>
-  <button class="tab" data-tab="logs">📜 Logs</button>
+  <button class="tab" data-tab="recht">⚖️ Recht</button>
+  <button class="tab" data-tab="verkondigen">📜 Verkondigen</button>
+  <button class="tab" data-tab="personas">👥 Persona's</button>
+  <button class="tab" data-tab="systeem">🛠️ Systeem</button>
+  <span class="statbar muted"><span id="i_status"></span> <span id="i_actiestatus"></span></span>
 </nav>
-<section class="tabpane act" id="tab-overzicht"><div class="kpis" id="kpis"></div><div class="cards" id="c_overzicht"><div class="card">Laden…</div></div></section>
-<section class="tabpane" id="tab-spel"><div class="cards" id="c_spel"></div></section>
-<section class="tabpane" id="tab-llm"><div class="cards" id="c_llm"></div></section>
-<section class="tabpane" id="tab-beheer"><div id="instellingen"></div><div id="personas"></div><div class="cards" id="c_beheer"></div></section>
-<section class="tabpane" id="tab-logs"><input class="zoek" id="logzoek" placeholder="🔎 filter de logs — naam, type, tekst…" oninput="filterLogs()"><div class="cards" id="c_logs"></div></section>
+<section class="tabpane act" id="tab-overzicht"><div class="chips"><a class="chip" href="#overzicht/vandaag">🔱 Vandaag gedaan</a><a class="chip" href="#overzicht/ranglijst">Ranglijst</a><a class="chip" href="#overzicht/activiteit">Activiteit</a><a class="chip" href="#overzicht/groei">Groei</a><a class="chip" href="#overzicht/cijfers">Cijfers</a><a class="chip" href="#overzicht/gepland">Geplande posts</a></div><div class="kpis" id="kpis"></div><div class="cards" id="c_overzicht"><div class="card">Laden…</div></div></section>
+<section class="tabpane" id="tab-spel"><div class="chips"><a class="chip" href="#spel/casino">🎰 Casino</a><a class="chip" href="#spel/weekvijand">👹 Weekvijand</a><a class="chip" href="#spel/veiling">🔨 Veiling</a><a class="chip" href="#spel/troon">👑 Troon</a><a class="chip" href="#spel/goudenkroket">🥇 Gouden Kroket</a><a class="chip" href="#spel/kroket">🥖 Kroket v/d dag</a><a class="chip" href="#spel/quiz">🧠 Quiz</a><a class="chip" href="#spel/bingo">🎯 Bingo</a><a class="chip" href="#spel/aflaten">🛒 Aflatenhandel</a><a class="chip" href="#spel/gokpauze">🕯️ Gokpauze</a></div><div id="h_spel"></div><div class="cards" id="c_spel"></div><div id="h_afl"></div><div class="cards" id="c_spel2"></div></section>
+<section class="tabpane" id="tab-recht"><div class="chips"><a class="chip" href="#recht/tribunaal">⚖️ Tribunaal</a><a class="chip" href="#recht/bans">Verbanningen</a><a class="chip" href="#recht/score">Scorebeheer</a><a class="chip" href="#recht/verbonden">⚔️ Verbonden</a><a class="chip" href="#recht/eer">🙏 Eerbewijs</a></div><div id="h_recht1"></div><div class="cards" id="c_recht"></div><div id="h_recht2"></div></section>
+<section class="tabpane" id="tab-verkondigen"><div class="chips"><a class="chip" href="#verkondigen/verkondig">📜 Verkondigen</a><a class="chip" href="#verkondigen/gepland-v">Geplande posts</a><a class="chip" href="#verkondigen/seizoen">🗓️ Seizoen</a></div><div id="h_verk"></div><div class="cards" id="c_verk"></div><div id="h_verk2"></div></section>
+<section class="tabpane" id="tab-personas"><div class="chips"><a class="chip" href="#personas/personas">👥 Personas</a><a class="chip" href="#personas/gast">🚪 Gast uitnodigen</a><a class="chip" href="#personas/persona-nieuw">Persona toevoegen</a></div><div id="personas"></div></section>
+<section class="tabpane" id="tab-systeem"><div class="chips"><a class="chip" href="#systeem/instellingen">⚙️ Instellingen</a><a class="chip" href="#systeem/providers">LLM-providers</a><a class="chip" href="#systeem/gemini">Gemini &amp; Groq</a><a class="chip" href="#systeem/verbruik">Verbruik</a><a class="chip" href="#systeem/test">🧪 Test-console</a><a class="chip" href="#systeem/galerij">Galerij</a><a class="chip" href="#systeem/audit">Audit-log</a><a class="chip" href="#systeem/activiteit-log">Activiteit</a></div><div id="h_sys1"></div><div class="cards" id="c_llm"></div><div id="h_sys2"></div><input class="zoek" id="logzoek" placeholder="🔎 filter de logs — naam, type, tekst…" oninput="filterLogs()"><div class="cards" id="c_logs"></div></section>
 </main>
 <footer>⚜️ Ververst automatisch · /api/stats (token vereist)</footer></div>
 <script>
 function esc(s){return String(s==null?'':s).replace(/[&<>]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c];});}
 function dur(s){s=Math.max(0,s|0);var d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60);if(d>0)return d+'d '+h+'u';if(h>0)return h+'u '+m+'m';if(m>0)return m+'m';return s+'s';}
 function pct(a,b){a=parseFloat(a);b=parseFloat(b);if(!b||isNaN(a)||isNaN(b))return 0;return Math.max(0,Math.min(100,Math.round(a/b*100)));}
-function card(title,inner){return '<div class="card"><h2>'+title+'</h2>'+inner+'</div>';}
+function card(title,inner,id){return '<div class="card"'+(id?' id="k-'+id+'"':'')+'><h2>'+title+'</h2>'+inner+'</div>';}
 function tip(t){return ' <span class="info" data-tip="'+String(t).replace(/"/g,'&quot;')+'" onclick="event.preventDefault()">i</span>';}
 var CHART_KLEUREN=['#f0c060','#e08a2a','#caa047','#d98f5a','#b8863f','#e0b070','#a8702a','#8a6a3a'];
 // Verticale staafgrafiek: data = [{label, value}]
@@ -267,6 +275,9 @@ function ranglijstChart(data,leeg){
   }).join('');
   return leg+rows;
 }
+// De gedeelde delen van de samengevoegde Casino- en Aflatenhandel-kaart: elke tick ververst, ook als de kaart er (eerste tick) nog niet stond.
+var _statisch={};
+function vulStatisch(){Object.keys(_statisch).forEach(function(id){var el=document.getElementById(id);if(el)el.innerHTML=_statisch[id];});}
 function render(d){
   renderNuBezig(d);
   document.getElementById('status').className='pill '+(d.bot.status==='online'?'on':'off');
@@ -275,7 +286,7 @@ function render(d){
   document.getElementById('mood').textContent='stemming: '+d.bot.stemming;
   document.getElementById('vrijdag').textContent=d.bot.weekend?'weekend — heilig moment geweest':'vrijdag 12:00 over '+dur(d.bot.vrijdagSec);
   document.getElementById('updated').textContent='bijgewerkt '+new Date(d.nu).toLocaleTimeString('nl-NL');
-  var ohtml='',shtml='',lhtml='',bhtml='',loghtml='';
+  var ohtml='',shtml='',s2html='',rhtml='',vhtml='',lhtml='',loghtml='';
   // LLM providers
   var pr=d.llm.providers.map(function(p){
     var cls=!p.actief?'off':(p.bank?'off':(p.cooldown>0?'cool':'ok'));
@@ -289,42 +300,42 @@ function render(d){
   pr+='<div class="muted" style="margin-top:8px">Op de bank: '+(bk.length?bk.map(function(r){
     return esc(r.label)+' — '+esc(String(r.status||'?'))+(r.reden?' '+esc(r.reden):'')+', nog '+dur(r.restSec);
   }).join(' · '):'niets')+'</div>';
-  lhtml+=card('LLM-providers'+tip('De keten van taalmodellen, van slim naar simpel. Bij een fout/limiet valt de bot door naar het volgende. Groen = vrij, goud = even in cooldown (limiet), grijs = geen key of op de bank. De bank is voor schakels die stuk zijn (401/402/403/404): eerst 30 min, bij herhaling 2 uur en dan 24 uur; een Gemini-sleutel of het beeldquotum met het dagquotum op staat er tot middernacht Pacific-tijd. De bank overleeft een herstart; Reset cooldowns maakt hem leeg. Tier: zwaar = slim+schaars, middel = degelijk, licht = snel+dom.'),pr);
+  lhtml+=card('LLM-providers'+tip('De keten van taalmodellen, van slim naar simpel. Bij een fout/limiet valt de bot door naar het volgende. Groen = vrij, goud = even in cooldown (limiet), grijs = geen key of op de bank. De bank is voor schakels die stuk zijn (401/402/403/404): eerst 30 min, bij herhaling 2 uur en dan 24 uur; een Gemini-sleutel of het beeldquotum met het dagquotum op staat er tot middernacht Pacific-tijd. De bank overleeft een herstart; Reset cooldowns maakt hem leeg. Tier: zwaar = slim+schaars, middel = degelijk, licht = snel+dom.'),pr,'providers');
   // Gemini keys
   var gk=d.llm.geminiKeys.map(function(k){return '<div class="prov"><span><span class="dot '+(k.vrij?'ok':'cool')+'"></span>Gemini-key #'+k.nr+'</span>'+(k.vrij?'<span style="color:var(--green)">vrij</span>':'<span class="muted">vrij over '+dur(k.resetOver)+'</span>')+'</div>';}).join('')||'<span class="muted">geen keys</span>';
   var g=d.llm.groq;
   var gq='';
   if(g){gq='<div style="margin-top:10px"><div class="muted">Groq — requests '+g.reqRemaining+'/'+g.reqLimit+' (reset '+g.reqReset+')</div><div class="bar"><i style="width:'+pct(g.reqRemaining,g.reqLimit)+'%"></i></div>'
     +'<div class="muted" style="margin-top:6px">tokens '+g.tokRemaining+'/'+g.tokLimit+' p/min (reset '+g.tokReset+')</div><div class="bar"><i style="width:'+pct(g.tokRemaining,g.tokLimit)+'%"></i></div></div>';}
-  lhtml+=card('Gemini-keys & Groq-quota'+tip('Gemini draait op meerdere keys die roteren; bij een limiet (429) gaat een key kort in cooldown. Groq toont de live rate-limit: hoeveel requests per dag en tokens per minuut er nog over zijn voordat het vol is.'),gk+gq);
+  lhtml+=card('Gemini-keys & Groq-quota'+tip('Gemini draait op meerdere keys die roteren; bij een limiet (429) gaat een key kort in cooldown. Groq toont de live rate-limit: hoeveel requests per dag en tokens per minuut er nog over zijn voordat het vol is.'),gk+gq,'gemini');
+  // De regisseur: wat de Kroket God vandaag zelf deed (alleen lezen; de bediening zit in de strook Nu bezig)
+  var rgv=d.regie||{};
+  var rIng=(rgv.vandaag||[]).map(function(r){return '<div class="row"><span class="t">'+new Date(r.ts).toLocaleTimeString('nl-NL',{hour:'2-digit',minute:'2-digit'})+'</span> · <b>'+esc(r.id)+'</b>'+(r.doel?' → '+esc(r.doel):'')+(r.punten?' <span class="muted">('+(r.punten>0?'+':'')+r.punten+')</span>':'')+(r.laag!=='ingreep'?' <span class="muted">'+esc(r.laag)+'</span>':'')+'</div>';}).join('')||'<span class="muted">nog niets vandaag</span>';
+  ohtml+=card('🔱 Wat de Kroket God vandaag deed'+tip('De ingrepen die de Kroket God vandaag zelf deed: tijdstip, soort, doelwit en punten. Bedienen (effect, verrassing of zaak beëindigen, nu iets laten doen) kan in de strook Nu bezig bovenaan.'),'<div class="lbl">Ingrepen vandaag · niveau '+esc(rgv.niveau||'')+'</div><div class="feed">'+rIng+'</div>','vandaag');
   // Ranglijst (gegroepeerde balken: kroketpunten goud + roempunten violet)
   var rl=ranglijstChart(d.stats.ranglijst.slice(0,10),'nog geen scores');
-  ohtml+=card('Ranglijst'+tip('De top 10 volgelingen, gesorteerd op kroketpunten. Eén balk per lid: navy = roempunten (totale prestige, daalt nooit, reset nooit) en goud = kroketpunten (deze week, reset elke zondagnacht). Elke verdiende kroketpunt telt ook als roempunt. Getallen: kroket · roem.'),rl);
+  ohtml+=card('Ranglijst'+tip('De top 10 volgelingen, gesorteerd op kroketpunten. Eén balk per lid: navy = roempunten (totale prestige, daalt nooit, reset nooit) en goud = kroketpunten (deze week, reset elke zondagnacht). Elke verdiende kroketpunt telt ook als roempunt. Getallen: kroket · roem.'),rl,'ranglijst');
   // Activiteit per dag (staafgrafiek)
   var apd=(d.grafieken&&d.grafieken.activiteitPerDag)||[];
-  ohtml+=card('Activiteit per dag'+tip('Aantal geregistreerde gebeurtenissen per weekdag (ma–zo). De teller reset elke maandag.'),vbars(apd.map(function(x){return {label:x.dag,value:x.aantal};})));
-  // Activiteit per type (donut)
   var apt=(d.grafieken&&d.grafieken.activiteitPerType)||[];
-  ohtml+=card('Activiteit per type'+tip('Verdeling van de gebeurtenissen deze week naar soort (bv. punten, verbanning, quiz).'),donut(apt.map(function(x){return {label:x.type,value:x.aantal};}),'geen activiteit deze week'));
+  ohtml+=card('Activiteit'+tip('Aantal geregistreerde gebeurtenissen per weekdag (ma–zo, de teller reset elke maandag) en hun verdeling naar soort (bv. punten, verbanning, quiz).'),'<div class="lbl">Per weekdag</div>'+vbars(apd.map(function(x){return {label:x.dag,value:x.aantal};}))+'<div class="lbl" style="margin-top:10px">Per soort, deze week</div>'+donut(apt.map(function(x){return {label:x.type,value:x.aantal};}),'geen activiteit deze week'),'activiteit');
   // Trends over tijd (langlopende geschiedenis, max 30 dagen)
   var gh=(d.grafieken&&d.grafieken.geschiedenis)||[];
   var ghLabels=gh.length?[kortDatum(gh[0].datum),kortDatum(gh[gh.length-1].datum)]:null;
-  ohtml+=card('Gebeurtenissen per dag'+tip('Aantal geregistreerde gebeurtenissen per dag over de laatste 30 dagen. Deze historie blijft staan (reset niet wekelijks) en groeit met de tijd.'),
-    lineChart([{naam:'events',kleur:'#f0c060',data:gh.map(function(x){return x.events;})}],{area:true,labels:ghLabels}));
   ohtml+=card('Groei over tijd'+tip('Dagelijkse momentopname van de totaalscore van het genootschap en het aantal leden, over de laatste 30 dagen. Elke grafiek heeft zijn eigen schaal.'),
     '<div class="lbl">Totaalscore genootschap</div>'+
     lineChart([{naam:'score',kleur:'#e08a2a',data:gh.map(function(x){return x.totaalScore;})}],{area:true,labels:ghLabels})+
     '<div class="lbl" style="margin-top:12px">Aantal leden</div>'+
-    lineChart([{naam:'leden',kleur:'#7fd07f',data:gh.map(function(x){return x.leden;})}],{area:true}));
+    lineChart([{naam:'leden',kleur:'#7fd07f',data:gh.map(function(x){return x.leden;})}],{area:true}),'groei');
   // Bans + vergrijpen (balkjes) — met beheerknoppen (opheffen / +4u verlengen)
   var bn=d.stats.bans.map(function(b){return '<tr><td>'+esc(b.naam)+'</td><td class="muted">tot '+new Date(b.tot).toLocaleString('nl-NL',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})
     +'</td><td><button class="skip" onclick="banActie(\''+esc(b.id)+'\',\'opheffen\')">vrij</button> <button class="skip" onclick="banActie(\''+esc(b.id)+'\',\'verlengen\')">+4u</button></td></tr>';}).join('')||'<tr><td class="muted">geen actieve verbanningen</td></tr>';
   var vg=hbars(d.stats.vergrijpen.map(function(v){return {label:v.naam,value:v.aantal};}),'');
-  bhtml+=card('Verbanningen & vergrijpen'+tip('Actieve verbanningen met beheerknoppen: "vrij" heft de ban direct op, "+4u" verlengt hem met 4 uur. Vereist het dashboard-token.'),'<table><tr><th>Verbannen</th><th></th><th></th></tr>'+bn+'</table>'+(d.stats.vergrijpen.length?'<div class="lbl" style="margin-top:10px">Vergrijpen (7d)</div>'+vg:''));
+  rhtml+=card('Verbanningen & vergrijpen'+tip('Actieve verbanningen met beheerknoppen: "vrij" heft de ban direct op, "+4u" verlengt hem met 4 uur. Vereist het dashboard-token.'),'<table><tr><th>Verbannen</th><th></th><th></th></tr>'+bn+'</table>'+(d.stats.vergrijpen.length?'<div class="lbl" style="margin-top:10px">Vergrijpen (7d)</div>'+vg:''),'bans');
   // Scorebeheer: punten handmatig corrigeren per lid
   var se=d.stats.ranglijst.map(function(r){return '<tr><td>'+esc(r.naam)+'</td><td class="num">'+r.score+'</td>'
     +'<td><button class="skip" onclick="scoreDelta(\''+esc(r.id)+'\',-1)">−1</button> <button class="skip" onclick="scoreDelta(\''+esc(r.id)+'\',1)">+1</button></td></tr>';}).join('')||'<tr><td class="muted">geen leden</td></tr>';
-  bhtml+=card('Scorebeheer'+tip('Corrigeer kroketpunten handmatig, bv. na een fout van de bot. Wijzigingen zijn stil (geen Slack-bericht) en worden vastgelegd in het audit-log.'),'<table><tr><th>Lid</th><th>Punten</th><th></th></tr>'+se+'</table>');
+  rhtml+=card('Scorebeheer'+tip('Corrigeer kroketpunten handmatig, bv. na een fout van de bot. Wijzigingen zijn stil (geen Slack-bericht) en worden vastgelegd in het audit-log.'),'<table><tr><th>Lid</th><th>Punten</th><th></th></tr>'+se+'</table>','score');
   // Aflatenhandel: actieve power-ups & vloeken, totalen per koper en laatste aankopen
   var wk=d.winkel||{catalogus:[],actief:[],historie:[],totalen:[]};
   var wIcon={};(wk.catalogus||[]).forEach(function(c){wIcon[c.key]=c.icoon;});
@@ -340,10 +351,10 @@ function render(d){
   var wh=(wk.historie||[]).map(function(h){
     return '<div class="row"><span class="t">'+new Date(h.ts).toLocaleString('nl-NL',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})+'</span> · <b>'+esc(h.koper)+'</b> '+h.icoon+' '+esc(h.itemNaam)+(h.doel?' → '+esc(h.doel):'')+' <span class="muted">'+(h.prijs>0?h.prijs+' pt':'gratis')+(h.bron==='dashboard'?' · dashboard':'')+'</span></div>';
   }).join('')||'<span class="muted">nog geen aankopen</span>';
-  shtml+=card('🛒 Aflatenhandel'+tip('Alles uit de Heilige Aflatenhandel: welke power-ups en vloeken nu actief zijn (✕ verwijdert er een direct), wie wat gekocht heeft en hoe vaak. Bij een vloek zie je hier — anders dan in Slack — wél wie hem legde. Geven kan via het beheer-formulier op het Beheer-tabblad.'),
+  var aflInner=
     '<table><tr><th>Lid</th><th>Power-up</th><th>Resteert</th><th></th></tr>'+wa+'</table>'
     +(wt?'<div class="lbl" style="margin-top:10px">Totalen per koper</div><div class="feed">'+wt+'</div>':'')
-    +'<div class="lbl" style="margin-top:10px">Laatste aankopen</div><div class="feed">'+wh+'</div>');
+    +'<div class="lbl" style="margin-top:10px">Laatste aankopen</div><div class="feed">'+wh+'</div>';
   // LLM-verbruik: succesvolle calls per provider (vandaag + 14 dagen)
   var ls=d.llmstats&&d.llmstats.dagen?d.llmstats.dagen:{};
   var lsDagen=Object.keys(ls).sort();
@@ -354,13 +365,13 @@ function render(d){
   var lsV=hbars(Object.keys(lsVandaag).map(function(p){return {label:p,value:lsVandaag[p]};}),'nog geen calls vandaag');
   var lsT=hbars(Object.keys(lsTotaal).map(function(p){return {label:p,value:lsTotaal[p]};}).sort(function(a,b){return b.value-a.value;}),'geen data');
   lhtml+=card('LLM-verbruik'+tip('Aantal succesvolle LLM-calls per provider. Boven: vandaag. Onder: totaal over de bewaarde periode (max 14 dagen). Handig om te zien welke providers het werk dragen en waar quota-druk zit.'),
-    '<div class="lbl">Vandaag</div>'+lsV+'<div class="lbl" style="margin-top:10px">Laatste 14 dagen</div>'+lsT);
+    '<div class="lbl">Vandaag</div>'+lsV+'<div class="lbl" style="margin-top:10px">Laatste 14 dagen</div>'+lsT,'verbruik');
   // Frituur-galerij: laatste beeldprompts
   var fg=(d.frituurlog||[]).map(function(f){return '<div class="row"><span class="t">'+new Date(f.ts).toLocaleString('nl-NL',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})+'</span> · <b>'+esc(f.door)+'</b> — '+esc(f.beschrijving)+'<br><span class="muted">['+esc(f.stijl)+(f.stemming?' / '+esc(f.stemming):'')+'] '+esc(f.prompt)+'</span></div>';}).join('')||'<span class="muted">nog geen visioenen gefrituurd</span>';
-  loghtml+=card('Frituur-galerij'+tip('De laatste 10 beeldgeneraties: wie vroeg wat, en welke volledige Engelse prompt er naar het beeldmodel ging. Handig om de promptkwaliteit te beoordelen.'),'<div class="feed">'+fg+'</div>');
+  loghtml+=card('Frituur-galerij'+tip('De laatste 10 beeldgeneraties: wie vroeg wat, en welke volledige Engelse prompt er naar het beeldmodel ging. Handig om de promptkwaliteit te beoordelen.'),'<div class="feed">'+fg+'</div>','galerij');
   // Audit-log: schrijfacties via het dashboard
   var au=(d.auditlog||[]).map(function(a){return '<div class="row"><span class="t">'+new Date(a.ts).toLocaleString('nl-NL',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})+'</span> · <b>'+esc(a.endpoint)+'</b> <span class="muted">'+esc(a.samenvatting||'')+'</span></div>';}).join('')||'<span class="muted">nog geen dashboard-acties</span>';
-  loghtml+=card('Audit-log'+tip('De laatste 20 schrijfacties via het dashboard: instellingen, verkondigingen, scorecorrecties, ban-beheer en acties. Iedereen met het token kan schrijven — hier zie je wat er is gebeurd.'),'<div class="feed">'+au+'</div>');
+  loghtml+=card('Audit-log'+tip('De laatste 20 schrijfacties via het dashboard: instellingen, verkondigingen, scorecorrecties, ban-beheer en acties. Iedereen met het token kan schrijven — hier zie je wat er is gebeurd.'),'<div class="feed">'+au+'</div>','audit');
   // Cijfers
   var k=d.stats;
   var cijfers='<table>'
@@ -369,7 +380,7 @@ function render(d){
     +'<tr><td>Achievements behaald</td><td class="num">'+k.achievements+'</td></tr>'
     +'<tr><td>Actieve verbanningen</td><td class="num">'+k.bans.length+'</td></tr>'
     +'</table>'+(k.kroketVanDeDag?'<div style="margin-top:8px" class="muted">Kroket v/d dag: <b style="color:var(--txt)">'+esc(k.kroketVanDeDag.naam)+'</b></div>':'');
-  ohtml+=card('Cijfers',cijfers);
+  ohtml+=card('Cijfers',cijfers,'cijfers');
   // Geplande posts (de eerstvolgende vijf, met tijdstip)
   var ing=(d.ingepland||[]).map(function(p){
     var terug=p.soort==='terugkerend';
@@ -379,10 +390,10 @@ function render(d){
     return '<div class="sched"><div class="when"><b>'+wanneer+'</b></div><div class="body">'+tag+'<span class="lbl2">'+esc(p.label)+'</span></div>'
       +'<button class="skip" onclick="skip('+attr+')">overslaan</button></div>';
   }).join('')||'<span class="muted">niets ingepland</span>';
-  ohtml+=card('Geplande posts'+tip('De eerstvolgende vijf geplande posts — terugkerende botposts (🔁) en je eigen geplande verkondigingen (📜). Met "overslaan" sla je die ene uitvoering over.'),ing);
+  var gT='Geplande posts'+tip('De eerstvolgende vijf geplande posts — terugkerende botposts (🔁) en je eigen geplande verkondigingen (📜). Met "overslaan" sla je die ene uitvoering over.');ohtml+=card(gT,ing,'gepland');vhtml+=card(gT,ing,'gepland-v');
   // Activiteit
   var fd=d.activiteit.map(function(e){return '<div class="row"><span class="t">'+new Date(e.ts).toLocaleString('nl-NL',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})+'</span> · <b>'+esc(e.type)+'</b> '+(e.naam?esc(e.naam)+' — ':'')+' <span class="muted">'+esc(e.beschrijving||'')+'</span>'+(e.actorNaam?' <span class="muted" style="font-size:0.85em;opacity:0.7">— door '+esc(e.actorNaam)+'</span>':'')+'</div>';}).join('')||'<span class="muted">geen activiteit deze week</span>';
-  loghtml+=card('Activiteit (deze week)','<div class="feed">'+fd+'</div>');
+  loghtml+=card('Activiteit (deze week)','<div class="feed">'+fd+'</div>','activiteit-log');
 
   // ── Spel-tab: troon, gouden kroket, kroket-gok, quiz, bingo, verbonden ──────
   var sp=d.spel||{};
@@ -393,14 +404,14 @@ function render(d){
     var perSpel=Object.keys(cs.week.perSpel).map(function(k){var x=cs.week.perSpel[k];return rij(esc(cs.spelNamen[k]||k),{spellen:x.spellen,ingezet:x.ingezet,uitbetaald:x.uitbetaald,netto:x.uitbetaald-x.ingezet});}).join('');
     var perLid=cs.week.perLid.map(function(l){return '<tr><td>'+esc(l.naam)+'</td><td>'+l.spellen+'</td><td>'+(l.netto>0?'+':'')+l.netto+'</td></tr>';}).join('');
     var gw=cs.week.grootste;
-    shtml+=card('🎰 Casino'+tip('Wat er in het casino gespeeld is. "Huis" is wat het casino aan de spelers verdiende (groen) of verloor (rood). De cijfers tellen vanaf 29 oktober 2026. Instellen kan bij Beheer → Instellingen.'),
+    var casInner=
       '<div class="muted">'+(cs.aan?'open':'<b style="color:var(--red)">gesloten</b>')+' · max '+cs.maxInzet+' per spel · '+cs.perDag+' spellen per dag'+(cs.bonusVandaag?' <b style="color:var(--gold)">+'+cs.bonusVandaag+' extra vandaag</b>':'')+(cs.schuifkast!=null?' · schuifkast: '+cs.schuifkast+' munten op de tafel':'')+'</div>'
       +'<table style="margin-top:8px"><tr><th></th><th>Spellen</th><th>Ingezet</th><th>Uitbetaald</th><th>Huis</th></tr>'+rij('Vandaag',cs.vandaag)+rij('Deze week',cs.week)+'</table>'
       +(perSpel?'<div class="lbl" style="margin-top:10px">Per spel, deze week</div><table>'+perSpel+'</table>':'')
       +(perLid?'<div class="lbl" style="margin-top:10px">Per lid, deze week</div><table><tr><th>Lid</th><th>Spellen</th><th>Netto</th></tr>'+perLid+'</table>':'<div class="muted" style="margin-top:8px">deze week nog niet gespeeld</div>')
       +(gw?'<div style="margin-top:8px">🏆 Grootste winst: <b>'+esc(gw.naam)+'</b> +'+gw.netto+' aan '+esc(gw.spel)+'</div>':'')
       +(cs.loterij?'<div style="margin-top:8px">🎟️ Frituurloterij: pot <b>'+cs.loterij.pot+'</b> · '+cs.loterij.loten+' loten van '+cs.loterij.deelnemers+' leden · trekking vrijdag 16:00'+(cs.loterij.laatste?' · laatst gewonnen door <b>'+esc(cs.loterij.laatste.naam)+'</b> (+'+cs.loterij.laatste.pot+')':'')+'</div>':'')
-      +(cs.feiten&&cs.feiten.length?'<div class="lbl" style="margin-top:10px">Gefluister deze week'+tip('Wat de casinoroddel van dinsdag 16:30 kan vertellen. Die kiest er vier, over de afgelopen zeven dagen.')+'</div>'+cs.feiten.map(function(f){return '<div>'+esc(f).replace(/\*([^*]+)\*/g,'<b>$1</b>')+'</div>';}).join(''):''));
+      +(cs.feiten&&cs.feiten.length?'<div class="lbl" style="margin-top:10px">Gefluister deze week'+tip('Wat de casinoroddel van dinsdag 16:30 kan vertellen. Die kiest er vier, over de afgelopen zeven dagen.')+'</div>'+cs.feiten.map(function(f){return '<div>'+esc(f).replace(/\*([^*]+)\*/g,'<b>$1</b>')+'</div>';}).join(''):'');
     var gp=cs.gokpauze.map(function(g){
       var dg=function(d){return new Date(d+'T12:00:00Z').toLocaleDateString('nl-NL',{weekday:'short',day:'numeric',month:'short'})};
       var status=g.rustdag&&g.rustdag<=cs.dag?'<b style="color:var(--red)">casinoverbod t/m '+dg(g.rustTot)+'</b>'+(g.pogingen?' · '+g.pogingen+'× geprobeerd':'')
@@ -409,38 +420,39 @@ function render(d){
       return '<tr><td>'+esc(g.naam)+'</td><td>'+(g.rustdag?'—':g.reeks+'/'+cs.reeksLengte)+'</td><td>'+status+'</td><td>'
         +(g.rustdag?'<button class="skip" onclick="gokpauzeOpheffen(\''+esc(g.userId)+'\',\''+esc(g.naam).replace(/'/g,'')+'\')">opheffen</button>':'')+'</td></tr>';
     }).join('');
-    shtml+=card('🕯️ Gokpauze <span id="gp_status" class="muted" style="font-weight:400;text-transform:none;margin-left:8px"></span>'+tip('De onzichtbare reeks: wie '+cs.reeksLengte+' werkdagen op rij in het casino speelt (het weekend telt niet), komt op de zwarte lijst: een privé-waarschuwing, een openbare melding in het kanaal en de twee werkdagen erna een verbod op casino, Vetbad, gok, duel, roof, troon en aandelen kopen. De leden zien hun reeks niet; jij wel. "Opheffen" haalt een verbod weg.'),
-      gp?'<table><tr><th>Lid</th><th>Reeks</th><th>Status</th><th></th></tr>'+gp+'</table>':'<div class="muted">niemand in een reeks</div>');
+    s2html+=card('🕯️ Gokpauze <span id="gp_status" class="muted" style="font-weight:400;text-transform:none;margin-left:8px"></span>'+tip('De onzichtbare reeks: wie '+cs.reeksLengte+' werkdagen op rij in het casino speelt (het weekend telt niet), komt op de zwarte lijst: een privé-waarschuwing, een openbare melding in het kanaal en de twee werkdagen erna een verbod op casino, Vetbad, gok, duel, roof, troon en aandelen kopen. De leden zien hun reeks niet; jij wel. "Opheffen" haalt een verbod weg.'),
+      gp?'<table><tr><th>Lid</th><th>Reeks</th><th>Status</th><th></th></tr>'+gp+'</table>':'<div class="muted">niemand in een reeks</div>','gokpauze');
   }
   var troonInhoud=sp.troon
     ? '<div class="big">👑 '+esc(sp.troon.koning)+'</div><div class="muted">op de troon sinds '+new Date(sp.troon.sinds).toLocaleDateString('nl-NL',{day:'numeric',month:'long'})+' · '+sp.troon.score+' kroketpunten · ontvangt dagelijks +1 kroontribuut</div>'
     : '<div class="muted">De troon staat leeg — de eerste uitdager wordt zonder strijd gekroond.</div>';
-  shtml+=card('👑 Troon van de Frituur'+tip('De zittende Frituurkoning ontvangt elke dag om 12:00 +1 kroontribuut. Uitdagen kost 3 punten inzet; de koning houdt stand met 55% kans.'),troonInhoud);
+  shtml+=card('👑 Troon van de Frituur'+tip('De zittende Frituurkoning ontvangt elke dag om 12:00 +1 kroontribuut. Uitdagen kost 3 punten inzet; de koning houdt stand met 55% kans.'),troonInhoud,'troon');
   var gkS=sp.goudenKroket||{};
   var gkInhoud;
   if(gkS.gepakt)gkInhoud='<div>🥇 Gegrepen door <b>'+esc(gkS.winnaar||'?')+'</b>. De volgende jacht wordt maandag 09:35 ingepland.</div>';
   else if(gkS.geplaatst)gkInhoud='<div style="color:var(--gold);font-weight:700">⚡ Ligt NU in het kanaal — nog niet gegrepen!</div>';
   else if(gkS.geplandVoor)gkInhoud='<div>🕰️ Verschijnt <b>'+new Date(gkS.geplandVoor).toLocaleString('nl-NL',{weekday:'long',hour:'2-digit',minute:'2-digit'})+'</b><div class="muted">alleen jij ziet dit — de leden weten van niets</div></div>';
   else gkInhoud='<div class="muted">Geen jacht gepland — de volgende wordt maandag 09:35 ingepland.</div>';
-  shtml+=card('🥇 Gouden Kroket'+tip('De wekelijkse schatzoektocht: op een geheim moment (ma–vr overdag) plaatst de Raad de Gouden Kroket; de eerste :lekker_kroketje:-reactie wint +3. Dit paneel toont het geplande moment — dat is jouw admin-geheim.'),gkInhoud);
+  shtml+=card('🥇 Gouden Kroket'+tip('De wekelijkse schatzoektocht: op een geheim moment (ma–vr overdag) plaatst de Raad de Gouden Kroket; de eerste :lekker_kroketje:-reactie wint +3. Dit paneel toont het geplande moment — dat is jouw admin-geheim.'),gkInhoud,'goudenkroket');
   var kgok=sp.kroketGok||{};
   var gokRows=(kgok.gokken||[]).map(function(g){return '<tr><td>'+esc(g.naam)+'</td><td>'+(g.keuze==='krokant'?'🥖 krokant':'💀 slap korstje')+'</td></tr>';}).join('');
   var kInhoud=(kgok.kroket
       ? '<div><b>'+esc(kgok.kroket)+'</b> <span class="muted">'+(kgok.actief?'· stemming loopt':'· wacht op uitslag')+'</span></div>'
       : '<div class="muted">nog geen kroket vandaag</div>')
     +(gokRows?'<div class="lbl" style="margin-top:8px">Verzegelde voorspellingen</div><table>'+gokRows+'</table>':'<div class="muted" style="margin-top:6px">nog geen voorspellingen</div>');
-  shtml+=card('🥖 Kroket v/d dag & 🔮 gok'+tip('De kroket van vandaag en de verzegelde voorspellingen van de leden (juist = +2 bij de uitslag). De leden zien elkaars gok niet — jij wel.'),kInhoud);
+  shtml+=card('🥖 Kroket v/d dag & 🔮 gok'+tip('De kroket van vandaag en de verzegelde voorspellingen van de leden (juist = +2 bij de uitslag). De leden zien elkaars gok niet — jij wel.'),kInhoud+'<div style="margin-top:8px"><button class="btn" data-actie="kroketVanDeDag">🥖 Kroket vd dag</button></div>','kroket');
   var qz=sp.quiz;
-  shtml+=card('🧠 Quiz'+tip('De lopende quizvraag (ma/wo/do 10:15). Eerste juiste antwoord +2, latere juiste antwoorden +1. Onthulling om 16:00 of via de knop op het Beheer-tabblad.'),
-    qz?('<div>'+esc(qz.vraag)+'</div><div class="muted" style="margin-top:4px">'+(qz.afgerond?'afgerond — antwoord onthuld':'loopt — onthulling na '+new Date(qz.deadline).toLocaleTimeString('nl-NL',{hour:'2-digit',minute:'2-digit'}))+'</div>'):'<span class="muted">geen actieve quiz</span>');
+  shtml+=card('🧠 Quiz'+tip('De lopende quizvraag (ma/wo/do 10:15). Eerste juiste antwoord +2, latere juiste antwoorden +1. Onthulling om 16:00 of via de knop hieronder.'),
+    (qz?('<div>'+esc(qz.vraag)+'</div><div class="muted" style="margin-top:4px">'+(qz.afgerond?'afgerond — antwoord onthuld':'loopt — onthulling na '+new Date(qz.deadline).toLocaleTimeString('nl-NL',{hour:'2-digit',minute:'2-digit'}))+'</div>'):'<span class="muted">geen actieve quiz</span>')+'<div style="margin-top:8px"><button class="btn" data-actie="quizStarten">🧠 Quiz</button> <button class="btn" data-actie="quizOnthul">📖 Onthul</button></div>','quiz');
   var bg=sp.bingo;
   var bgInhoud=bg?bg.opdrachten.map(function(o){return '<div class="row">'+o.nr+'. '+esc(o.tekst)+(o.claims.length?' <span style="color:var(--green)">✓ '+esc(o.claims.join(', '))+'</span>':'')+'</div>';}).join(''):'<span class="muted">geen bingokaart deze week</span>';
-  shtml+=card('🎯 Kroket-bingo'+tip('De wekelijkse bingokaart (maandag 10:30) met per opdracht wie hem geclaimd heeft (+1 per geslaagde claim).'),bgInhoud);
+  shtml+=card('🎯 Kroket-bingo'+tip('De wekelijkse bingokaart (maandag 10:30) met per opdracht wie hem geclaimd heeft (+1 per geslaagde claim).'),bgInhoud,'bingo');
   var alRows=(sp.allianties||[]).map(function(x){return '<div class="row">⚔️ '+esc(x.a)+' ↔ '+esc(x.b)+'</div>';}).join('')||'<div class="muted">geen actieve allianties</div>';
   var strRows=(sp.streaks||[]).map(function(s){return '<div class="row">🔥 '+esc(s.naam)+' — '+s.huidig+' (record '+s.record+')</div>';}).join('');
-  shtml+=card('⚔️ Verbonden & eer'+tip('Actieve allianties (gedeelde zegen en bescherming), en vrijdagstreaks.'),
-    alRows+(strRows?'<div class="lbl" style="margin-top:8px">Vrijdagstreaks</div>'+strRows:''));
+  rhtml+=card('⚔️ Verbonden & eer'+tip('Actieve allianties (gedeelde zegen en bescherming), en vrijdagstreaks.'),
+    alRows+(strRows?'<div class="lbl" style="margin-top:8px">Vrijdagstreaks</div>'+strRows:''),'verbonden');
 
+  _statisch={casino_stats:(typeof casInner==='string'?casInner:''),winkel_overzicht:aflInner};vulStatisch();
   // ── KPI-tegels op het Overzicht ─────────────────────────────────────────────
   var kpiPunten=0;d.stats.ranglijst.forEach(function(r){kpiPunten+=r.score||0;});
   var kpiEvents=0;apd.forEach(function(x){kpiEvents+=x.aantal;});
@@ -456,8 +468,10 @@ function render(d){
   // ── Verdeel de kaarten over de tabbladen ────────────────────────────────────
   document.getElementById('c_overzicht').innerHTML=ohtml;
   document.getElementById('c_spel').innerHTML=shtml;
+  document.getElementById('c_spel2').innerHTML=s2html;
+  document.getElementById('c_recht').innerHTML=rhtml;
+  document.getElementById('c_verk').innerHTML=vhtml;
   document.getElementById('c_llm').innerHTML=lhtml;
-  document.getElementById('c_beheer').innerHTML=bhtml;
   document.getElementById('c_logs').innerHTML=loghtml;
   var zoekEl=document.getElementById('logzoek');
   if(zoekEl&&zoekEl.value)filterLogs();
@@ -466,9 +480,9 @@ var ingesteld=false;
 var personasIngesteld=false;
 var _personas={};
 function renderPersonaForm(){
-  var html='<div class="card"><h2>👥 Personas <span id="p_status" class="muted" style="font-weight:400;text-transform:none;margin-left:8px"></span></h2>'
+  var html='<div class="card" id="k-personas"><h2>👥 Personas <span id="p_status" class="muted" style="font-weight:400;text-transform:none;margin-left:8px"></span></h2>'
     +'<div id="persona_lijst" class="muted">Laden…</div>'
-    +'<div class="lbl" style="margin-top:14px;border-top:1px solid var(--line);padding-top:13px">🚪 Gast uitnodigen'+tip('Hetzelfde als /kroketgod invite in Slack, maar zonder punten. Geef een naam, een gezicht, trefwoorden en een beschrijving; Gemini schrijft het karakter uit in het stramien van de andere persona\'s. De gast is meteen actief en maakt zijn entree in het hoofdkanaal, op uitnodiging van de Kroket God. Duurt zo\'n 15 seconden. Een bekende gast terughalen doe je met 🚪 nodig uit in de lijst hierboven.')+'</div>'
+    +'<div id="k-gast" class="lbl" style="margin-top:14px;border-top:1px solid var(--line);padding-top:13px">🚪 Gast uitnodigen'+tip('Hetzelfde als /kroketgod invite in Slack, maar zonder punten. Geef een naam, een gezicht, trefwoorden en een beschrijving; Gemini schrijft het karakter uit in het stramien van de andere persona\'s. De gast is meteen actief en maakt zijn entree in het hoofdkanaal, op uitnodiging van de Kroket God. Duurt zo\'n 15 seconden. Een bekende gast terughalen doe je met 🚪 nodig uit in de lijst hierboven.')+'</div>'
     +'<div class="setgrid">'
     +'<div><div class="lbl">Naam</div><input type="text" id="g_naam" maxlength="60" placeholder="bv. Tante Truus uit Zwolle"></div>'
     +'<div><div class="lbl">Avatar'+tip('Kies een plaatje van je computer: het wordt verkleind en op imgbb gezet. Of plak een directe https-link. Leeg gelaten: er wordt een portret geschilderd.')+'</div>'
@@ -481,7 +495,7 @@ function renderPersonaForm(){
     +'<div class="lbl" style="margin-top:10px">Prompt / tone of voice</div>'
     +'<textarea id="g_beschrijving" rows="5" maxlength="3000" placeholder="Wie is het, hoe praat hij, waar is hij door bezeten, wat vindt hij van de kroket? Stopwoordjes en voorbeeldzinnen helpen." style="width:100%"></textarea>'
     +'<div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap"><button class="btn gold" id="g_knop" data-gast-uitnodigen>🚪 Nodig uit</button><span id="g_status" class="muted"></span></div>'
-    +'<div class="lbl" style="margin-top:14px;border-top:1px solid var(--line);padding-top:13px">Nieuwe persona toevoegen / bewerken'+tip('Een persona is een nevenentiteit die net als de Kroket God in het kanaal post, maar onder een eigen naam en avatar — bv. een rivaliserende snackgod. Ze reageren als iemand hun trefwoord noemt, en optioneel af en toe ongevraagd.')+'</div>'
+    +'<div id="k-persona-nieuw" class="lbl" style="margin-top:14px;border-top:1px solid var(--line);padding-top:13px">Nieuwe persona toevoegen / bewerken'+tip('Een persona is een nevenentiteit die net als de Kroket God in het kanaal post, maar onder een eigen naam en avatar — bv. een rivaliserende snackgod. Ze reageren als iemand hun trefwoord noemt, en optioneel af en toe ongevraagd.')+'</div>'
     +'<div class="setgrid">'
     +'<div><div class="lbl">Naam</div><input type="text" id="p_naam" placeholder="bv. De Heilige Mr. Satébal" maxlength="60"></div>'
     +'<div><div class="lbl">Avatar'+tip('Een Slack-emoji-shortcode (bv. :peanuts:, of een custom emoji die je zelf hebt geüpload in Slack — dubbele punten mogen weg), OF een directe afbeeldings-URL die begint met http(s)://. Of kies een plaatje van je computer: het wordt verkleind, op imgbb gezet en de link komt hier te staan. Bewaren doe je met Opslaan.')+'</div>'
@@ -709,7 +723,7 @@ function renderInstellingen(d){
   function chk(id,v,l,t){return '<label class="tog"><input type="checkbox" id="'+id+'"'+(v?' checked':'')+'> '+l+(t?tip(t):'')+'</label>';}
   function num(id,v,l,t){return '<label class="numl">'+l+(t?tip(t):'')+' <input type="number" min="0" max="100" id="'+id+'" value="'+Math.round(v*100)+'">%</label>';}
   var provs=d.providerOpties.map(function(p){return '<label class="tog"><input type="checkbox" data-prov="'+p+'"'+(s.providerUit.indexOf(p)>=0?' checked':'')+'> '+p+'</label>';}).join('');
-  var html='<div class="card"><h2>⚙️ Instellingen <span id="i_status" class="muted" style="font-weight:400;text-transform:none;margin-left:8px"></span></h2><div class="setgrid">'
+  var cAlg='<div class="card" id="k-instellingen"><h2>⚙️ Algemene instellingen</h2><div class="setgrid">'
     +'<div><div class="lbl">Dagstemming'+tip('De dagelijkse bui die alle reacties kleurt. Automatisch kiest elke dag een vaste stemming op basis van de datum; of kies er zelf een. Werkt direct na opslaan.')+'</div><select id="i_stemming">'+moods+'</select></div>'
         +'<div><div class="lbl">Modi</div>'
       +chk('i_stil',s.stilModus,'Stil-modus (mute)','De Kroket God reageert nergens meer op, behalve in het testkanaal. Handig bij onderhoud.')
@@ -730,13 +744,6 @@ function renderInstellingen(d){
       +num('i_warrig',s.warrigKans,'Warrig','Kans dat een reactie het warrige formaat krijgt: de Kroket God dwaalt af alsof hij te lang in de frituurwalm stond.')
       +num('i_vrijdag',s.vrijdagAppendKans,'Vrijdag-append','Kans dat er een aftelling tot het heilige vrijdagmoment (12:00) aan een reactie wordt geplakt.')
     +'</div>'
-    +'<div><div class="lbl">Casino</div>'
-      +chk('i_casinoAan',s.casinoAan!==false,'Casino open','Uit = /kroketgod casino en de knop in de Home-tab melden dat het casino gesloten is. Een open hand blijft bewaard tot het weer opengaat.')
-      +'<label class="numl">Max inzet per spel'+tip('Hoogstens zoveel kroketpunten per spel, en nooit meer dan de helft van iemands bezit. 1 tot 10.')+' <input type="number" min="1" max="10" id="i_casinoMax" value="'+(s.casinoMaxInzet||5)+'"></label>'
-      +'<label class="numl">Spellen per dag'+tip('Per lid, alle casinospellen samen. 1 tot 50.')+' <input type="number" min="1" max="50" id="i_casinoPerDag" value="'+(s.casinoPerDag||10)+'"></label>'
-      +'<label class="numl">Extra vandaag'+tip('Geeft iedereen vandaag zoveel spellen bovenop het normale aantal, zoals bij een decreet. Om middernacht vervalt het. 0 = geen extra. Werkt los van Opslaan.')+' <input type="number" min="0" max="50" id="i_casinoBonus" value="'+(((d.spel||{}).casino||{}).bonusVandaag||0)+'"></label>'
-      +'<button class="btn" onclick="casinoBonus()">🎰 Geef extra spellen</button> <span id="cb_status" class="muted"></span>'
-    +'</div>'
     +'</div>'
     +'<div class="lbl" style="margin-top:12px">Decreet van de dag'+tip('Vrije tekst die als extra instructie in de system prompt wordt geinjecteerd. Geef de Kroket God een tijdelijk thema, bv. spreek vandaag uitsluitend in haiku. Werkt direct na opslaan.')+'</div>'
     +'<textarea id="i_decreet" rows="2" placeholder="bv. Vandaag spreekt de Kroket God uitsluitend in haiku.">'+esc(s.decreetVanDeDag)+'</textarea>'
@@ -745,37 +752,45 @@ function renderInstellingen(d){
     +'<div class="lbl" style="margin-top:10px">Heftigheid van het decreet'+tip('Hoe sterk de Kroket God het decreet doorvoert: links = subtiele vleug, rechts = absolute obsessie die elke reactie doordrenkt.')+' <span id="i_decreetIntPct" class="muted" style="text-transform:none;font-weight:400">'+Math.round(s.decreetIntensiteit*100)+'%</span></div>'
     +'<input type="range" min="0" max="100" id="i_decreetInt" value="'+Math.round(s.decreetIntensiteit*100)+'" style="width:100%;accent-color:var(--amber)">'
     +'<div style="margin-top:12px"><button class="btn gold" data-save>💾 Opslaan</button>'
-    +'<button class="btn" data-actie="kroketVanDeDag">🥖 Kroket vd dag</button>'
-    +'<button class="btn" data-actie="quizStarten">🧠 Quiz</button>'
-    +'<button class="btn" data-actie="quizOnthul">📖 Onthul</button>'
     +'<button class="btn" data-actie="resetCooldowns">♻️ Reset cooldowns</button>'
-    +'<button class="btn" data-actie="ververseQuota">📊 Ververs quota</button></div>'
-    +'<div class="lbl" style="margin-top:16px;border-top:1px solid var(--line);padding-top:13px">⚔️ Spellen nu starten'+tip('Start de Bamischijf-raid of de Grote Veiling direct, zonder te wachten op dinsdag/vrijdag. Beide krijgen een korte looptijd van 4 uur. De borden in Slack hebben klikbare knoppen; met Ontsnap/Hamer sluit je een testronde meteen af.')+'</div>'
-    +'<div><button class="btn" data-actie="bamischijfSpawn">👹 Weekvijand laten opkomen</button>'
+    +'<button class="btn" data-actie="ververseQuota">📊 Ververs quota</button>'
+    +'<button class="btn" data-actie="statusMeldingen">📬 Statusmeldingen nu sturen</button>'
+    +'<button class="btn" data-actie="appHomeVerversen">🏠 App Home verversen</button>'
+    +'</div></div>';
+  var cCas='<div class="card" id="k-casino"><h2>🎰 Casino'+tip('Wat er in het casino gespeeld is. "Huis" is wat het casino aan de spelers verdiende (groen) of verloor (rood). De cijfers tellen vanaf 29 oktober 2026. Instellen kan hieronder in dezelfde kaart.')+'</h2><div class="setgrid">'
+    +'<div><div class="lbl">Limieten</div>'
+      +chk('i_casinoAan',s.casinoAan!==false,'Casino open','Uit = /kroketgod casino en de knop in de Home-tab melden dat het casino gesloten is. Een open hand blijft bewaard tot het weer opengaat.')
+      +'<label class="numl">Max inzet per spel'+tip('Hoogstens zoveel kroketpunten per spel, en nooit meer dan de helft van iemands bezit. 1 tot 10.')+' <input type="number" min="1" max="10" id="i_casinoMax" value="'+(s.casinoMaxInzet||5)+'"></label>'
+      +'<label class="numl">Spellen per dag'+tip('Per lid, alle casinospellen samen. 1 tot 50.')+' <input type="number" min="1" max="50" id="i_casinoPerDag" value="'+(s.casinoPerDag||10)+'"></label>'
+      +'<label class="numl">Extra vandaag'+tip('Geeft iedereen vandaag zoveel spellen bovenop het normale aantal, zoals bij een decreet. Om middernacht vervalt het. 0 = geen extra. Werkt los van Opslaan.')+' <input type="number" min="0" max="50" id="i_casinoBonus" value="'+(((d.spel||{}).casino||{}).bonusVandaag||0)+'"></label>'
+      +'<button class="btn" onclick="casinoBonus()">🎰 Geef extra spellen</button> <span id="cb_status" class="muted"></span>'
+    +'</div>'
+    +'</div><div style="margin-top:8px"><button class="btn gold" data-save>💾 Opslaan</button></div><div id="casino_stats" style="margin-top:12px"></div></div>';
+  var cWeek='<div class="card" id="k-weekvijand"><h2>👹 Weekvijand'+tip('Start de Bamischijf-raid of de Grote Veiling direct, zonder te wachten op dinsdag/vrijdag. Beide krijgen een korte looptijd van 4 uur. De borden in Slack hebben klikbare knoppen; met Ontsnap/Hamer sluit je een testronde meteen af.')+'</h2><div>'
+    +'<button class="btn" data-actie="bamischijfSpawn">👹 Weekvijand laten opkomen</button>'
     +'<button class="btn" data-actie="weekvijandSpreekt">💬 Vijand laten spotten</button>'
     +'<button class="btn" data-actie="weekvijandBeurt">🗡️ Vijand zijn beurt geven</button>'
     +'<button class="btn" data-actie="bamischijfOntsnap">🌫️ Raid afsluiten</button>'
+    +'</div></div>';
+  var cVeil='<div class="card" id="k-veiling"><h2>🔨 Grote Veiling'+tip('Start de Bamischijf-raid of de Grote Veiling direct, zonder te wachten op dinsdag/vrijdag. Beide krijgen een korte looptijd van 4 uur. De borden in Slack hebben klikbare knoppen; met Ontsnap/Hamer sluit je een testronde meteen af.')+'</h2><div>'
     +'<button class="btn" data-actie="veilingOpen">🔨 Veiling openen</button>'
     +'<button class="btn" data-actie="veilingHamer">⚖️ Hamer laten vallen</button>'
-    +'<button class="btn" data-actie="appHomeVerversen">🏠 App Home verversen</button></div>'
-    // Statusregel direct ónder de knoppen. De uitkomst ging eerder naar het spannetje bij de
-    // kaarttitel, ver hierboven, waardoor een melding als "Geen open veiling" onzichtbaar bleef
-    // en het leek alsof er niets gebeurde.
-    +'<div id="i_actiestatus" class="muted" style="margin-top:8px;min-height:1.2em"></div>'
-    +'<div class="lbl" style="margin-top:16px;border-top:1px solid var(--line);padding-top:13px">🗓️ Seizoen &amp; wereldbord'+tip('Het seizoen loopt zes weken tegen één dreiging die door ieders spel wordt teruggedrongen. Synchroniseren doet wat de maandag-cron doet: de fase aankondigen, of een seizoen dat uit de tijd liep beslechten. Geveld/Verloren springt direct naar de finale en start meteen een nieuw seizoen — de uitkomst laat een week lang een zegen of vloek na op de winkelprijzen.')+'</div>'
-    +'<div><button class="btn" data-actie="seizoenSync">🔄 Seizoen synchroniseren</button>'
+    +'</div></div>';
+  var cSeiz='<div class="card" id="k-seizoen"><h2>🗓️ Seizoen &amp; wereldbord'+tip('Het seizoen loopt zes weken tegen één dreiging die door ieders spel wordt teruggedrongen. Synchroniseren doet wat de maandag-cron doet: de fase aankondigen, of een seizoen dat uit de tijd liep beslechten. Geveld/Verloren springt direct naar de finale en start meteen een nieuw seizoen — de uitkomst laat een week lang een zegen of vloek na op de winkelprijzen.')+'</h2><div>'
+    +'<button class="btn" data-actie="seizoenSync">🔄 Seizoen synchroniseren</button>'
     +'<button class="btn" data-actie="seizoenGeveld">🏆 Finale: geveld</button>'
     +'<button class="btn" data-actie="seizoenVerloren">🌫️ Finale: verloren</button>'
     +'<button class="btn" data-actie="wereldbordVerversen">⚜️ Wereldbord verversen</button>'
-    +'<button class="btn" data-actie="wereldOnderwerp">🏷️ Kanaalonderwerp zetten</button></div>'
-    +'<div class="lbl" style="margin-top:16px;border-top:1px solid var(--line);padding-top:13px">⚖️ Tribunaal der Vergetelheid'+tip('Een lid dat 7 dagen volledig stil is (geen bericht, geen daad) en geen afwezigheid meldde kan worden voorgedragen. Klok laten lopen verstuurt de por op dag 5, opent de stemming na de genadetermijn en sluit een verlopen stemming. Elk teken van leven van de beschuldigde blaast de zaak af. Herstel zet het laatst gearchiveerde lid terug met roem en relikwieën.')+'</div>'
-    +'<div><button class="btn" data-actie="statusMeldingen">📬 Statusmeldingen nu sturen</button>'
+    +'<button class="btn" data-actie="wereldOnderwerp">🏷️ Kanaalonderwerp zetten</button>'
+    +'</div></div>';
+  var cTrib='<div class="card" id="k-tribunaal"><h2>⚖️ Tribunaal der Vergetelheid'+tip('Een lid dat 7 dagen volledig stil is (geen bericht, geen daad) en geen afwezigheid meldde kan worden voorgedragen. Klok laten lopen verstuurt de por op dag 5, opent de stemming na de genadetermijn en sluit een verlopen stemming. Elk teken van leven van de beschuldigde blaast de zaak af. Herstel zet het laatst gearchiveerde lid terug met roem en relikwieën.')+'</h2><div>'
     +'<button class="btn" data-actie="activiteitBackfill">👁️ Activiteitsklok herbouwen</button>'
     +'<button class="btn" data-actie="tribunaalKlok">⚖️ Tribunaalklok laten lopen</button>'
     +'<button class="btn" data-actie="gelekaartSluiten">🟨 Gele-kaart-stemming sluiten</button>'
     +'<button class="btn gold" data-actie="groteAmnestie">⚜️ Grote Amnestie afkondigen</button>'
-    +'<button class="btn" data-actie="archiefHerstelLaatste">🕊️ Laatste vonnis herstellen</button></div>'
-    +'<div class="lbl" style="margin-top:16px;border-top:1px solid var(--line);padding-top:13px">📜 Verkondig namens de Kroket God'+tip('Typ je boodschap in gewone taal. Vertaal herschrijft hem in de tone of voice van de Kroket God (kost 1 LLM-call); je kunt het resultaat nog bijschaven. Verkondig plaatst het in het gekozen kanaal (geen extra call).')+'</div>'
+    +'<button class="btn" data-actie="archiefHerstelLaatste">🕊️ Laatste vonnis herstellen</button>'
+    +'</div></div>';
+  var cVerk='<div class="card" id="k-verkondig"><h2>📜 Verkondig namens de Kroket God'+tip('Typ je boodschap in gewone taal. Vertaal herschrijft hem in de tone of voice van de Kroket God (kost 1 LLM-call); je kunt het resultaat nog bijschaven. Verkondig plaatst het in het gekozen kanaal (geen extra call).')+'</h2>'
     +'<textarea id="i_v_in" rows="2" placeholder="bv. vergeet niet dat het vrijdag kroketdag is"></textarea>'
     +'<div style="display:flex;gap:8px;align-items:center;margin-top:6px;flex-wrap:wrap"><select id="i_v_kanaal" style="width:auto"><option value="hoofd">Hoofdkanaal</option><option value="test">Testkanaal</option></select>'
     +'<button class="btn" data-verkondig="vertaal">✨ Vertaal</button>'
@@ -784,26 +799,31 @@ function renderInstellingen(d){
     +'<div style="display:flex;gap:8px;align-items:center;margin-top:6px;flex-wrap:wrap"><span class="lbl" style="margin:0">🗓️ Inplannen op'+tip('Kies een datum/tijd in de toekomst om de verkondiging dan automatisch te plaatsen. Een 1-minuut-controle verstuurt geplande berichten op tijd. Ingeplande berichten verschijnen in de "Ingepland"-kaart en kun je daar overslaan.')+'</span>'
     +'<input type="datetime-local" id="i_v_tijd" style="width:auto;background:#16100a;color:var(--txt);border:1px solid var(--line);border-radius:8px;padding:6px 8px;font:inherit">'
     +'<button class="btn" data-verkondig="plan">🗓️ Inplannen</button><span class="v_status muted"></span></div>'
+    +'</div>';
+  var cAfl='<div class="card" id="k-aflaten"><h2>🛒 Aflatenhandel'+tip('Alles uit de Heilige Aflatenhandel: welke power-ups en vloeken nu actief zijn (✕ verwijdert er een direct), wie wat gekocht heeft en hoe vaak. Bij een vloek zie je hier — anders dan in Slack — wél wie hem legde. Geven kan via het beheer-formulier hieronder.')+'</h2><div id="winkel_overzicht"></div>'
     +'<div class="lbl" style="margin-top:16px;border-top:1px solid var(--line);padding-top:13px">🛒 Aflatenhandel — beheer'+tip('Geef of verwijder een power-up bij een lid zonder kroketpunten te rekenen. Met "aankondigen" plaatst de Frituurraad dezelfde plechtige melding in het hoofdkanaal als bij een echte aankoop; bij een vloek blijft de afzender ook dan verborgen voor het kanaal. Alles komt in de aankoophistorie en het audit-log.')+'</div>'
     +'<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><select id="w_lid" style="width:auto">'+wLeden+'</select>'
     +'<select id="w_item" style="width:auto">'+wItems+'</select>'
     +'<label class="tog" style="margin:0"><input type="checkbox" id="w_aankondig" checked> aankondigen</label>'
     +'<button class="btn gold" data-winkel="geef">🎁 Geef</button>'
     +'<button class="btn" data-winkel="verwijder">🗑️ Verwijder</button></div>'
-    +'<div class="lbl" style="margin-top:16px;border-top:1px solid var(--line);padding-top:13px">🙏 Eerbewijs'+tip('Laat een lid een ander lid eren, precies zoals in Slack. De reden is verplicht: een onafhankelijke jury weegt hem als schraal, deugdelijk, sterk of legendarisch, en daarbinnen bepaalt een dobbel de uitkomst — 0 tot 5 kroketpunten. Een schrale reden kan op niets uitlopen en kost de gever wel een eerbewijs. Dit is geen achterdeur: de daglimiet van de gever geldt, dezelfde reden hergebruiken weegt automatisch het laagst, en wie zijn eigen bondgenoot eert krijgt precies 1 punt terug. Voor stille correcties gebruik je het scorebeheer op het Beheer-tabblad.')+'</div>'
+    +'</div>';
+  var cEer='<div class="card" id="k-eer"><h2>🙏 Eerbewijs'+tip('Laat een lid een ander lid eren, precies zoals in Slack. De reden is verplicht: een onafhankelijke jury weegt hem als schraal, deugdelijk, sterk of legendarisch, en daarbinnen bepaalt een dobbel de uitkomst — 0 tot 5 kroketpunten. Een schrale reden kan op niets uitlopen en kost de gever wel een eerbewijs. Dit is geen achterdeur: de daglimiet van de gever geldt, dezelfde reden hergebruiken weegt automatisch het laagst, en wie zijn eigen bondgenoot eert krijgt precies 1 punt terug. Voor stille correcties gebruik je het scorebeheer hieronder.')+'</h2>'
     +'<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span class="muted">van</span><select id="e_gever" style="width:auto">'+wLeden+'</select>'
     +'<span class="muted">eert</span><select id="e_ontvanger" style="width:auto">'+wLeden+'</select></div>'
     +'<textarea id="e_reden" rows="2" maxlength="300" placeholder="Waarvoor? Beschrijf de daad, niet het gevoel — bv. bleef tot acht uur om mijn deploy te repareren" style="margin-top:6px"></textarea>'
     +'<div style="margin-top:6px"><button class="btn gold" data-eer>🙏 Eer bewijzen</button></div>'
-    +'<div class="lbl" style="margin-top:16px;border-top:1px solid var(--line);padding-top:13px">🧪 Test-console'+tip('Stuur een prompt naar de Kroket God en zie zijn antwoord hier — er wordt NIETS in Slack geplaatst. Handig om de tone of voice, het decreet of een stemming te testen. Kost 1 LLM-call.')+'</div>'
+    +'</div>';
+  var cTest='<div class="card" id="k-test"><h2>🧪 Test-console'+tip('Stuur een prompt naar de Kroket God en zie zijn antwoord hier — er wordt NIETS in Slack geplaatst. Handig om de tone of voice, het decreet of een stemming te testen. Kost 1 LLM-call.')+'</h2>'
     +'<textarea id="test_prompt" rows="2" placeholder="bv. wat vindt de Kroket God van bitterballen?"></textarea>'
     +'<div style="margin-top:6px"><button class="btn" data-test>🧪 Test</button></div>'
     +'<pre id="test_out" style="margin-top:8px;white-space:pre-wrap;background:#16100a;border:1px solid var(--line);border-radius:8px;padding:10px;font:inherit;color:var(--txt);min-height:20px"></pre>'
     +'</div>';
-  var host=document.getElementById('instellingen');
-  host.innerHTML=html;
-  host.onclick=function(e){var b=e.target.closest('button');if(!b)return;if(b.hasAttribute('data-save'))bewaar();else if(b.hasAttribute('data-test'))testPrompt();else if(b.getAttribute('data-verkondig'))verkondig(b.getAttribute('data-verkondig'));else if(b.hasAttribute('data-eer'))eerGeef();else if(b.getAttribute('data-winkel'))winkelBeheer(b.getAttribute('data-winkel'));else if(b.getAttribute('data-actie'))doeActie(b.getAttribute('data-actie'));};
-  host.oninput=function(e){if(e.target.id==='i_decreetInt'){var p=document.getElementById('i_decreetIntPct');if(p)p.textContent=e.target.value+'%';}};
+  function zet(id,h){var el=document.getElementById(id);if(el)el.innerHTML=h;}
+  zet('h_spel',cCas+cWeek+cVeil);zet('h_afl',cAfl);zet('h_recht1',cTrib);zet('h_recht2',cEer);zet('h_verk',cVerk);zet('h_verk2',cSeiz);zet('h_sys1',cAlg);zet('h_sys2',cTest);vulStatisch();
+  var host=document.querySelector('main');
+  host.addEventListener('click',function(e){var b=e.target.closest('button');if(!b)return;if(b.hasAttribute('data-save'))bewaar();else if(b.hasAttribute('data-test'))testPrompt();else if(b.getAttribute('data-verkondig'))verkondig(b.getAttribute('data-verkondig'));else if(b.hasAttribute('data-eer'))eerGeef();else if(b.getAttribute('data-winkel'))winkelBeheer(b.getAttribute('data-winkel'));else if(b.getAttribute('data-actie'))doeActie(b.getAttribute('data-actie'));});
+  host.addEventListener('input',function(e){if(e.target.id==='i_decreetInt'){var p=document.getElementById('i_decreetIntPct');if(p)p.textContent=e.target.value+'%';}});
 }
 function bewaar(){
   var uit=[];document.querySelectorAll('[data-prov]').forEach(function(c){if(c.checked)uit.push(c.getAttribute('data-prov'));});
@@ -891,15 +911,28 @@ function testPrompt(){
 function post(url,body,okmsg,statusId){var st=typeof statusId==='object'?statusId:document.getElementById(statusId||'i_status');if(st)st.textContent='…';var tok=getToken();return fetch(url,{method:'POST',headers:{'Content-Type':'application/json','Authorization':tok?'Bearer '+tok:''},body:JSON.stringify(body)}).then(function(r){return r.json();}).then(function(j){if(j.error&&j.error.indexOf('DASHBOARD_TOKEN')!==-1){showLogin();return;}if(st)st.textContent=(j.ok?((j.bericht||okmsg)+' ✓'):('Fout: '+(j.error||'')));}).catch(function(){if(st)st.textContent='Fout';});}
 function showLogin(){var el=document.getElementById('login_overlay');if(el)el.style.display='flex';}
 function saveToken(){var t=document.getElementById('login_token').value.trim();if(t){localStorage.setItem('dashboard_token',t);document.getElementById('login_overlay').style.display='none';}}
-function tick(){var tok=getToken();fetch('/api/stats',{headers:tok?{'Authorization':'Bearer '+tok}:{}}).then(function(r){if(r.status===401){showLogin();document.getElementById('status').textContent='toegangscode vereist';document.getElementById('status').className='pill off';return null;}return r.json();}).then(function(d){if(!d)return;render(d);if(!ingesteld){renderInstellingen(d);ingesteld=true;}if(!personasIngesteld){renderPersonaForm();personasIngesteld=true;}renderPersonaLijst(d);}).catch(function(){document.getElementById('status').textContent='offline';document.getElementById('status').className='pill off';});}
-// ── Tab-navigatie (2.0): actieve tab onthouden in localStorage ────────────────
+function tick(){var tok=getToken();fetch('/api/stats',{headers:tok?{'Authorization':'Bearer '+tok}:{}}).then(function(r){if(r.status===401){showLogin();document.getElementById('status').textContent='toegangscode vereist';document.getElementById('status').className='pill off';return null;}return r.json();}).then(function(d){if(!d)return;render(d);if(!ingesteld){renderInstellingen(d);ingesteld=true;}if(!personasIngesteld){renderPersonaForm();personasIngesteld=true;}renderPersonaLijst(d);if(!hashKlaar){hashKlaar=true;if(location.hash)gaNaarHash();}}).catch(function(){document.getElementById('status').textContent='offline';document.getElementById('status').className='pill off';});}
+// ── Tab-navigatie: tab en kaart in de URL-hash (#spel/casino); localStorage als terugval ──
+var TABS=['overzicht','spel','recht','verkondigen','personas','systeem'];
+var hashKlaar=false;
 function switchTab(t){
+  if(TABS.indexOf(t)<0)t='overzicht';
   document.querySelectorAll('.tab').forEach(function(b){b.classList.toggle('act',b.getAttribute('data-tab')===t);});
   document.querySelectorAll('.tabpane').forEach(function(p){p.classList.toggle('act',p.id==='tab-'+t);});
   try{localStorage.setItem('dash_tab',t);}catch(_){}
 }
-document.getElementById('tabs').onclick=function(e){var b=e.target.closest('.tab');if(b)switchTab(b.getAttribute('data-tab'));};
-switchTab((function(){try{return localStorage.getItem('dash_tab');}catch(_){return null;}})()||'overzicht');
+function gaNaarHash(){
+  var m=(location.hash||'').replace(/^#/,'').split('/');
+  if(TABS.indexOf(m[0])<0)return false;
+  switchTab(m[0]);
+  var el=m[1]&&document.getElementById('k-'+m[1]);
+  if(el)el.scrollIntoView({block:'start'});
+  return true;
+}
+document.getElementById('tabs').onclick=function(e){var b=e.target.closest('.tab');if(b){var t=b.getAttribute('data-tab');switchTab(t);try{history.replaceState(null,'','#'+t);}catch(_){}}};
+document.querySelector('main').addEventListener('click',function(e){var c=e.target.closest('.chip');if(!c)return;e.preventDefault();var h=c.getAttribute('href');if(location.hash===h)gaNaarHash();else location.hash=h;});
+window.addEventListener('hashchange',gaNaarHash);
+if(!gaNaarHash())switchTab((function(){try{return localStorage.getItem('dash_tab');}catch(_){return null;}})()||'overzicht');
 // Logs-zoekfilter: verbergt niet-matchende regels in alle feeds op het Logs-tabblad
 function filterLogs(){
   var q=(document.getElementById('logzoek').value||'').toLowerCase();
