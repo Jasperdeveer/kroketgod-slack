@@ -53,4 +53,17 @@ harnas(async (h) => {
   h.ok(regieStaat().verrassing === null && JSON.stringify(h.lees('scores.json')) === JSON.stringify(sb) && h.posts.length === postsVoor && /beëindigd/.test(mv), `regieVerrassingStop: gewist zonder uitbetaling of bericht (${mv})`);
   h.ok(h.lees('auditlog.json').items.some((i) => i.endpoint === 'regie' && /stil beëindigd/.test(JSON.stringify(i))), 'regieVerrassingStop staat in het auditlog');
   h.ok(/geen/.test(await voerDashboardActie('regieVerrassingStop')), 'zonder verrassing: melding');
+
+  // M7: een lopende zaak van het lichte tribunaal zichtbaar en stil te beëindigen.
+  const sluitTs = Date.now() + 600_000;
+  bewaarRegie({ ...regieStaat(), zaak: { id: 'zaak-1', doel: 'UB', grond: 'ketterij', citaat: null, titel: 'Ketter van de Dag', stemmen: { UA: 'boete' }, sluitTs, kanaal: 'CKANAAL' } });
+  d = await bouwDashboardData();
+  h.ok(d.regie.zaak?.doel === 'Bravo' && d.regie.zaak.grond === 'ketterij' && d.regie.zaak.sluitTs === sluitTs && d.regie.zaak.stemmen === 1, `stats.regie: lopende zaak zichtbaar (${JSON.stringify(d.regie.zaak)})`);
+  const sc = JSON.stringify(h.lees('scores.json')); const pz = h.posts.length;
+  const mz = await voerDashboardActie('regieZaakStop');
+  h.ok(!regieStaat().zaak && JSON.stringify(h.lees('scores.json')) === sc && h.posts.length === pz && /beëindigd/.test(mz), `regieZaakStop: zaak gewist zonder uitspraak (${mz})`);
+  h.ok(h.lees('auditlog.json').items.some((i) => i.endpoint === 'regie' && /licht tribunaal.*stil beëindigd/.test(JSON.stringify(i))), 'regieZaakStop staat in het auditlog');
+  h.ok(/geen/.test(await voerDashboardActie('regieZaakStop')), 'zonder zaak: melding');
+  const html = require('fs').readFileSync(require('path').join(__dirname, '../../dashboard.html'), 'utf8');
+  h.ok(/regieZaakStop\(\)/.test(html) && /rg\.zaak/.test(html), 'dashboard.html toont de zaak met een beëindig-knop');
 });

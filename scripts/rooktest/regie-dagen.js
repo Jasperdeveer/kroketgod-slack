@@ -22,7 +22,7 @@ harnas(async (h) => {
   h.schrijf('allianties.json', {});
 
   // 1. Zegendag: een niet-profeet zegent één keer.
-  schoon({ effecten: [dagEffect('zegendag', { gezegend: [] })] });
+  schoon({ effecten: [dagEffect('zegendag', { gezegend: [], ts: '555' })] });
   const ub = score('UB');
   await h.commando('UA', 'zegen Bravo');
   h.ok(score('UB') === ub + 1, `UB krijgt +1 (${score('UB') - ub})`);
@@ -30,6 +30,7 @@ harnas(async (h) => {
   h.ok(teller('UB', 'gezegend') === 1, 'tellers: UB gezegend 1');
   h.ok(effect('zegendag').data.gezegend.includes('UA'), 'UA staat in gezegend');
   h.ok(h.posts.some((p) => /Bravo/.test(p.text) && /zegen/i.test(p.text)), 'templated regel in het kanaal');
+  h.ok(h.posts.filter((p) => /Zegen:/.test(p.text)).every((p) => p.thread === '555') && h.posts.some((p) => /Zegen:/.test(p.text)), 'M9: de zegen staat als draadregel onder de aankondiging');
   const uc = score('UC');
   const tweede = await h.commando('UA', 'zegen Charlie');
   h.ok(score('UC') === uc && /zegendag/i.test(tweede), `tweede zegen geweigerd en noemt de zegendag: ${tweede.trim()}`);
@@ -121,6 +122,7 @@ harnas(async (h) => {
   schoon();
   const z = await regieTik(h.client, { forceer: true, rng: () => 0, nu, beschikbaar: ['zegendag'] });
   h.ok(z?.ingreep.id === 'zegendag' && Array.isArray(effect('zegendag')?.data.gezegend) && effect('zegendag').tot > nu, 'tik zet een zegendag met gezegend []');
+  h.ok(!!effect('zegendag').data.ts && h.posts.some((p) => p.ts === effect('zegendag').data.ts), 'M9: de ts van de aankondiging staat in het effect');
   schoon();
   const v = await regieTik(h.client, { forceer: true, rng: () => 0, nu, beschikbaar: ['verbondsdag'] });
   h.ok(v?.ingreep.id === 'verbondsdag' && Array.isArray(effect('verbondsdag')?.data.gesloten), 'tik zet een verbondsdag met gesloten []');

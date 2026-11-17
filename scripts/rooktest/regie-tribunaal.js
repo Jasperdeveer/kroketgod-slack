@@ -3,9 +3,9 @@
 const fs = require('fs');
 const path = require('path');
 const harnas = require('./harnas.js');
-const { voegToeAanArchief } = require('../../lib/archief.js');
 
 harnas(async (h) => {
+  const { voegToeAanArchief } = require('../../lib/archief.js'); // pas na harnas(): dat zet KROKET_ARCHIEF_PAD
   const { regieTik, regieKlok, sluitZaak, stemZaak, bouwRegieStand } = h.index;
   const staat = () => h.lees('regie.json');
   const score = (id) => h.lees('scores.json')[id] || 0;
@@ -92,6 +92,13 @@ harnas(async (h) => {
   maakSchoon(); await tik(); zaakMet({ UA: 'boete', UC: 'titel' });
   await sluitZaak(h.client);
   h.ok(score('UB') === 10 && staat().effecten.some((x) => x.soort === 'schandtitel'), 'gelijkspel boete/titel: titel');
+
+  // M6: het doelwit is inmiddels verbannen: vrijspraak, geen boete.
+  maakSchoon(); await tik(); zaakMet({ UA: 'boete', UC: 'boete' });
+  h.schrijf('verbanning.json', { UB: { tot: new Date(Date.now() + 3_600_000).toISOString(), reden: 'x' } });
+  const uV = await sluitZaak(h.client);
+  h.ok(uV?.uitspraak === 'vrij' && score('UB') === 10 && staat().schatkist === 0, 'M6: een verbannen doelwit wordt vrijgesproken, geen boete');
+  h.schrijf('verbanning.json', {});
 
   // Zegen
   maakSchoon(); h.schrijf('powerups.json', { UB: [{ item: 'zegen', tot: Date.now() + 3_600_000 }] });

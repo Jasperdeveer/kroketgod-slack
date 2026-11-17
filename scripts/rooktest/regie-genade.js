@@ -38,11 +38,18 @@ harnas(async (h) => {
     ['rode kaart', { tot: uur(2), beroepGeprobeerd: true, kaart: 'rood' }],
     ['zonder beroep', { tot: uur(2) }],
     ['nog 20 minuten', { tot: new Date(nu + 20 * 60_000).toISOString(), beroepGeprobeerd: true }],
+    ['ban verlengd door de eigenaar (M4)', { tot: uur(2), beroepGeprobeerd: true, beheerder: true }],
   ]) {
     schoon();
     h.schrijf('verbanning.json', { UB: rec });
     h.ok(!(await tik()) && !!h.lees('verbanning.json').UB, `geen genade: ${naam}`);
   }
+  // M4: een bondgenoot met een lopende rode kaart komt niet via genade vrij.
+  schoon();
+  h.schrijf('allianties.json', { UB: ['UC'], UC: ['UB'] });
+  h.schrijf('verbanning.json', { UB: { tot: uur(2), beroepGeprobeerd: true }, UC: { tot: new Date(Date.now() + 7_200_000).toISOString(), kaart: 'rood' } });
+  h.ok(!(await tik()) && !!h.lees('verbanning.json').UB && !!h.lees('verbanning.json').UC, 'geen genade: de bondgenoot heeft een rode kaart');
+  h.schrijf('allianties.json', {});
   h.schrijf('verbanning.json', {});
 
   // Vrijgevige bui.

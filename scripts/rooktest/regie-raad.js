@@ -4,9 +4,9 @@ const fs = require('fs');
 const path = require('path');
 const harnas = require('./harnas.js');
 const regie = require('../../lib/regie.js');
-const { voegToeAanArchief } = require('../../lib/archief.js');
 
 harnas(async (h) => {
+  const { voegToeAanArchief } = require('../../lib/archief.js'); // pas na harnas(): dat zet KROKET_ARCHIEF_PAD
   const { bouwRegieStand, regieTik, sluitGeleKaartPoll, regieStaat, UITVOERDERS } = h.index;
   const nu = Date.now();
   const schoon = () => {
@@ -87,6 +87,38 @@ harnas(async (h) => {
   h.schrijf('gelekaartpoll.json', { ...poll(), actief: false, uitkomst: 'onterecht', beslistTs: 0 });
   await klacht('UC');
   h.ok(poll().aanklagerId === 'UA' && !poll().actief, 'ook na het sluiten: hoogstens één voordracht per uur');
+
+  h.ok(staat().log.some((r) => r.id === 'klachtenuur' && r.laag === 'nawerking' && r.doel === 'UB' && r.schorsing === true && r.punten === 0), 'I2: de voordracht uit het klachtenuur telt als schorsing in het plafond');
+  const uurData = () => staat().effecten.find((e) => e.id === 'klachtenuur')?.data;
+
+  // 6b. I2: een klacht tegen wie al geel heeft wordt geen voordracht (nooit rood), het uur blijft bruikbaar.
+  schoon();
+  h.schrijf('geleKaarten.json', { UB: { kaarten: [{ ts: nu, reden: 'test', weekSleutel: h.index.getMondayOfWeek(), kleur: 'geel' }] } });
+  await UITVOERDERS.klachtenuur(h.client, { duurMinuten: 60 }, {}, Date.now());
+  await klacht('UA');
+  h.ok(poll() === null && uurData().gebruikt === false, 'I2: doelwit met geel: geen poll, uur niet verbruikt');
+  // 6c. I2: schorsingsplafond vol: geen poll.
+  schoon();
+  await UITVOERDERS.klachtenuur(h.client, { duurMinuten: 60 }, {}, Date.now());
+  h.schrijf('regie.json', { ...staat(), log: [{ ts: Date.now(), id: 'schorsing', laag: 'ingreep', doel: 'UE', punten: 0, soort: 'nemen', schorsing: true }] });
+  await klacht('UA');
+  h.ok(poll() === null && uurData().gebruikt === false, 'I2: plafond vol: geen poll');
+  // 6d. I2: een geweigerde poll (UB is al verbannen) verbruikt het uur niet.
+  schoon();
+  h.schrijf('verbanning.json', { UB: { tot: new Date(Date.now() + 3_600_000).toISOString(), opgelegd: new Date().toISOString() } });
+  await UITVOERDERS.klachtenuur(h.client, { duurMinuten: 60 }, {}, Date.now());
+  await klacht('UA');
+  h.ok(poll() === null && uurData().gebruikt === false && !staat().log.some((r) => r.id === 'klachtenuur' && r.laag === 'nawerking'), 'I2: geweigerde poll: uur nog bruikbaar, niets geboekt');
+
+  // 6e. I1: het onderzoek-citaat en de ketterij komen nooit van vóór het jongste lid.
+  schoon();
+  const ledenVoor = h.lees('members.json');
+  h.schrijf('members.json', { ...ledenVoor, UF: { ...ledenVoor.UF, lidSinds: new Date(Date.now() + 5000).toISOString() } });
+  await UITVOERDERS.klachtenuur(h.client, { duurMinuten: 60 }, {}, Date.now());
+  await klacht('UA');
+  h.ok(poll()?.actief && !/onderzoek/.test(poll().reden), `I1: geen citaat van vóór het jongste lid in de reden: ${poll()?.reden}`);
+  h.ok(ub(bouwRegieStand(Date.now())).ketterij === null, 'I1: geen ketterij uit berichten van vóór het jongste lid');
+  h.schrijf('members.json', ledenVoor);
 
   // 7. De reden bevat tekst van een lid: mentions en links breken niet uit.
   schoon();

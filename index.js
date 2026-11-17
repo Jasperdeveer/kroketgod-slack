@@ -459,6 +459,7 @@ const app = new App({
             const u = Math.min(Math.max(parseInt(uren, 10) || 4, 1), 168);
             const tot = new Date(Math.max(Date.now(), new Date(verbanning[userId].tot).getTime()) + u * 3_600_000);
             verbanning[userId].tot = tot.toISOString();
+            verbanning[userId].beheerder = true; // geen berouw/genade meer voor een ban van de eigenaar
             saveVerbanning(verbanning);
             logAudit('ban', `${naam}: +${u}u verlengd`);
             res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
@@ -1057,7 +1058,7 @@ async function startStilleMissie(client, channelId, doelwitId, { door = 'beheerd
   const teamZin = deelnemers.length > 1 ? `\n\n_U voert deze missie uit als alliantie met ${deelnemers.map(id => allMembers[id]?.bijnaam).filter(Boolean).join(' & ')}_` : '';
   for (const uid of deelnemers) {
     await postEphemeral(client, channelId, uid,
-      `⚜️ *STILLE MISSIE* ⚜️\n\nDe Kroket God heeft u uitverkoren.${teamZin}\n\n*Uw opdracht:*\n${missieData.beschrijving}\n\n_Succesvol voltooid: 3 kroketpunten elk. Verloopt over 24 uur. Spreek hier niet over._`);
+      `⚜️ *STILLE MISSIE* ⚜️\n\nDe Kroket God heeft u uitverkoren.${teamZin}\n\n*Uw opdracht:*\n${missieData.beschrijving}\n\n_Succesvol voltooid: een beloning in kroketpunten. Verloopt over 24 uur. Spreek hier niet over._`);
   }
   return { teamNamen };
 }
@@ -3061,6 +3062,15 @@ function bevrijdAlliantiePartnerMee(userId, bijnaam, resetVergrijpenOok = false)
     }
     return bijnamenVan(vast, members);
   } catch (_) { return null; }
+}
+
+// Genade na berouw: niet bij een rode kaart, niet bij een ban die de eigenaar zelf verlengde, en niet als de bondgenoot
+// (die mee vrijkomt, zie hierboven) een lopende rode kaart heeft.
+function magGenade(userId, nu = Date.now()) {
+  const verb = loadVerbanning();
+  const v = verb[userId];
+  if (!v?.beroepGeprobeerd || v.kaart === 'rood' || v.beheerder) return false;
+  return !getBondgenoten(userId).some((id) => verb[id]?.kaart === 'rood' && nu <= new Date(verb[id].tot).getTime());
 }
 
 // ── Het verliesgrootboek: wie deed u dit aan ──────────────────────────────────
@@ -6765,7 +6775,10 @@ async function voerKroketCommandoUit({ command, respond, client }) {
         pasEffectAan(zegendag.id, (d) => ({ ...d, gezegend: [...(d.gezegend || []), command.user_id] }));
         await telActie(client, doelId, 'gezegend');
         logGebeurtenis('zegen', doelId, `${members[command.user_id].bijnaam} zegende ${doelLid.bijnaam} op de zegendag (+1)`, null, command.user_id);
-        await postToChannel(client, command.channel_id, `🕊️ *ZEGENDAG* 🕊️\n\n> *${members[command.user_id].bijnaam}* legt de handen op *${doelLid.bijnaam}*: *+1 kroketpunt*, uit de Schatkist van de Kroket God.\n\n— De Hoge Frituurraad`);
+        // Als draadregel onder de zegendag-aankondiging; zonder bewaarde ts (aankondiging mislukt) alleen een ephemeral, geen losse kanaalpost.
+        const zegenTekst = `🕊️ *Zegen:* *${members[command.user_id].bijnaam}* legt de handen op *${doelLid.bijnaam}*: *+1 kroketpunt*, uit de Schatkist van de Kroket God.`;
+        if (zegendag.data?.ts) await postToChannel(client, command.channel_id, zegenTekst, { thread_ts: zegendag.data.ts });
+        else await respond({ text: zegenTekst, response_type: 'ephemeral' });
         return;
       }
       profeet.zegenGebruikt = true;
@@ -7157,11 +7170,16 @@ async function voerKroketCommandoUit({ command, respond, client }) {
         if (uur && !uur.data.gebruikt) {
           if (loadGeleKaartPoll()?.actief) {
             await respond('_Er loopt al een stemming van de Raad: uw klacht blijft een klacht en wordt geen voordracht._');
+          } else if (heeftGeleKaartDezeWeek(doelwitId) || regie.ruimte(regieStaat(), Date.now()).schorsing <= 0) {
+            // Nooit rood door een klacht, en een voordracht telt als schorsing in het plafond: dan blijft het een tekst.
+            await respond('_De Raad neemt deze klacht ter kennis, maar zij wordt geen voordracht._');
           } else {
             verbruikRegieKnop(uur.id);
-            const cit = willekeurigCitaat({ sprekerIds: [doelwitId] });
+            const cit = willekeurigCitaat({ sprekerIds: [doelwitId], nieuwerDan: gedeeldSinds() });
             const onderzoek = cit ? ` — uit het onderzoek: "${cit.tekst.slice(0, 100)}"` : '';
-            await startGeleKaartPoll(client, doelwitId, command.user_id, (reden || 'klacht') + onderzoek, command.channel_id);
+            const uit = await startGeleKaartPoll(client, doelwitId, command.user_id, (reden || 'klacht') + onderzoek, command.channel_id);
+            if (uit.ok) bewaarRegie(regie.boekNawerking(regieStaat(), { nu: Date.now(), id: 'klachtenuur', doel: doelwitId, punten: 0, schorsing: true }));
+            else { pasEffectAan(uur.id, (d) => ({ ...d, gebruikt: false })); await respond(uit.tekst); } // het uur blijft bruikbaar
           }
         }
         const tekst = await kroketResponse(
@@ -13624,8 +13642,8 @@ function bouwRegieStand(nu = Date.now()) {
   const vandaagTs = (ts) => !!ts && regie.amsMoment(ts).dag === dag;
   // Ketterij: het nieuwste lidbericht van vandaag uit het archief dat isKetterij is. In de week van de Airfryer-Kroket
   // gaat elk aanvalsbericht over de airfryer, dus dan nooit.
-  const airfryerWeek = readJSON('bamischijf.json', {}).vijand?.key === 'airfryer_kroket';
-  const ketterBerichten = airfryerWeek ? [] : entriesTussen({ soort: 'lid', van: nu - regie.amsMoment(nu).minuut * 60_000, max: 3000 }).filter((e) => regie.isKetterij(e.tekst));
+  const airfryerWeek = ['airfryer_kroket', 'magnetron_kroket'].includes(readJSON('bamischijf.json', {}).vijand?.key);
+  const ketterBerichten = airfryerWeek ? [] : entriesTussen({ soort: 'lid', van: Math.max(nu - regie.amsMoment(nu).minuut * 60_000, gedeeldSinds()), max: 3000 }).filter((e) => regie.isKetterij(e.tekst));
   const ledenStand = Object.keys(leden).map((id) => {
     const spellen = Object.values(cijfers.leden?.[id] || {});
     const reeks = (cijfers.uitslagen?.[id] || '').match(/W*$/)[0].length;
@@ -13641,7 +13659,7 @@ function bouwRegieStand(nu = Date.now()) {
       kaarten30: (geleKaartenAlle[id]?.kaarten || []).filter((k) => k.ts >= nu - 30 * DAG_MS).length,
       ketterij: ketterBerichten.filter((e) => e.sprekerId === id).pop()?.tekst.slice(0, 120) ?? null,
       inVerbond: getBondgenoten(id).length > 0,
-      berouw: !!verbanning[id]?.beroepGeprobeerd && verbanning[id].kaart !== 'rood'
+      berouw: magGenade(id, nu)
         && new Date(verbanning[id].tot).getTime() - nu >= 30 * 60_000,
       ontsnapt: regieStaat().effecten.some((e) => e.soort === 'ontsnapt' && e.data?.doel === id && e.tot > nu),
       vergrijpVandaag: (vergrijpen[id] || []).some((v) => vandaagTs(v.ts)),
@@ -13829,7 +13847,7 @@ const UITVOERDERS = {
   genade: async (client, keuze) => {
     const verb = loadVerbanning();
     const v = verb[keuze.doel];
-    if (!v || !v.beroepGeprobeerd || v.kaart === 'rood') return { tekst: null };
+    if (!v || !magGenade(keuze.doel)) return { tekst: null };
     const naam = loadMembers()[keuze.doel]?.bijnaam || 'een volgeling';
     delete verb[keuze.doel];
     saveVerbanning(verb);
@@ -13843,7 +13861,8 @@ const UITVOERDERS = {
   },
   zegendag: async (client, keuze, stand, nu) => {
     regieEffect('zegendag', keuze.duurMinuten || regie.restVanDag(nu), { gezegend: [] });
-    return { feiten: 'Vandaag mag iedereen één keer een ander zegenen met `zegen [naam]`: +1 punt voor de ontvanger.' };
+    return { feiten: 'Vandaag mag iedereen één keer een ander zegenen met `zegen [naam]`: +1 punt voor de ontvanger.',
+      naPost: async (v) => { if (v?.ts) pasEffectAan('zegendag', (d) => ({ ...d, ts: v.ts })); } }; // de zegens komen als draadregels eronder
   },
   verbondsdag: async (client, keuze, stand, nu) => {
     regieEffect('verbondsdag', keuze.duurMinuten || regie.restVanDag(nu), { gesloten: [] });
@@ -14169,11 +14188,13 @@ async function regieBericht(client, event) {
 async function regieKlok(client, { nu = Date.now() } = {}) {
   // Het lichte tribunaal sluit hier, op zaak.sluitTs. Veel te laat (bot uren uit): stil laten vervallen, geen straf op een oud verhaal.
   // In de stille modus wacht de zaak tot de Kroket God weer mag spreken.
+  const t0 = Date.now();
   const zaak = regieStaat().zaak;
   if (zaak && nu > zaak.sluitTs + 3 * 3_600_000) { bewaarRegie({ ...regieStaat(), zaak: null }); logAudit('regie', `licht tribunaal tegen ${zaak.doel} stil vervallen: ruim verlopen`); }
   else if (zaak && mogAutonoomPosten(nu, { weekendTelt: false })) {
     try { await sluitZaak(client, nu); } catch (err) { console.error('Fout bij het sluiten van het lichte tribunaal:', err?.message || err); }
   }
+  nu += Date.now() - t0; // sluitZaak kan lang duren (LLM): de verrassingscontroles lopen mee met de klok (een opgegeven `nu` blijft geldig)
   const v = verrassingStaat();
   if (!v) return;
   // Ruim verlopen (bot uren uit, of stille modus net opgeheven): stil wissen, zonder uitbetaling of straf.
@@ -14404,13 +14425,13 @@ async function sluitZaak(client, nu = Date.now()) {
   const stemmen = Object.entries(z.stemmen || {}).filter(([u]) => u !== z.doel).map(([, k]) => k);
   const tel = Object.fromEntries(['boete', 'titel', 'vrij'].map((k) => [k, stemmen.filter((x) => x === k).length]));
   const top = Math.max(tel.boete, tel.titel, tel.vrij);
-  const uitspraak = stemmen.length < 2 || !loadMembers()[z.doel] ? 'vrij' : ZAAK_UITSPRAAK_MILD.find((k) => tel[k] === top);
+  const uitspraak = stemmen.length < 2 || !loadMembers()[z.doel] || isVerbannen(z.doel) ? 'vrij' : ZAAK_UITSPRAAK_MILD.find((k) => tel[k] === top);
   const naam = loadMembers()[z.doel]?.bijnaam || 'een volgeling';
   let feiten, vangnet, afgeketst = false;
   if (uitspraak === 'boete') {
     const uit = neemNawerking({ nu, id: 'licht_tribunaal', doel: z.doel, punten: 2 });
     afgeketst = uit.punten === 0;
-    feiten = afgeketst ? `De Raad sprak een boete van 2 punten uit, maar die ketst af (${uit.feiten}) Spot met de poging.` : `De Raad sprak een boete uit: ${-uit.punten} punt${uit.punten === -1 ? '' : 'en'} naar de Schatkist.`;
+    feiten = afgeketst ? `De Raad sprak een boete van 2 punten uit, maar die ketst af (${uit.feiten})` : `De Raad sprak een boete uit: ${-uit.punten} punt${uit.punten === -1 ? '' : 'en'} naar de Schatkist.`;
     vangnet = afgeketst ? `⚖️ De Raad wilde <@${z.doel}> beboeten, maar de boete ketst af. De Kroket God lacht.` : `⚖️ De Raad heeft gesproken: <@${z.doel}> draagt *${-uit.punten} punt${uit.punten === -1 ? '' : 'en'}* af aan de Schatkist.`;
   } else if (uitspraak === 'titel') {
     bewaarRegie(regie.voegEffectToe(regieStaat(), { id: `schandtitel_${z.doel}`, soort: 'schandtitel', tot: nu + 24 * 3_600_000, data: { doel: z.doel, titel: z.titel } }));
@@ -17178,7 +17199,7 @@ function bouwGeleKaartPollBlocks(poll) {
         : poll.godStem
         ? `⚜️ *De Kroket God heeft gesproken: :${godEmoji}: ${poll.godStem.toUpperCase()}* — zijn stem weegt *dubbel* en staat vast.\n`
         : `De Kroket God stemt zelf ook mee, en zijn stem weegt *dubbel*.\n`) +
-      `De Raad heeft nog *~${min} minuut/minuten* om hem bij te vallen of te overrulen.` } });
+      `De Raad heeft nog *~${min} minuut/minuten* om te stemmen.` } });
   } else {
     const u = poll.uitslag || {};
     const kop = poll.uitkomst === 'terecht'
@@ -21082,6 +21103,7 @@ function bouwRegieDashboard(nu) {
       .map((r) => ({ ts: r.ts, id: r.id, laag: r.laag, doel: r.doel ? (leden[r.doel]?.bijnaam || r.doel) : null, punten: r.punten || 0 })),
     effecten: s.effecten.filter((e) => e.tot > nu).map((e) => ({ id: e.id || e.soort, soort: e.soort, tot: e.tot })),
     verrassing: s.verrassing,
+    zaak: s.zaak ? { doel: leden[s.zaak.doel]?.bijnaam || s.zaak.doel, grond: s.zaak.grond, sluitTs: s.zaak.sluitTs, stemmen: Object.keys(s.zaak.stemmen || {}).length } : null,
   };
 }
 
@@ -21529,6 +21551,14 @@ async function voerDashboardActie(actie, body = {}) {
       wisVerrassing();
       logAudit('regie', `verrassing ${v.id} stil beëindigd door de eigenaar`);
       return `Verrassing ${v.id} beëindigd, zonder uitbetaling.`;
+    }
+    // Een lopende zaak van het lichte tribunaal stil wissen: geen uitspraak, geen boete, geen bericht.
+    case 'regieZaakStop': {
+      const z = regieStaat().zaak;
+      if (!z) return 'Er loopt geen zaak.';
+      bewaarRegie({ ...regieStaat(), zaak: null });
+      logAudit('regie', `licht tribunaal tegen ${loadMembers()[z.doel]?.bijnaam || z.doel} stil beëindigd door de eigenaar`);
+      return 'Zaak beëindigd, zonder uitspraak.';
     }
     case 'resetCooldowns':
       geminiKeyCooldownTot.clear(); providerCooldownTot.clear(); wisBank();

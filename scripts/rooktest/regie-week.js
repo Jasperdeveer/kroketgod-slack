@@ -3,7 +3,6 @@
 'use strict';
 const harnas = require('./harnas.js');
 const regieLib = require('../../lib/regie.js');
-const { voegToeAanArchief } = require('../../lib/archief.js');
 
 const DAGEN = ['2026-11-23', '2026-11-24', '2026-11-25', '2026-11-26', '2026-11-27'];
 const LEDEN = ['UA', 'UB', 'UC', 'UD', 'UE', 'UF'];
@@ -15,6 +14,7 @@ function mulberry32(a) {
 }
 
 harnas(async (h) => {
+  const { voegToeAanArchief } = require('../../lib/archief.js'); // pas na harnas(): dat zet KROKET_ARCHIEF_PAD
   const { regieTik } = h.index;
   const echteNu = Date.now;
   const gekozen = new Set();

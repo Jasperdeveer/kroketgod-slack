@@ -38,6 +38,11 @@ module.exports = async function harnas(test, { opstartMs = 2500 } = {}) {
   };
   require.cache[fetchPad] = { id: fetchPad, filename: fetchPad, loaded: true, exports: Object.assign(nepFetch, { default: nepFetch }) };
 
+  // Geen echte crons: een minuut-cron (poll sluiten, regieKlok) die midden in een test afgaat, gaf de zeldzame fout in regie-macht.
+  const cronPad = require.resolve('node-cron', { paths: [repo] });
+  const nepTaak = { start() {}, stop() {}, destroy() {}, getNextRun: () => null };
+  require.cache[cronPad] = { id: cronPad, filename: cronPad, loaded: true, exports: { schedule: () => nepTaak, validate: () => true } };
+
   const posts = [];
   const updates = [];
   const ephemeral = []; // chat.postEphemeral: { user, text }

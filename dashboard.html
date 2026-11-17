@@ -363,10 +363,12 @@ function render(d){
   var rIng=(rg.vandaag||[]).map(function(r){return '<div class="row"><span class="t">'+uur(r.ts)+'</span> · <b>'+esc(r.id)+'</b>'+(r.doel?' → '+esc(r.doel):'')+(r.punten?' <span class="muted">('+(r.punten>0?'+':'')+r.punten+')</span>':'')+(r.laag!=='ingreep'?' <span class="muted">'+esc(r.laag)+'</span>':'')+'</div>';}).join('')||'<span class="muted">nog niets vandaag</span>';
   var rEff=(rg.effecten||[]).map(function(e){return '<div class="row"><b>'+esc(e.id)+'</b> <span class="muted">tot '+uur(e.tot)+'</span> <button class="skip" onclick="regieStop(\''+esc(e.id)+'\')">beëindig</button></div>';}).join('')||'<span class="muted">geen lopende effecten</span>';
   var rVer=rg.verrassing?'<div class="row"><b>'+esc(rg.verrassing.id)+'</b> <span class="muted">tot '+uur(rg.verrassing.id==='hete_kroket'&&rg.verrassing.data?rg.verrassing.data.deadline:rg.verrassing.tot)+'</span> <button class="skip" onclick="regieVerrassingStop()">beëindig</button></div>':'<span class="muted">geen lopende verrassing</span>';
+  var rZaak=rg.zaak?'<div class="row"><b>'+esc(rg.zaak.doel)+'</b> ('+esc(rg.zaak.grond)+') <span class="muted">sluit '+uur(rg.zaak.sluitTs)+' · '+rg.zaak.stemmen+' stemmen</span> <button class="skip" onclick="regieZaakStop()">beëindig</button></div>':'<span class="muted">geen lopende zaak</span>';
   ohtml+=card('🔱 Wat de Kroket God vandaag deed'+tip('De ingrepen die de Kroket God vandaag zelf deed, wat er nog loopt (met "beëindig" haal je een effect meteen weg) en wat er in de Schatkist zit. "Laat hem nu iets doen" negeert kans, tijdvenster, weekend, tempo en dagbudget, maar niet de plafonds. Het niveau stel je in bij Instellingen.'),
     '<div class="lbl">Ingrepen vandaag · niveau '+esc(rg.niveau||'')+'</div>'+rIng
     +'<div class="lbl" style="margin-top:10px">Lopende effecten</div>'+rEff
     +'<div class="lbl" style="margin-top:10px">Lopende verrassing</div>'+rVer
+    +'<div class="lbl" style="margin-top:10px">Lopende zaak (licht tribunaal)</div>'+rZaak
     +'<div class="lbl" style="margin-top:10px">Schatkist: <b>'+(rg.schatkist||0)+'</b> punten</div>'
     +'<button class="btn" onclick="regieNu()">🔱 Laat hem nu iets doen</button> <span id="rg_status" class="muted"></span>');
   // Geplande posts (de eerstvolgende vijf, met tijdstip)
@@ -811,6 +813,7 @@ function bewaar(){
 }
 function regieNu(){post('/api/actie',{actie:'regisseurNu'},'Gedaan','rg_status').then(function(){setTimeout(tick,800);});}
 function regieVerrassingStop(){if(!confirm('Verrassing stil beëindigen, zonder uitbetaling?'))return;post('/api/actie',{actie:'regieVerrassingStop'},'Beëindigd','rg_status').then(function(){setTimeout(tick,800);});}
+function regieZaakStop(){if(!confirm('Zaak stil beëindigen, zonder uitspraak?'))return;post('/api/actie',{actie:'regieZaakStop'},'Beëindigd','rg_status').then(function(){setTimeout(tick,800);});}
 function regieStop(id){post('/api/actie',{actie:'regieEffectStop',id:id},'Beëindigd','rg_status').then(function(){setTimeout(tick,800);});}
 function doeActie(a){post('/api/actie',{actie:a},'Uitgevoerd','i_actiestatus');}
 function skip(soort,key,ts,id){post('/api/overslaan',{soort:soort,key:key?decodeURIComponent(key):'',ts:ts,id:id},'Overgeslagen');}
