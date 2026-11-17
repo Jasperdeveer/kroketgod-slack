@@ -1029,6 +1029,39 @@ function genereerMissie() {
   };
 }
 
+// Start een stille missie voor het doelwit en zijn vrije bondgenoten (privé per deelnemer, zonder publieke aankondiging).
+async function startStilleMissie(client, channelId, doelwitId, { door = 'beheerder' } = {}) {
+  const allMembers = loadMembers();
+  const missieData = genereerMissie();
+  const deelnemers = [doelwitId, ...getBondgenoten(doelwitId).filter(id => !isVerbannen(id))];
+  saveMissie({
+    userId: doelwitId,
+    bijnaam: allMembers[doelwitId].bijnaam,
+    deelnemers,
+    door,
+    type: missieData.type,
+    beschrijving: missieData.beschrijving,
+    sleutelwoord: missieData.sleutelwoord || null,
+    emoji: missieData.emoji || null,
+    verboden: missieData.verboden || null,
+    minReacties: missieData.minReacties || null,
+    geteld: 0,
+    gevonden: false,
+    ontvangen: false,
+    triggerTs: null,
+    gestart: new Date().toISOString(),
+    verloopt: new Date(Date.now() + 24 * 3600_000).toISOString(),
+    status: 'actief',
+  });
+  const teamNamen = deelnemers.map(id => allMembers[id]?.bijnaam || id).join(' & ');
+  const teamZin = deelnemers.length > 1 ? `\n\n_U voert deze missie uit als alliantie met ${deelnemers.map(id => allMembers[id]?.bijnaam).filter(Boolean).join(' & ')}_` : '';
+  for (const uid of deelnemers) {
+    await postEphemeral(client, channelId, uid,
+      `⚜️ *STILLE MISSIE* ⚜️\n\nDe Kroket God heeft u uitverkoren.${teamZin}\n\n*Uw opdracht:*\n${missieData.beschrijving}\n\n_Succesvol voltooid: 3 kroketpunten elk. Verloopt over 24 uur. Spreek hier niet over._`);
+  }
+  return { teamNamen };
+}
+
 async function vollooiMissie(client, channelId, missie) {
   missie.status = 'voltooid';
   saveMissie(missie);
@@ -1038,19 +1071,23 @@ async function vollooiMissie(client, channelId, missie) {
 
   // Ken 3 punten toe aan alle deelnemers
   const uitgesteldeZegens = []; // verbondszegens pas posten ná de onthulling
+  // De regisseur betaalt achteraf, begrensd op de ruimte van dit moment; de beheerder zoals altijd.
+  let uitbetaald = 0;
   for (const uid of deelnemers) {
-    await pasScoreAanMetCheck(client, uid, 3, { uitgesteldeZegens });
+    if (missie.door === 'regisseur') uitbetaald += betaalNawerking({ id: 'stille_missie', doel: uid, punten: 3 });
+    else await pasScoreAanMetCheck(client, uid, 3, { uitgesteldeZegens });
   }
 
   for (const uid of deelnemers) await telActie(client, uid, 'missie_voltooid');
   const namen = deelnemers.map(id => allMembers[id]?.bijnaam || id).join(' & ');
   const teamZin = deelnemers.length > 1 ? `Het alliantie-koppel ${namen} heeft samen` : `${missie.bijnaam} heeft`;
 
-  const tekst = await kroketResponse(
+  const tekst = await kroketResponseMetVangnet(
     `${teamZin} de stille missie voltooid. De opdracht: "${missie.beschrijving}". ` +
-    `Kondig dit plechtig aan — elk lid ontvangt 3 kroketpunten als bewijs van vakmanschap en samenwerking. ` +
+    `Kondig dit plechtig aan — ${missie.door === 'regisseur' ? (uitbetaald ? `samen is ${uitbetaald} kroketpunt${uitbetaald === 1 ? '' : 'en'} uitbetaald` : 'de Schatkist is voor vandaag leeg, dus er is niets uitbetaald') : 'elk lid ontvangt 3 kroketpunten'} als bewijs van vakmanschap en samenwerking. ` +
     `De missie was geheim; nu is het moment van grote onthulling. Geen inleidingszin.`,
-    450, false
+    450, false,
+    `⚜️ _De stille missie is voltooid: ${namen} ${deelnemers.length > 1 ? 'hebben' : 'heeft'} de opdracht volbracht._`
   );
   await postToChannel(client, channelId, tekst);
   for (const post of uitgesteldeZegens) await post();
@@ -6163,6 +6200,7 @@ async function voerKroketCommandoUit({ command, respond, client }) {
         saveVerbanning(verbanningVers);
         resetVergrijpen(command.user_id);
         logGebeurtenis('genade', command.user_id, `${aanvrager} brak succesvol uit het ballingschap`);
+        regieEffect('ontsnapt', 24 * 60, { doel: command.user_id }, `ontsnapt_${command.user_id}`);
         // Het verbond deelt de bevrijding: de alliantie-partner glipt mee naar buiten.
         const ontsnaptPartner = bevrijdAlliantiePartnerMee(command.user_id, aanvrager, true);
 
@@ -6256,47 +6294,13 @@ async function voerKroketCommandoUit({ command, respond, client }) {
         return;
       }
 
-      const allMembers = loadMembers();
-      const kandidaten = Object.entries(allMembers).filter(([id]) => !isVerbannen(id));
+      const kandidaten = Object.keys(loadMembers()).filter((id) => !isVerbannen(id));
       if (!kandidaten.length) {
         await respond({ text: '_Geen beschikbare leden voor een missie._', response_type: 'ephemeral' });
         return;
       }
 
-      // Kies een willekeurig doelwit
-      const [doelwitId, doelwitLid] = kandidaten[Math.floor(Math.random() * kandidaten.length)];
-      const missieData = genereerMissie();
-
-      // Bepaal alle deelnemers: doelwit + eventuele vrije bondgenoten
-      const deelnemers = [doelwitId, ...getBondgenoten(doelwitId).filter(id => !isVerbannen(id))];
-
-      const nieuweM = {
-        userId: doelwitId,
-        bijnaam: doelwitLid.bijnaam,
-        deelnemers,
-        type: missieData.type,
-        beschrijving: missieData.beschrijving,
-        sleutelwoord: missieData.sleutelwoord || null,
-        emoji: missieData.emoji || null,
-        verboden: missieData.verboden || null,
-        minReacties: missieData.minReacties || null,
-        geteld: 0,
-        gevonden: false,
-        ontvangen: false,
-        triggerTs: null,
-        gestart: new Date().toISOString(),
-        verloopt: new Date(Date.now() + 24 * 3600_000).toISOString(),
-        status: 'actief',
-      };
-      saveMissie(nieuweM);
-
-      // Stuur missie privé naar alle deelnemers
-      const teamNamen = deelnemers.map(id => allMembers[id]?.bijnaam || id).join(' & ');
-      const teamZin = deelnemers.length > 1 ? `\n\n_U voert deze missie uit als alliantie met ${deelnemers.map(id => allMembers[id]?.bijnaam).filter(Boolean).join(' & ')}_` : '';
-      for (const uid of deelnemers) {
-        await postEphemeral(client, command.channel_id, uid,
-          `⚜️ *STILLE MISSIE* ⚜️\n\nDe Kroket God heeft u uitverkoren.${teamZin}\n\n*Uw opdracht:*\n${missieData.beschrijving}\n\n_Succesvol voltooid: 3 kroketpunten elk. Verloopt over 24 uur. Spreek hier niet over._`);
-      }
+      const { teamNamen } = await startStilleMissie(client, command.channel_id, kandidaten[Math.floor(Math.random() * kandidaten.length)]);
 
       // Publieke aankondiging zonder hints
       const aankondiging = await kroketResponse(
@@ -9386,7 +9390,6 @@ const CRON_LABELS = {
   '45 14 * * 5':     { label: 'Grote Veiling (hamer)' },
   // Kansgebaseerd/willekeurig (komen soms wel, soms niet):
   '30 9 * * 1':      { label: 'Weekvijand (opkomst)' },
-  '0 11 * * 3':      { label: 'Premiejacht (kans)' },
   '0 11 * * 4':      { label: 'Het Verhoor' },
   '*/20 8-17 * * 1-5': { label: 'Regisseur (kans)', nietInLijst: true }, // elke werkdag-tik zou de lijst 'eerstvolgende' vullen
   '0 16 * * 5':      { label: 'Frituurloterij (trekking)' },
@@ -11693,11 +11696,14 @@ async function voerDuel(client, userId, doelId, channelId, wapenId = null) {
   if (premie.weekStart === getMondayOfWeek() && premie.doelwitId === verliesId && !premie.geind) {
     premie.geind = true;
     writeJSON('premie.json', premie);
-    await pasScoreAanMetCheck(client, winId, premie.bonus || 3, { channelId, naspel });
-    logGebeurtenis('premie', winId, `${winNaam} inde de premie op ${verliesNaam} (+${premie.bonus || 3})`);
-    if (boekVerlies(verliesId, premie.bonus || 3, winId, 'premie_geind')?.claimGeopend) claimVoor = verliesId;
+    const bonus = premie.bonus || 3;
+    const n = betaalNawerking({ id: 'premie', doel: winId, punten: bonus });
+    logGebeurtenis('premie', winId, `${winNaam} inde de premie op ${verliesNaam} (+${n})`);
+    if (boekVerlies(verliesId, bonus, winId, 'premie_geind')?.claimGeopend) claimVoor = verliesId;
     await telActie(client, winId, 'premie_geind', 1, naspel);
-    premieBlok = `\n\n🎯 *PREMIE GEÏND* — op het hoofd van ${verliesNaam} stond een premie van de Kroket God. ${winNaam} int *+${premie.bonus || 3} kroketpunten* extra.`;
+    premieBlok = n === 0
+      ? `\n\n🎯 *PREMIE GEÏND* — op het hoofd van ${verliesNaam} stond een premie, maar de Schatkist van de Kroket God is voor vandaag leeg: ${winNaam} krijgt er niets bij.`
+      : `\n\n🎯 *PREMIE GEÏND* — op het hoofd van ${verliesNaam} stond een premie van de Kroket God. ${winNaam} int *+${n} kroketpunten* extra.`;
   }
   logGebeurtenis('duel', userId, `${uitdager.bijnaam} daagde ${doelLid.bijnaam} uit voor een duel — ${winNaam} won`);
   // Pairwise historie: voedt "uw nemesis" en "laatste duel" in het dossier van de Kroket God.
@@ -13590,6 +13596,7 @@ function bouwRegieStand(nu = Date.now()) {
       gast: false, // gasten zijn personas en staan niet in members.json
       zegen: heeftPowerup(id, 'zegen'), goudenKorst: heeftPowerup(id, 'gouden_korst'),
       geleKaartDezeWeek: heeftGeleKaartDezeWeek(id),
+      ontsnapt: regieStaat().effecten.some((e) => e.soort === 'ontsnapt' && e.data?.doel === id && e.tot > nu),
       vergrijpVandaag: (vergrijpen[id] || []).some((v) => vandaagTs(v.ts)),
       casino: {
         netto: spellen.reduce((a, s) => a + (s.uitbetaald || 0) - (s.ingezet || 0), 0),
@@ -13598,6 +13605,7 @@ function bouwRegieStand(nu = Date.now()) {
     };
   });
   const raid = readJSON('bamischijf.json', {});
+  const premieJson = readJSON('premie.json', {});
   const berichten = ledenStand.map((l) => activiteit[l.id]?.laatsteBericht || 0);
   return {
     leden: ledenStand,
@@ -13612,6 +13620,9 @@ function bouwRegieStand(nu = Date.now()) {
     },
     kanaal: { laatsteLidBerichtMs: Math.max(0, ...berichten) || null },
     archiefKandidaat: archiefKandidaten(nu).length > 0,
+    premieDezeWeek: premieJson.weekStart === getMondayOfWeek(),
+    missieLoopt: loadMissie()?.status === 'actief',
+    opdrachtActies: [...kiesOpdrachten('dag', dagSleutel(), OPDRACHTEN_PER_DAG), ...kiesOpdrachten('week', getMondayOfWeek(), OPDRACHTEN_PER_WEEK)].map((o) => o.actie),
   };
 }
 
@@ -13621,8 +13632,8 @@ function bouwRegieStand(nu = Date.now()) {
 //   knoppen Slack-knoppen onder de aankondiging (hoogstens 5)
 // Uitbetalingen achteraf (knop, verrassing) boeken met regie.boekNawerking en begrenzen zichzelf tegen
 // regie.ruimte() op het moment van uitbetalen.
-function regieEffect(soort, duurMinuten, data = {}) {
-  const effect = { id: soort, soort, tot: Date.now() + duurMinuten * 60_000, data };
+function regieEffect(soort, duurMinuten, data = {}, id = soort) {
+  const effect = { id, soort, tot: Date.now() + duurMinuten * 60_000, data };
   bewaarRegie(regie.voegEffectToe(regieStaat(), effect));
   return effect;
 }
@@ -13734,6 +13745,19 @@ const UITVOERDERS = {
     writeJSON('bamischijf.json', raid);
     await updateRaidBericht(client, raid);
     return { feiten: `Vandaag mag elk lid twee keer aanvallen op de weekvijand (${raid.vijand?.naam || 'de vijand'}), want hij staat nog stevig overeind.` };
+  },
+  premie: async (client, keuze, stand, nu) => {
+    const naam = loadMembers()[keuze.doel]?.bijnaam || 'een volgeling';
+    writeJSON('premie.json', { doelwitId: keuze.doel, bonus: 3, weekStart: getMondayOfWeek(), geind: false, door: 'regisseur' });
+    logGebeurtenis('premie', keuze.doel, `Premie van 3 punten gezet op ${naam}`);
+    return { feiten: `Op het hoofd van ${naam} staat deze week een premie van 3 punten. Wie hem deze week in een duel verslaat, int die.` };
+  },
+  stille_missie: async (client, keuze) => {
+    await startStilleMissie(client, KANAAL(), keuze.doel, { door: 'regisseur' });
+    const tekst = await kroketResponseMetVangnet(
+      `Je hebt zojuist in stilte een geheime missie uitgedeeld. Niemand weet aan wie of wat. Kondig dit mysterieus aan in één of twee zinnen. Noem geen naam. Geen inleidingszin.`,
+      200, false, '⚜️ _De frituurwalm hangt zwaar. De Kroket God heeft in stilte een geheime missie uitgedeeld._', 'licht');
+    return { feiten: 'Een stille missie is uitgedeeld.', tekst };
   },
   // De regisseur valt niet aan voor een lid: geen credit, schade in de strijderlijst of buit. Schicht = 15% van maxHP
   // (zoals het kanon geboekt), heling = 10% als hij vóór woensdag onder de 30% staat. Een dodelijke schicht is een genadeslag.
@@ -13866,7 +13890,7 @@ async function voerIngreepUit(client, keuze, stand, nu = Date.now()) {
 // Eén tik: opruimen, kiezen, uitvoeren. Geeft de keuze terug (of null). `forceer` slaat kans, tijdvenster,
 // weekendrust, tempo, dagbudget en niveau 'uit' over; stille modus en alleen-testkanaal blokkeren altijd.
 let regieBezig = false; // tikken overlappen nooit (dubbelklik op de dashboardknop, cron + klik)
-async function regieTik(client, { forceer = false, nu = Date.now(), rng = Math.random } = {}) {
+async function regieTik(client, { forceer = false, nu = Date.now(), rng = Math.random, beschikbaar = Object.keys(UITVOERDERS) } = {}) {
   if (regieBezig) return null;
   regieBezig = true;
   try {
@@ -13874,7 +13898,7 @@ async function regieTik(client, { forceer = false, nu = Date.now(), rng = Math.r
     bewaarRegie(regie.ruimOp(regieStaat(), nu));
     const stand = bouwRegieStand(nu);
     const keuze = regie.kiesIngreep(stand, regieStaat(), {
-      nu, rng, forceer, niveau: instelling('regieNiveau'), beschikbaar: Object.keys(UITVOERDERS),
+      nu, rng, forceer, niveau: instelling('regieNiveau'), beschikbaar,
     });
     if (!keuze) return null;
     await voerIngreepUit(client, keuze, stand, nu);
@@ -14336,7 +14360,7 @@ async function voerRitueelUit(client, { userId, ritueel, rest, channelId, respon
 
 
 // De rooktests (scripts/rooktest/) komen zo bij de regisseur.
-if (process.env.KROKET_ROOKTEST) module.exports = { stadKeuzes, voegToeAanArchief, regieKlok, voerOffer, voerBamischijfAanval, bouwDashboardData, voerDashboardActie, saveInstellingen, casinoOpen, regieTik, bouwRegieStand, voerIngreepUit, UITVOERDERS, regieStaat, bewaarRegie, mogAutonoomPosten, werkdagenStil, casinoToegangReden, casinoMax, casinoPlafond, boekCasinoUitslag, sluitGeleKaartPoll, voerDuel, voerEer, winkelPrijs, prijsRedenen, prijsToelichting, CRON_LABELS, geplandeCronMeta, BINGO_POOL, bouwDossierBlok, voerRitueelUit, raadpleegStaat, bewaarRaadpleeg, bouwAppHomeBlocks, stemTribunaal, vollooiMissie, telActie, getMondayOfWeek, kiesOpdrachten, opdrachtHaalbaar, opdrachtTekst, opdrachtPool, alleOpdrachten };
+if (process.env.KROKET_ROOKTEST) module.exports = { startStilleMissie, dagSleutel, stadKeuzes, voegToeAanArchief, regieKlok, voerOffer, voerBamischijfAanval, bouwDashboardData, voerDashboardActie, saveInstellingen, casinoOpen, regieTik, bouwRegieStand, voerIngreepUit, UITVOERDERS, regieStaat, bewaarRegie, mogAutonoomPosten, werkdagenStil, casinoToegangReden, casinoMax, casinoPlafond, boekCasinoUitslag, sluitGeleKaartPoll, voerDuel, voerEer, winkelPrijs, prijsRedenen, prijsToelichting, CRON_LABELS, geplandeCronMeta, BINGO_POOL, bouwDossierBlok, voerRitueelUit, raadpleegStaat, bewaarRaadpleeg, bouwAppHomeBlocks, stemTribunaal, vollooiMissie, telActie, getMondayOfWeek, kiesOpdrachten, opdrachtHaalbaar, opdrachtTekst, opdrachtPool, alleOpdrachten };
 
 // Wat het dashboard over het casino laat zien (bouwDashboardData) en kan (/api/casino).
 function casinoDashboardData(naam) {
@@ -19884,33 +19908,6 @@ planCron('45 14 * * 5', async () => {
 }, { timezone: 'Europe/Amsterdam' });
 
 registreerFeature({ naam: 'premiejacht', state: ['premie.json'] });
-
-// ── Cron: woensdag 11:00 — kans op een premiejacht ─────────────────────────────
-// 50% kans: de Kroket God zet een premie (+3) op het hoofd van een willekeurig lid.
-// Wie het doelwit die week verslaat in een duel int de premie (hook in de duel-flow).
-
-planCron('0 11 * * 3', async () => {
-  try {
-    if (Math.random() > 0.5) return;
-    const members = loadMembers();
-    const kandidaten = Object.keys(members).filter(id => !isVerbannen(id));
-    if (kandidaten.length < 2) return;
-    const doelwitId = kandidaten[Math.floor(Math.random() * kandidaten.length)];
-    writeJSON('premie.json', { doelwitId, bonus: 3, weekStart: getMondayOfWeek(), geind: false });
-    const bijnaam = members[doelwitId].bijnaam;
-    logGebeurtenis('premie', doelwitId, `Premie van 3 punten gezet op ${bijnaam}`);
-    const tekst = await kroketResponseMetVangnet(
-      `De Kroket God looft een PREMIE uit: op het hoofd van ${bijnaam} staat deze week een premie van 3 kroketpunten. ` +
-      `Wie ${bijnaam} deze week verslaat in een heilig frituurduel ("/kroketgod duel ${bijnaam}") int de premie bovenop de normale duelwinst. ` +
-      `Kondig de premiejacht aan als een dramatisch opsporingsbevel — met verzonnen, lichte vergrijpen als aanleiding. Gebruik de naam letterlijk. Geen inleidingszin.`,
-      450, false,
-      `🎯 *PREMIEJACHT* 🎯\n\n> Op het hoofd van *${bijnaam}* staat deze week een premie van *3 kroketpunten*. Wie ${bijnaam} verslaat in een duel (\`/kroketgod duel ${bijnaam}\`) int hem.\n\n— De Hoge Frituurraad`
-    );
-    await postToChannel(app.client, process.env.SLACK_CHANNEL_ID, tekst);
-  } catch (err) {
-    console.error('Fout bij premiejacht:', err);
-  }
-}, { timezone: 'Europe/Amsterdam' });
 
 // ── Cron: dagelijks 00:05 — Nederlandse feestdagen verversen ─────────────────
 // Nager.at-data is statisch per jaar — middernacht vernieuwen is ruim voldoende.
