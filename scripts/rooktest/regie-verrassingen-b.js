@@ -22,21 +22,44 @@ harnas(async (h) => {
     return voerIngreepUit(h.client, { ingreep: boek(id), doel, punten: 0, duurMinuten, reden: 'test' }, bouwRegieStand(nu), nu);
   };
   const laatste = () => h.posts.at(-1);
-  const heeftEffect = (soort) => staat().effecten.some((e) => e.soort === soort && e.tot > Date.now());
+  const heeftEffect = (soort) => staat().effecten.some((e) => e.soort === soort); // klok kan in de test verzet zijn
 
   // ── Stadhouder ──
   schoon({ UA: 30, UB: 25 });
   await start('stadhouder', 'UC', 60);
   let v = staat().verrassing;
-  h.ok(v?.id === 'stadhouder' && v.data.stadhouder === 'UC' && v.ts && Math.abs(v.tot - (Date.now() + 60 * MIN)) < 5000, 'stadhouder: staat met stadhouder, ts en een uur looptijd');
+  h.ok(v?.id === 'stadhouder' && v.data.stadhouder === 'UC' && v.ts && Math.abs(v.tot - (Date.now() + 60 * MIN)) < 60_000, 'stadhouder: staat met stadhouder, ts en een uur looptijd');
   const ids = laatste().blocks.flatMap((b) => b.elements || []).map((e) => e.action_id);
   h.ok(['regie_stad_casino', 'regie_stad_belasting', 'regie_stad_gunst'].every((a) => ids.includes(a)), `stadhouder: drie knoppen (${ids})`);
   await h.klik('regie_stad_casino', 'UB');
   h.ok(!heeftEffect('dicht') && staat().verrassing, 'stadhouder: een ander lid kan niet drukken');
-  await h.klik('regie_stad_casino', 'UC');
-  h.ok(heeftEffect('dicht') && staat().verrassing === null, 'stadhouder: de knop sluit het casino');
   await h.klik('regie_stad_belasting', 'UC');
-  h.ok(score('UA') === 30 && /al |verlopen/.test(h.ephemeral.at(-1).text), `stadhouder: een tweede druk is geweigerd (${h.ephemeral.at(-1).text})`);
+  h.ok(score('UA') === 27 && staat().verrassing === null, 'stadhouder: de knop belast de koploper en wist de verrassing');
+  await h.klik('regie_stad_gunst', 'UC');
+  h.ok(score('UA') === 27 && /al |verlopen/.test(h.ephemeral.at(-1).text), `stadhouder: een tweede druk is geweigerd (${h.ephemeral.at(-1).text})`);
+  // M4: de casino-keuze volgt casino_dicht (open, niet in het laatste uur, 24 uur afkoeltijd). Direct met een eigen klok: het hangt van het uur af.
+  const dagNu = regie.amsMoment(Date.now()).dag;
+  const om = (uurUtc) => Date.parse(`${dagNu}T${uurUtc}:00Z`);
+  schoon();
+  const c1 = await h.index.stadKeuzes.casino('UC', om('10:00'));
+  h.ok(/dicht tot/.test(c1.tekst) && heeftEffect('dicht'), 'stadhouder: casino sluiten overdag lukt');
+  h.schrijf('regie.json', { ...staat(), effecten: [] });
+  const c2 = await h.index.stadKeuzes.casino('UC', om('11:00'));
+  h.ok(/24 uur/.test(c2.weiger || '') && !heeftEffect('dicht'), `stadhouder: casino binnen 24 uur na de vorige sluiting geweigerd (${c2.weiger})`);
+  schoon();
+  const c3 = await h.index.stadKeuzes.casino('UC', om('16:30'));
+  h.ok(/te laat/.test(c3.weiger || '') && !heeftEffect('dicht'), `stadhouder: casino in het laatste uur geweigerd (${c3.weiger})`);
+  // M4: belasting volgt de doelwitregels: een koploper die vandaag al doelwit was, wordt niet belast.
+  schoon({ UA: 30, UB: 25 });
+  h.schrijf('regie.json', { ...leeg(), log: [{ ts: Date.now() - 3_600_000, id: 'beslag', laag: 'ingreep', doel: 'UA', punten: -3, soort: 'nemen' }] });
+  await start('stadhouder', 'UC', 60);
+  await h.klik('regie_stad_belasting', 'UC');
+  h.ok(score('UA') === 30 && staat().verrassing && /al aan de beurt/.test(h.ephemeral.at(-1).text), `stadhouder: belasting op een vandaag al getroffen koploper geweigerd (${h.ephemeral.at(-1).text})`);
+  schoon({ UA: 30, UB: 25 });
+  h.schrijf('regie.json', { ...leeg(), log: [{ ts: Date.now() - 20 * 3_600_000, id: 'belasting', laag: 'ingreep', doel: 'UA', punten: -3, soort: 'nemen' }] });
+  await start('stadhouder', 'UC', 60);
+  await h.klik('regie_stad_belasting', 'UC');
+  h.ok(score('UA') === 30 && staat().verrassing, 'stadhouder: ook een gisteren gestrafte koploper wordt niet belast');
 
   schoon({ UA: 30, UB: 25 });
   await start('stadhouder', 'UC', 60);
@@ -48,7 +71,13 @@ harnas(async (h) => {
   await start('stadhouder', 'UC', 60);
   const voorD = score('UD');
   await h.klik('regie_stad_gunst', 'UC');
-  h.ok(score('UC') === 10 && [10, 12].includes(score('UD')) && staat().verrassing === null, `stadhouder: gunst geeft 2 aan een ander lid dan de stadhouder (UC ${score('UC')}, UD ${voorD}->${score('UD')})`);
+  h.ok(score('UC') === 10 && score('UD') === 12 && staat().verrassing === null, `stadhouder: gunst geeft 2 aan het stille lid, niet aan de stadhouder (UC ${score('UC')}, UD ${voorD}->${score('UD')})`);
+  // Geen stil lid (iedereen vandaag actief): het stilste actieve lid (laagste score) krijgt de gunst.
+  schoon({ UE: 5 });
+  h.schrijf('activiteit.json', Object.fromEntries(Object.entries(h.lees('activiteit.json')).map(([id, a]) => [id, { ...a, laatsteBericht: Date.now(), laatsteDaad: Date.now() }])));
+  await start('stadhouder', 'UC', 60);
+  await h.klik('regie_stad_gunst', 'UC');
+  h.ok(score('UE') === 7 && score('UC') === 10, `stadhouder: zonder stil lid gaat de gunst naar het stilste actieve lid (UE ${score('UE')})`);
 
   schoon();
   await start('stadhouder', 'UC', 60);
@@ -67,6 +96,12 @@ harnas(async (h) => {
   await start('herverdeling');
   h.ok(score('UA') === 41 && score('UB') === 27 && score('UF') === 8 && score('UE') === 13, `herverdeling: 10% afgerond, pot gelijk verdeeld, restant naar de laagste (${score('UA')},${score('UB')},${score('UF')},${score('UE')})`);
 
+  // M8: de feiten noemen de echt uitbetaalde bedragen (hier is de uitkeerruimte van vandaag op: er wordt niets uitgekeerd).
+  schoon({ UA: 60, UB: 50, UC: 20, UD: 12, UE: 10, UF: 8 });
+  h.schrijf('regie.json', { ...leeg(), log: [{ ts: Date.now(), id: 'x', laag: 'ingreep', doel: null, punten: 15, soort: 'geven' }] });
+  const hv = await h.index.UITVOERDERS.herverdeling(h.client, {}, bouwRegieStand(Date.now()), Date.now());
+  h.ok(/leverden samen 8 punten in/.test(hv.feiten) && /kregen samen 0/.test(hv.feiten) && /\(-4\)/.test(hv.staart), `herverdeling: feiten met de echte bedragen (${hv.feiten.slice(-70)})`);
+
   schoon({ UA: 44, UB: 30, UC: 20, UD: 12, UE: 10, UF: 4 });
   await start('herverdeling');
   h.ok(score('UA') === 44 && score('UF') === 4 && h.posts.length === 0, 'herverdeling: bij een verschil van 40 of minder gebeurt niets');
@@ -75,13 +110,16 @@ harnas(async (h) => {
   schoon();
   h.ok(regie.REGIEBOEK.find((i) => i.id === 'archief_spreekt').voorwaarde({ archiefKandidaat: bouwRegieStand(Date.now()).archiefKandidaat }) === false, 'archief: zonder geschikte regel is de voorwaarde onwaar');
   const ts30 = Date.now() - 30 * DAG;
-  voegToeAanArchief({ soort: 'lid', spreker: 'Alfa', sprekerId: 'UA', tekst: 'een draadantwoord van een maand terug', ts: ts30, thread: true });
-  voegToeAanArchief({ soort: 'lid', spreker: 'Alfa', sprekerId: 'UA', tekst: 'een oud bericht zonder draadveld', ts: ts30 });
-  voegToeAanArchief({ soort: 'lid', spreker: 'Alfa', sprekerId: 'UA', tekst: 'te recent bericht van tien dagen terug', ts: Date.now() - 10 * DAG, thread: false });
+  voegToeAanArchief({ soort: 'lid', spreker: 'Alfa', sprekerId: 'UA', tekst: 'een draadantwoord van een maand terug, lang genoeg', ts: ts30, thread: true });
+  voegToeAanArchief({ soort: 'lid', spreker: 'Alfa', sprekerId: 'UA', tekst: 'een oud bericht zonder draadveld, lang genoeg voor de lengte', ts: ts30 });
+  voegToeAanArchief({ soort: 'lid', spreker: 'Alfa', sprekerId: 'UA', tekst: 'te recent bericht van tien dagen terug, lang genoeg', ts: Date.now() - 10 * DAG, thread: false });
   h.ok(!bouwRegieStand(Date.now()).archiefKandidaat, 'archief: draad, oude regel zonder veld en een te recente regel tellen niet');
   voegToeAanArchief({ soort: 'kroketgod', spreker: 'Kroket God', tekst: 'een bericht van de bot een maand terug', ts: ts30, thread: false });
   h.ok(!bouwRegieStand(Date.now()).archiefKandidaat, 'archief: een regel van de bot telt niet');
-  voegToeAanArchief({ soort: 'lid', spreker: 'Alfa', sprekerId: 'UA', tekst: 'frituren is een levenshouding', ts: ts30, thread: false });
+  voegToeAanArchief({ soort: 'lid', spreker: 'Buiten', sprekerId: 'UBUITEN', tekst: 'een bericht van een buitenstaander van een maand terug', ts: ts30, thread: false });
+  voegToeAanArchief({ soort: 'lid', spreker: 'Alfa', sprekerId: 'UA', tekst: 'kort bericht', ts: ts30, thread: false });
+  h.ok(!bouwRegieStand(Date.now()).archiefKandidaat, 'archief: een buitenstaander en een oneliner (< 40 tekens) tellen niet');
+  voegToeAanArchief({ soort: 'lid', spreker: 'Alfa', sprekerId: 'UA', tekst: 'frituren is een levenshouding en geen hobby', ts: ts30, thread: false });
   h.ok(!!bouwRegieStand(Date.now()).archiefKandidaat, 'archief: een lidregel van 30 dagen terug zonder draad is een kandidaat');
   for (const [r, verwacht] of [[0, 11], [0.9, 10]]) {
     schoon();

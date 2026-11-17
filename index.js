@@ -14107,7 +14107,7 @@ function werkdagenStil(userId, nu = Date.now(), activiteit = loadActiviteit()) {
 // Lidberichten van 29 tot 31 dagen geleden die geen draadantwoord zijn (`thread === false`; oude regels hebben het veld niet)
 // en nooit van vóór het jongste lid: wat de bot citeert, leest iedereen.
 const archiefKandidaten = (nu) => entriesTussen({ soort: 'lid', van: Math.max(nu - 31 * DAG_MS, gedeeldSinds()), tot: nu - 29 * DAG_MS, max: 3000 })
-  .filter((e) => e.thread === false && e.sprekerId);
+  .filter((e) => e.thread === false && e.sprekerId && loadMembers()[e.sprekerId] && String(e.tekst || '').length >= 40); // geen buitenstaanders of oud-leden, geen oneliners
 
 // De stand van het kanaal voor kiesIngreep (zie de kop van lib/regie.js voor de vorm).
 // Niet gevuld: duelGewonnenVandaag, casino.spellen en raid.weekdag (nog door geen enkele voorwaarde gelezen).
@@ -14471,6 +14471,7 @@ async function heteKroketOntplof(client, nu = Date.now()) {
   const v = verrassingStaat('hete_kroket');
   if (!v) return;
   wisVerrassing(); // eerst wissen: een tweede aanroep (klik + klok) betaalt nooit dubbel
+  if (!v.ts) return; // nooit aangekondigd (mislukte post): niemand wist ervan, dus geen straf
   const { houder } = v.data;
   const verlies = neemVoorSchatkist({ doel: houder, punten: -3 }, nu);
   const n = -(verlies.punten || 0);
@@ -14516,7 +14517,7 @@ app.action('regie_hete_kroket_kies', async ({ ack, body, action, client }) => {
 // Flitsopdracht: de eerste die de opdracht doet, krijgt 3. `soort` = woord (bericht), duel (winnaar) of offer.
 async function regieFlitsGedaan(client, soort, userId, tekst = '') {
   const v = verrassingStaat('flitsopdracht');
-  if (!v || v.data.soort !== soort || Date.now() >= v.tot || !alsLid(userId)) return;
+  if (!v || !v.ts || v.data.soort !== soort || Date.now() >= v.tot || !alsLid(userId) || isVerbannen(userId) || !mogAutonoomPosten(Date.now(), { weekendTelt: false })) return;
   if (soort === 'woord' && !regie.bevatWoord(tekst, v.data.woord)) return;
   wisVerrassing(); // de eerste wint: daarna is er niets meer te halen
   const n = betaalNawerking({ id: 'flitsopdracht', doel: userId, punten: 3 });
@@ -14527,10 +14528,13 @@ async function regieFlitsGedaan(client, soort, userId, tekst = '') {
 // De haak in de berichtafhandeling: alleen echte leden in het hoofdkanaal; zonder lopende verrassing meteen terug.
 async function regieBericht(client, event) {
   const v = verrassingStaat();
-  if (!v || !event.text || !alsLid(event.user) || Date.now() >= v.tot) return;
+  // Zonder ts is de aankondiging nog niet (of nooit) gepost; in stille modus wordt er niets uitbetaald of gepost; ballingen doen niet mee.
+  if (!v || !v.ts || !event.text || !alsLid(event.user) || isVerbannen(event.user) || Date.now() >= v.tot || !mogAutonoomPosten(Date.now(), { weekendTelt: false })) return;
   if (v.id === 'flitsopdracht') return regieFlitsGedaan(client, 'woord', event.user, event.text);
   if (v.id === 'raadsel') {
-    if (!v.ts || event.thread_ts !== v.ts || !regie.raadselGoed(v.data.idx, event.text)) return;
+    if (event.thread_ts !== v.ts || (v.data.geraden || []).includes(event.user)) return;
+    wijzigVerrassing((x) => ({ ...x, data: { ...x.data, geraden: [...(x.data.geraden || []), event.user] } })); // één gok per lid
+    if (!regie.raadselGoed(v.data.idx, event.text)) return;
     wisVerrassing();
     const n = betaalNawerking({ id: 'raadsel', doel: event.user, punten: 5 });
     logAudit('regie', `raadsel opgelost door ${event.user}: +${n}`);
@@ -14559,10 +14563,14 @@ async function regieBericht(client, event) {
 // Het verlopen van een verrassing (de minuutklok). Gebeurt niets zonder lopende verrassing.
 async function regieKlok(client, { nu = Date.now() } = {}) {
   const v = verrassingStaat();
-  if (!v || !mogAutonoomPosten(nu, { weekendTelt: false })) return;
+  if (!v) return;
+  // Ruim verlopen (bot uren uit, of stille modus net opgeheven): stil wissen, zonder uitbetaling of straf.
+  if (nu > (v.id === 'hete_kroket' ? v.data.deadline : v.tot) + 10 * 60_000) { wisVerrassing(); logAudit('regie', `verrassing ${v.id} stil gewist: ruim verlopen`); return; }
+  if (!mogAutonoomPosten(nu, { weekendTelt: false })) return;
   if (v.id === 'hete_kroket') { if (regie.heteKroketOntploft(v.data, nu)) await heteKroketOntplof(client, nu); return; }
   if (nu < v.tot) return;
   wisVerrassing();
+  if (!v.ts) return; // nooit aangekondigd: stil laten verlopen (geen straf, geen "verlopen"-bericht)
   if (v.id === 'flitsopdracht') await verrassingPost(client, '⚡ De flitsopdracht is verlopen: niemand was snel genoeg.');
   else if (v.id === 'raadsel') {
     const r = regie.RAADSELS[v.data.idx];
@@ -14599,27 +14607,27 @@ Object.assign(UITVOERDERS, {
       knoppen: regieKnopTekst('Geef door', 'regie_hete_kroket', 'hete', 'danger'), naPost: bewaarVerrassingTs('hete_kroket') };
   },
   flitsopdracht: async (client, keuze, stand, nu) => {
-    const idx = Math.min(regie.FLITSOPDRACHTEN.length - 1, Math.floor(Math.random() * regie.FLITSOPDRACHTEN.length));
-    const opdracht = regie.FLITSOPDRACHTEN[idx];
+    const pool = regie.FLITSOPDRACHTEN.filter((o) => !(o.soort === 'duel' && casinoEffect('duelverbod'))); // geen duelopdracht tijdens een duelverbod
+    const opdracht = pool[Math.min(pool.length - 1, Math.floor(Math.random() * pool.length))];
     const v = startVerrassing('flitsopdracht', nu, 10, { soort: opdracht.soort, woord: opdracht.woord || null });
     return { kop: VERRASSING_KOP.flitsopdracht, feiten: 'De Kroket God verveelt zich en geeft een snelle opdracht. Noem de opdracht zelf niet; die staat eronder.',
-      staart: `${opdracht.tekst} De eerste die het doet, krijgt *3 punten*. Tot *${hhmmAms(v.tot)}*.` };
+      staart: `${opdracht.tekst} De eerste die het doet, krijgt *3 punten*. Tot *${hhmmAms(v.tot)}*.`, naPost: bewaarVerrassingTs('flitsopdracht') };
   },
   raadsel: async (client, keuze, stand, nu) => {
     const idx = Math.min(regie.RAADSELS.length - 1, Math.floor(Math.random() * regie.RAADSELS.length));
-    startVerrassing('raadsel', nu, 60, { idx });
+    startVerrassing('raadsel', nu, 60, { idx, geraden: [] });
     return { kop: VERRASSING_KOP.raadsel, feiten: 'De Kroket God heeft een schat verstopt en een raadsel opgesteld. Verklap niets en noem de vraag niet zelf; die staat eronder.',
       staart: `> ${regie.RAADSELS[idx].vraag}\n_Antwoord in de draad onder dit bericht. De eerste goede antwoorder krijgt *5 punten*. Over een uur verklapt de Kroket God het antwoord._`,
       naPost: bewaarVerrassingTs('raadsel') };
   },
   puntenregen: async (client, keuze, stand, nu) => {
     startVerrassing('puntenregen', nu, 120, { gehad: [] });
-    return { kop: VERRASSING_KOP.puntenregen, feiten: 'Het regent kroketpunten.', staart: 'De eerste drie leden die iets zeggen in het kanaal krijgen elk *1 punt*.' };
+    return { kop: VERRASSING_KOP.puntenregen, feiten: 'Het regent kroketpunten.', staart: 'De eerste drie leden die iets zeggen in het kanaal krijgen elk *1 punt*.', naPost: bewaarVerrassingTs('puntenregen') };
   },
   woede_bij_stilte: async (client, keuze, stand, nu) => {
     const v = startVerrassing('woede_bij_stilte', nu, 15, {});
     return { kop: VERRASSING_KOP.woede_bij_stilte, feiten: 'Het kanaal is al drie uur stil geweest en de Kroket God is daar boos over.',
-      staart: `Zegt iemand voor *${hhmmAms(v.tot)}* iets, dan krijgt die *1 punt* en is de woede bezworen. Blijft het stil, dan verliest iedereen 1 punt.` };
+      staart: `Zegt iemand voor *${hhmmAms(v.tot)}* iets, dan krijgt die *1 punt* en is de woede bezworen. Blijft het stil, dan verliest iedereen 1 punt.`, naPost: bewaarVerrassingTs('woede_bij_stilte') };
   },
 });
 
@@ -14631,22 +14639,40 @@ const stadKnoppen = () => [
   ...regieKnopTekst('Belast de koploper', 'regie_stad_belasting', 'stad', 'danger'),
   ...regieKnopTekst('Schenk een gunst', 'regie_stad_gunst', 'stad'),
 ];
+// De doelwitregels van de kiezer voor de stadhouder: wie vandaag al doelwit was, is geen doelwit meer; wie gisteren gestraft is, wordt niet weer gestraft.
+function regieDoelwitRegels(nu) {
+  const rijen = regieStaat().log.map((r) => ({ ...r, dag: regie.amsMoment(r.ts).dag }));
+  const vandaag = regie.amsMoment(nu).dag, gisteren = regie.amsMoment(nu - DAG_MS).dag;
+  const echt = (r) => r.laag !== 'nawerking';
+  const vandaagDoel = new Set(rijen.filter((r) => r.dag === vandaag && echt(r) && r.doel).map((r) => r.doel));
+  const gestraft = new Set(rijen.filter((r) => r.dag === gisteren && (echt(r) || r.schorsing) && (r.soort === 'nemen' || r.schorsing) && r.doel).map((r) => r.doel));
+  return { mag: (id) => !vandaagDoel.has(id), magStraf: (id) => !vandaagDoel.has(id) && !gestraft.has(id) };
+}
 const stadKeuzes = {
-  casino: async () => {
+  casino: async (stadhouder, nu) => {
     if (casinoEffect('hogeTafel') || casinoEffect('goudenUur')) return { weiger: '_Er loopt al een casinobesluit van de Kroket God (hoge tafel of gouden uur): wacht tot dat voorbij is._' };
+    // zoals casino_dicht: open, niet in het laatste uur van het venster, en niet vaker dan eens per 24 uur
+    if (!casinoOpen()) return { weiger: '_Het casino is al dicht._' };
+    if (regie.amsMoment(nu).minuut >= 17 * 60 + 30 - 60) return { weiger: '_Het is te laat op de dag om het casino nog te sluiten: kies iets anders._' };
+    if (regieStaat().log.some((r) => r.id === 'casino_dicht' && nu - r.ts < 24 * 3_600_000)) return { weiger: '_Het casino is de afgelopen 24 uur al gesloten geweest: kies iets anders._' };
+    bewaarRegie(regie.boekNawerking(regieStaat(), { nu, id: 'casino_dicht', punten: 0 })); // telt voor de afkoeltijd
     const dicht = regieEffect('dicht', 120);
     return { tekst: `het casino is dicht tot ${hhmmAms(dicht.tot)}. De frituur wordt gereinigd` };
   },
   belasting: async (stadhouder, nu) => {
     const kop = bouwRegieStand(nu).leden.filter((l) => !l.gast && !l.verbannen && !l.afwezig && l.id !== stadhouder).sort((a, b) => b.score - a.score)[0];
     if (!kop) return { tekst: 'er was niemand om te belasten' };
+    if (!regieDoelwitRegels(nu).magStraf(kop.id)) return { weiger: '_De koploper was vandaag al aan de beurt of is gisteren al gestraft: kies iets anders._' };
     const uit = neemVoorSchatkist({ doel: kop.id, punten: -Math.min(5, Math.max(2, Math.round(kop.score * 0.1))) }, nu);
     const n = -(uit.punten || 0);
     if (n > 0) bewaarRegie(regie.boekNawerking(regieStaat(), { nu, id: 'stadhouder', doel: kop.id, punten: -n }));
     return { tekst: n > 0 ? `<@${kop.id}> draagt als koploper *${n} punt${n === 1 ? '' : 'en'}* belasting af aan de Schatkist` : `de belasting op koploper <@${kop.id}> ketst af` };
   },
   gunst: async (stadhouder, nu) => {
-    const stil = bouwRegieStand(nu).leden.filter((l) => !l.gast && !l.verbannen && !l.afwezig && l.id !== stadhouder)
+    // P13: een stil lid (3+ werkdagen), anders het stilste actieve lid; nooit de stadhouder of wie vandaag al doelwit was.
+    const regels = regieDoelwitRegels(nu);
+    const kand = bouwRegieStand(nu).leden.filter((l) => !l.gast && !l.verbannen && !l.afwezig && l.id !== stadhouder && regels.mag(l.id));
+    const stil = (kand.some((l) => l.werkdagenStil >= 3) ? kand.filter((l) => l.werkdagenStil >= 3) : kand.filter((l) => l.actiefVandaag))
       .sort((a, b) => b.werkdagenStil - a.werkdagenStil || a.score - b.score)[0];
     if (!stil) return { tekst: 'er was niemand om een gunst te schenken' };
     const n = betaalNawerking({ nu, id: 'stadhouder', doel: stil.id, punten: 2 });
@@ -14685,18 +14711,21 @@ Object.assign(UITVOERDERS, {
     const r = stand.leden.filter((l) => !l.gast && !l.verbannen && !l.afwezig).sort((a, b) => b.score - a.score);
     if (r.length < 4 || r[0].score - r.at(-1).score <= 40) return { tekst: null };
     let pot = 0;
+    const genomen = [];
     for (const l of r.slice(0, 2)) {
       const uit = neemVoorSchatkist({ doel: l.id, punten: -Math.min(4, Math.round(l.score * 0.1)) }, nu);
       const n = -(uit.punten || 0);
       if (n > 0) { bewaarRegie(regie.boekNawerking(regieStaat(), { nu, id: 'herverdeling', doel: l.id, punten: -n })); pot += n; }
+      genomen.push([l, n]);
     }
     if (pot <= 0) return { tekst: null };
     const [arm1, arm2] = [r.at(-1), r.at(-2)]; // de laagste krijgt het restant
     const krijgt = [[arm1, Math.ceil(pot / 2)], [arm2, Math.floor(pot / 2)]].filter(([, p]) => p > 0);
     const gekregen = krijgt.map(([l, p]) => [l, betaalNawerking({ nu, id: 'herverdeling', doel: l.id, punten: p })]);
     logAudit('regie', `herverdeling: ${pot} van ${r[0].id} en ${r[1].id} naar ${gekregen.map(([l, n]) => `${l.id} +${n}`).join(', ')}`);
-    return { kop: VERRASSING_KOP.herverdeling, feiten: `De Kroket God vindt het verschil tussen eerste en laatste te groot en herverdeelt: de twee hoogsten leveren samen ${pot} punten in, de twee laagsten krijgen ze.`,
-      staart: `Van <@${r[0].id}> en <@${r[1].id}> naar ${gekregen.map(([l, n]) => `<@${l.id}> (+${n})`).join(' en ')}.` };
+    const uitgekeerd = gekregen.reduce((a, [, n]) => a + n, 0);
+    return { kop: VERRASSING_KOP.herverdeling, feiten: `De Kroket God vindt het verschil tussen eerste en laatste te groot en herverdeelt: de twee hoogsten leverden samen ${pot} punten in, de twee laagsten kregen samen ${uitgekeerd}.`,
+      staart: `Van ${genomen.map(([l, n]) => `<@${l.id}> (-${n})`).join(' en ')} naar ${gekregen.map(([l, n]) => `<@${l.id}> (+${n})`).join(' en ')}.` };
   },
   archief_spreekt: async (client, keuze, stand, nu) => {
     const kandidaten = archiefKandidaten(nu);
@@ -14721,7 +14750,7 @@ planCron('* * * * *', async () => {
 }, { timezone: 'Europe/Amsterdam' });
 
 // De rooktests (scripts/rooktest/) komen zo bij de regisseur.
-if (process.env.KROKET_ROOKTEST) module.exports = { voegToeAanArchief, regieKlok, voerOffer, voerBamischijfAanval, bouwDashboardData, voerDashboardActie, saveInstellingen, casinoOpen, regieTik, bouwRegieStand, voerIngreepUit, UITVOERDERS, regieStaat, bewaarRegie, mogAutonoomPosten, werkdagenStil, casinoToegangReden, casinoMax, casinoPlafond, boekCasinoUitslag, casinoOpen, sluitGeleKaartPoll, voerDuel, voerEer, winkelPrijs, prijsRedenen, prijsToelichting, CRON_LABELS, geplandeCronMeta };
+if (process.env.KROKET_ROOKTEST) module.exports = { stadKeuzes, voegToeAanArchief, regieKlok, voerOffer, voerBamischijfAanval, bouwDashboardData, voerDashboardActie, saveInstellingen, casinoOpen, regieTik, bouwRegieStand, voerIngreepUit, UITVOERDERS, regieStaat, bewaarRegie, mogAutonoomPosten, werkdagenStil, casinoToegangReden, casinoMax, casinoPlafond, boekCasinoUitslag, casinoOpen, sluitGeleKaartPoll, voerDuel, voerEer, winkelPrijs, prijsRedenen, prijsToelichting, CRON_LABELS, geplandeCronMeta };
 
 // Wat het dashboard over het casino laat zien (bouwDashboardData) en kan (/api/casino).
 function casinoDashboardData(naam) {
@@ -21604,6 +21633,14 @@ async function voerDashboardActie(actie, body = {}) {
       bewaarRegie({ ...s, effecten: s.effecten.filter((e) => !weg.includes(e)) });
       logAudit('regie', `effect beëindigd door de eigenaar: ${body.id}`);
       return `Effect ${body.id} beëindigd.`;
+    }
+    // Een lopende verrassing stil beëindigen: zonder uitbetaling, zonder straf, zonder bericht.
+    case 'regieVerrassingStop': {
+      const v = verrassingStaat();
+      if (!v) return 'Er loopt geen verrassing.';
+      wisVerrassing();
+      logAudit('regie', `verrassing ${v.id} stil beëindigd door de eigenaar`);
+      return `Verrassing ${v.id} beëindigd, zonder uitbetaling.`;
     }
     case 'resetCooldowns':
       geminiKeyCooldownTot.clear(); providerCooldownTot.clear(); wisBank();

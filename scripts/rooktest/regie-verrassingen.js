@@ -154,6 +154,80 @@ harnas(async (h) => {
   await regieKlok(h.client, { nu: Date.now() });
   h.ok(score('UA') === 29 && score('UB') === 24 && score('UC') === 19 && score('UD') === 15 && score('UF') === 11, 'woede: binnen de resterende ruimte (3), hoogste scores eerst');
 
+  // ── I1c: één gok per lid, geen hagel ──
+  schoon();
+  await start('raadsel', null, 60, 0);
+  const dr = staat().verrassing.ts;
+  h.ok(Array.isArray(staat().verrassing.data.geraden), 'raadsel: data.geraden bestaat');
+  await zeg('UB', 'geen idee', { thread_ts: dr });
+  await zeg('UB', 'kroket', { thread_ts: dr });
+  h.ok(score('UB') === 10 && staat().verrassing, 'raadsel: een tweede gok van hetzelfde lid telt niet');
+  await zeg('UC', 'kroket mosterd rijk frituurpan paneermeel handdoek', { thread_ts: dr });
+  h.ok(score('UC') === 10 && staat().verrassing, 'raadsel: een hagel van antwoorden wint niet');
+  await zeg('UD', 'kroket', { thread_ts: dr });
+  h.ok(score('UD') === 15 && staat().verrassing === null, 'raadsel: een ander lid met het goede antwoord wint');
+
+  // ── M1/M2: een verrassing zonder ts (mislukte post) doet niets en kost niets ──
+  schoon();
+  h.schakel.faalPost = true;
+  await start('puntenregen', null, 0);
+  h.schakel.faalPost = false;
+  h.ok(staat().verrassing?.id === 'puntenregen' && !staat().verrassing.ts, 'zonder ts: verrassing staat er, maar zonder ts');
+  await zeg('UA', 'hallo');
+  h.ok(score('UA') === 10, 'zonder ts: een bericht betaalt niets uit');
+  schoon();
+  h.schakel.faalPost = true;
+  await start('hete_kroket', 'UA', 90);
+  h.schakel.faalPost = false;
+  verstrijk({ data: { ...staat().verrassing.data, deadline: Date.now() - 1000 } });
+  await regieKlok(h.client, { nu: Date.now() });
+  h.ok(score('UA') === 10 && staat().verrassing === null && staat().schatkist === 0, 'hete kroket zonder ts: geen straf, stil gewist');
+  schoon();
+  h.schakel.faalPost = true;
+  await start('woede_bij_stilte', null, 15);
+  h.schakel.faalPost = false;
+  verstrijk({ tot: Date.now() - 1000 });
+  await regieKlok(h.client, { nu: Date.now() });
+  h.ok(score('UA') === 10 && staat().verrassing === null && staat().schatkist === 0, 'woede zonder ts: niemand verliest iets');
+
+  // ── M5: ballingen doen niet mee ──
+  schoon();
+  h.schrijf('verbanning.json', { UB: { tot: new Date(Date.now() + 3_600_000).toISOString(), reden: 'test' } });
+  await start('puntenregen', null, 0);
+  await zeg('UB', 'ik ben verbannen');
+  h.ok(score('UB') === 10, 'balling: geen puntenregen');
+  h.schrijf('verbanning.json', {});
+
+  // ── M6: geen duelopdracht tijdens een duelverbod ──
+  schoon({ UA: 20, UB: 20 });
+  h.schrijf('regie.json', { ...leeg(), effecten: [{ id: 'duelverbod', soort: 'duelverbod', tot: Date.now() + 3_600_000, data: {} }] });
+  await start('flitsopdracht', null, 10, 0.7); // 0.7 zou het duel zijn
+  h.ok(staat().verrassing.data.soort !== 'duel', `flitsopdracht: geen duel tijdens een duelverbod (${staat().verrassing.data.soort})`);
+
+  // ── I1a: stille modus en ruim verlopen ──
+  schoon();
+  await start('puntenregen', null, 0);
+  h.schrijf('instellingen.json', { stilModus: true });
+  await zeg('UA', 'hallo in stilte');
+  h.ok(score('UA') === 10, 'stille modus: een bericht betaalt niets uit');
+  verstrijk({ tot: Date.now() - 11 * MIN });
+  await regieKlok(h.client, { nu: Date.now() });
+  h.ok(staat().verrassing === null, 'klok: een ruim verlopen verrassing wordt ook in stille modus stil gewist');
+  schoon();
+  h.schrijf('instellingen.json', { stilModus: false });
+  await start('hete_kroket', 'UA', 90);
+  h.schrijf('instellingen.json', { stilModus: true });
+  verstrijk({ data: { ...staat().verrassing.data, deadline: Date.now() - 11 * MIN } });
+  h.posts.length = 0; h.updates.length = 0;
+  await regieKlok(h.client, { nu: Date.now() });
+  h.ok(staat().verrassing === null && score('UA') === 10 && h.posts.length === 0 && h.updates.length === 0, 'klok: een hete kroket die ruim verlopen is ontploft niet, hij wordt stil gewist');
+  h.schrijf('instellingen.json', { stilModus: false });
+  schoon();
+  await start('woede_bij_stilte', null, 15);
+  verstrijk({ tot: Date.now() - 3 * 3_600_000 });
+  await regieKlok(h.client, { nu: Date.now() });
+  h.ok(staat().verrassing === null && staat().schatkist === 0 && score('UA') === 10, 'klok: een uren verlopen woede straft niemand meer');
+
   // ── De klok respecteert stille modus en doet niets zonder verrassing ──
   schoon();
   await start('puntenregen', null, 0);

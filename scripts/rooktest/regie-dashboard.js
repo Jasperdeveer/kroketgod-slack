@@ -43,4 +43,14 @@ harnas(async (h) => {
   h.ok(/\S/.test(bericht), 'regisseurNu meldt wat er gebeurde');
   const veldenlijst = require('fs').readFileSync(require('path').join(__dirname, '../../dashboard.html'), 'utf8');
   h.ok(/regieNiveau:document\.getElementById\('i_regieNiveau'\)/.test(veldenlijst), 'dashboard.html stuurt regieNiveau mee');
+
+  // M7: een lopende verrassing stil beëindigen, zonder uitbetaling.
+  bewaarRegie({ ...regieStaat(), verrassing: { id: 'puntenregen', start: Date.now(), tot: Date.now() + 3_600_000, kanaal: 'CKANAAL', ts: '1.1', data: { gehad: [] } } });
+  d = await bouwDashboardData();
+  h.ok(d.regie.verrassing?.id === 'puntenregen', 'stats.regie: lopende verrassing zichtbaar');
+  const sb = h.lees('scores.json'); const postsVoor = h.posts.length;
+  const mv = await voerDashboardActie('regieVerrassingStop');
+  h.ok(regieStaat().verrassing === null && JSON.stringify(h.lees('scores.json')) === JSON.stringify(sb) && h.posts.length === postsVoor && /beëindigd/.test(mv), `regieVerrassingStop: gewist zonder uitbetaling of bericht (${mv})`);
+  h.ok(h.lees('auditlog.json').items.some((i) => i.endpoint === 'regie' && /stil beëindigd/.test(JSON.stringify(i))), 'regieVerrassingStop staat in het auditlog');
+  h.ok(/geen/.test(await voerDashboardActie('regieVerrassingStop')), 'zonder verrassing: melding');
 });
