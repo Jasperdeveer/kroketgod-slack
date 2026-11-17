@@ -2889,6 +2889,10 @@ const VERBONDSVERZOEK_WEIGERING = {
   vol: `_Het verbond is intussen vol: hoogstens ${VERBOND_MAX} leden._`,
 };
 
+// Knoppen in oude berichten van weggehaalde functies (Vetwissel, Ambten, Beurs): stil bevestigen,
+// anders toont Slack een foutmelding.
+app.action(/^(wissel_|ambt_|beurs_koop_)/, async ({ ack }) => { await ack(); });
+
 app.action(/^verbond_(accepteer|weiger)$/, async ({ ack, body, client }) => {
   await ack();
   try {
@@ -14502,6 +14506,8 @@ const OPDRACHTEN = [
   { id: 'w-veiling',  soort: 'week', actie: 'veiling_bod',    doel: 1, beloning: 3, tekst: 'Bied op de Grote Veiling' },
   { id: 'w-roof',     soort: 'week', actie: 'roof_poging',    doel: 1, beloning: 3, tekst: 'Waag een Grote Kroketroof' },
   { id: 'w-goud',     soort: 'week', actie: 'gouden_kroket',  doel: 1, beloning: 5, tekst: 'Grijp de Gouden Kroket' },
+  // Houdt de weekpool op 8, zodat de weekkeuze (hash % pool) niet verschuift.
+  { id: 'w-winkel',   soort: 'week', actie: 'winkel_koop',    doel: 3, beloning: 3, tekst: 'Doe drie aankopen in de Aflatenhandel' },
 ];
 
 const OPDRACHTEN_PER_DAG = 3;
@@ -15682,25 +15688,25 @@ function bouwWereldBlocks() {
 
   // Ambten die elders in het spel worden vergeven — hier bij elkaar, zodat het bord het
   // volledige machtsplaatje toont in plaats van losse fragmenten.
-  const ambten = [];
+  const gebeurtenissen = [];
   const koning = readJSON('troon.json', { koningId: null }).koningId;
-  if (koning && members[koning]) ambten.push(`> 👑 Frituurkoning — ${members[koning].bijnaam}`);
+  if (koning && members[koning]) gebeurtenissen.push(`> 👑 Frituurkoning — ${members[koning].bijnaam}`);
   const profeet = readJSON('profeet.json', {});
   if (profeet.userId && members[profeet.userId] && profeet.weekStart === getMondayOfWeek()) {
-    ambten.push(`> 🕊️ Profeet van de Frituur — ${members[profeet.userId].bijnaam}${profeet.zegenGebruikt ? ' (zegen vergeven)' : ''}`);
+    gebeurtenissen.push(`> 🕊️ Profeet van de Frituur — ${members[profeet.userId].bijnaam}${profeet.zegenGebruikt ? ' (zegen vergeven)' : ''}`);
   }
   const raid = readJSON('bamischijf.json', {});
   if (raid.actief && raid.hp > 0) {
-    ambten.push(`> ${raid.vijand?.emoji || '🐉'} ${raid.vijand?.naam || 'De Bamischijf der Duisternis'} waart rond — *${raid.hp}/${raid.maxHp} HP*`);
+    gebeurtenissen.push(`> ${raid.vijand?.emoji || '🐉'} ${raid.vijand?.naam || 'De Bamischijf der Duisternis'} waart rond — *${raid.hp}/${raid.maxHp} HP*`);
   }
   const veiling = readJSON('veiling.json', {});
   if (veiling.status === 'open' && veiling.weekStart === getMondayOfWeek()) {
     const hoogste = [...(veiling.biedingen || [])].sort((a, b) => b.bod - a.bod)[0];
-    ambten.push(`> 🔨 De Grote Veiling is open — hoogste bod: ${hoogste ? `${hoogste.bod} pt` : 'nog geen'}`);
+    gebeurtenissen.push(`> 🔨 De Grote Veiling is open — hoogste bod: ${hoogste ? `${hoogste.bod} pt` : 'nog geen'}`);
   }
   const vetpot = loadVetpot();
-  if (vetpot.geopend) ambten.push(`> 🍯 De Vetpot staat op *${vetpot.pot}* kroketpunten`);
-  if (ambten.length) blocks.push({ type: 'section', text: { type: 'mrkdwn', text: `*⚖️ AMBTEN & GEBEURTENISSEN*\n${ambten.join('\n')}` } });
+  if (vetpot.geopend) gebeurtenissen.push(`> 🍯 De Vetpot staat op *${vetpot.pot}* kroketpunten`);
+  if (gebeurtenissen.length) blocks.push({ type: 'section', text: { type: 'mrkdwn', text: `*⚖️ GEBEURTENISSEN*\n${gebeurtenissen.join('\n')}` } });
 
   const nalatenschap = actieveNalatenschap();
   const decreet = huidigDecreet();
