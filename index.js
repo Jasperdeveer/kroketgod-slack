@@ -8628,9 +8628,14 @@ app.event('app_mention', async ({ event, client }) => {
       // Punt-bedelen: 30% kans op minpunt als iemand expliciet om een punt vraagt.
       // Detectie via de classifier (BEDELARIJ) of de snelle keyword-check — geen extra LLM-call.
       if (members[userId] && !isVerbannen(userId) && (sentiment === 'BEDELARIJ' || vraagOmPunt(input))) {
-        // Zegen van de Paneerlaag (Aflatenhandel) beschermt ook tegen de bedelarij-straf.
-        if (!heeftPowerup(userId, 'zegen') && Math.random() < 0.30) {
-          pasScoreAan(userId, -1);
+        const bedel = bedelUitkomst(userId);
+        if (bedel.soort === 'gift') {
+          logGebeurtenis('bedelarij', userId, `${bijnaam} bedelde tijdens een vrijgevige bui en kreeg er één`);
+          const thread_ts = antwoordThread(event);
+          await postToChannel(client, event.channel, `<@${userId}>\n\n🎁 _De Kroket God is vandaag gul: ${bijnaam} bedelt en krijgt *1 kroketpunt*. Eén keer per bui, daarna is de gulheid op._`, { thread_ts });
+          return;
+        }
+        if (bedel.soort === 'straf') {
           logGebeurtenis('bedelarij', userId, `${bijnaam} bedelde om een punt en verloor er één`);
           const bedelTekst = await kroketResponse(
             `[ACTIEVE SPREKER: ${bijnaam}] ${bijnaam} heeft de brutaliteit om te bedelen om een kroketpunt: "${input}". ` +
@@ -10638,6 +10643,7 @@ const BINGO_POOL = [
   'Reageer met :lekker_kroketje: op drie berichten van mede-leden',
   'Win een duel op een gunstige horoscoop',
   'Overleef een poging tot zelflof',
+  'Bedel om een kroketpunt tijdens een vrijgevige bui',
 ];
 
 planCron('30 10 * * 1', async () => {
@@ -13635,6 +13641,8 @@ function bouwRegieStand(nu = Date.now()) {
       kaarten30: (geleKaartenAlle[id]?.kaarten || []).filter((k) => k.ts >= nu - 30 * DAG_MS).length,
       ketterij: ketterBerichten.filter((e) => e.sprekerId === id).pop()?.tekst.slice(0, 120) ?? null,
       inVerbond: getBondgenoten(id).length > 0,
+      berouw: !!verbanning[id]?.beroepGeprobeerd && verbanning[id].kaart !== 'rood'
+        && new Date(verbanning[id].tot).getTime() - nu >= 30 * 60_000,
       ontsnapt: regieStaat().effecten.some((e) => e.soort === 'ontsnapt' && e.data?.doel === id && e.tot > nu),
       vergrijpVandaag: (vergrijpen[id] || []).some((v) => vandaagTs(v.ts)),
       casino: {
@@ -13707,6 +13715,20 @@ function betaalNawerking({ nu = Date.now(), id, doel, punten }) {
   bewaarRegie(regie.boekNawerking(regie.betaal(regieStaat(), n).staat, { nu, id, doel, punten: n }));
   pasScoreAan(doel, n);
   return n;
+}
+// De beslissing van de bedeltak in de mention-handler. Tijdens een vrijgevige bui één gift per lid (+1, begrensd door het plafond;
+// zonder ruimte niets); anders beschermt de Zegen en is er 30% kans op -1. De handler post de tekst bij de uitkomst.
+function bedelUitkomst(userId, nu = Date.now()) {
+  const bui = regie.effectActief(regieStaat(), 'vrijgevig', nu);
+  if (bui) {
+    if ((bui.data?.begiftigd || []).includes(userId)) return { soort: 'niets', punten: 0 };
+    const n = betaalNawerking({ nu, id: 'vrijgevige_bui', doel: userId, punten: 1 });
+    if (!n) return { soort: 'niets', punten: 0 };
+    pasEffectAan(bui.id, (d) => ({ ...d, begiftigd: [...(d.begiftigd || []), userId] }));
+    return { soort: 'gift', punten: n };
+  }
+  if (!heeftPowerup(userId, 'zegen') && Math.random() < 0.30) { pasScoreAan(userId, -1); return { soort: 'straf', punten: -1 }; }
+  return { soort: 'niets', punten: 0 };
 }
 // Het spiegelbeeld van betaalNawerking: een straf achteraf, met dezelfde begrenzing en Zegen-check als belasting en beslag
 // (neemVoorSchatkist), geboekt als nawerking. Geeft de uitkomst van neemVoorSchatkist terug (`punten` is negatief of 0).
@@ -13802,6 +13824,22 @@ const UITVOERDERS = {
     writeJSON('bamischijf.json', raid);
     await updateRaidBericht(client, raid);
     return { feiten: `Vandaag mag elk lid twee keer aanvallen op de weekvijand (${raid.vijand?.naam || 'de vijand'}), want hij staat nog stevig overeind.` };
+  },
+  // Dezelfde uitkomst als een geslaagd beroep. Controleert opnieuw: het lid kan sinds de stand vrijgekomen zijn.
+  genade: async (client, keuze) => {
+    const verb = loadVerbanning();
+    const v = verb[keuze.doel];
+    if (!v || !v.beroepGeprobeerd || v.kaart === 'rood') return { tekst: null };
+    const naam = loadMembers()[keuze.doel]?.bijnaam || 'een volgeling';
+    delete verb[keuze.doel];
+    saveVerbanning(verb);
+    logGebeurtenis('genade', keuze.doel, `${naam} toonde berouw en werd begenadigd door de Kroket God`);
+    const partner = bevrijdAlliantiePartnerMee(keuze.doel, naam, false);
+    return { feiten: `${naam} toonde berouw met een beroep en is begenadigd: de verbanning is opgeheven.${partner ? ` Het verbond deelt de genade: ook ${partner} komt vrij.` : ''}` };
+  },
+  vrijgevige_bui: async (client, keuze) => {
+    regieEffect('vrijgevig', keuze.duurMinuten || 60, { begiftigd: [] });
+    return { feiten: 'Een uur lang krijgt wie in een mention om een punt bedelt er 1 in plaats van de kans op een minpunt.' };
   },
   zegendag: async (client, keuze, stand, nu) => {
     regieEffect('zegendag', keuze.duurMinuten || regie.restVanDag(nu), { gezegend: [] });
@@ -14522,7 +14560,7 @@ async function voerRitueelUit(client, { userId, ritueel, rest, channelId, respon
 
 
 // De rooktests (scripts/rooktest/) komen zo bij de regisseur.
-if (process.env.KROKET_ROOKTEST) module.exports = { startStilleMissie, dagSleutel, stadKeuzes, voegToeAanArchief, regieKlok, voerOffer, voerBamischijfAanval, bouwDashboardData, voerDashboardActie, saveInstellingen, casinoOpen, regieTik, bouwRegieStand, voerIngreepUit, UITVOERDERS, regieStaat, bewaarRegie, stemZaak, sluitZaak, mogAutonoomPosten, werkdagenStil, casinoToegangReden, casinoMax, casinoPlafond, boekCasinoUitslag, sluitGeleKaartPoll, startGeleKaartPoll, voerDuel, voerEer, winkelPrijs, prijsRedenen, prijsToelichting, CRON_LABELS, geplandeCronMeta, BINGO_POOL, bouwDossierBlok, voerRitueelUit, raadpleegStaat, bewaarRaadpleeg, bouwAppHomeBlocks, stemTribunaal, vollooiMissie, telActie, getMondayOfWeek, kiesOpdrachten, opdrachtHaalbaar, opdrachtTekst, opdrachtPool, alleOpdrachten, kenAlliantiePuntenBonus, draagBijAanSeizoen };
+if (process.env.KROKET_ROOKTEST) module.exports = { startStilleMissie, dagSleutel, stadKeuzes, voegToeAanArchief, regieKlok, voerOffer, voerBamischijfAanval, bouwDashboardData, voerDashboardActie, saveInstellingen, casinoOpen, regieTik, bouwRegieStand, voerIngreepUit, UITVOERDERS, regieStaat, bewaarRegie, stemZaak, sluitZaak, mogAutonoomPosten, werkdagenStil, casinoToegangReden, casinoMax, casinoPlafond, boekCasinoUitslag, sluitGeleKaartPoll, startGeleKaartPoll, voerDuel, voerEer, winkelPrijs, prijsRedenen, prijsToelichting, CRON_LABELS, geplandeCronMeta, BINGO_POOL, bouwDossierBlok, voerRitueelUit, raadpleegStaat, bewaarRaadpleeg, bouwAppHomeBlocks, stemTribunaal, vollooiMissie, telActie, getMondayOfWeek, kiesOpdrachten, opdrachtHaalbaar, opdrachtTekst, opdrachtPool, alleOpdrachten, kenAlliantiePuntenBonus, draagBijAanSeizoen, bedelUitkomst };
 
 // Wat het dashboard over het casino laat zien (bouwDashboardData) en kan (/api/casino).
 function casinoDashboardData(naam) {
