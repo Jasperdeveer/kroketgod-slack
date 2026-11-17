@@ -57,7 +57,7 @@ module.exports = async function harnas(test, { opstartMs = 2500 } = {}) {
     constructor() { this.client = client; }
     action(id, fn) { handlers.action.push([id, fn]); }
     command(naam, fn) { handlers.command[naam] = fn; }
-    event(naam, fn) { handlers.event[naam] = fn; }
+    event(naam, fn) { (handlers.event[naam] ||= []).push(fn); }
     view() {} shortcut() {} options() {} message() {} use() {} error() {}
     async start() {} async stop() {}
   }
@@ -76,8 +76,8 @@ module.exports = async function harnas(test, { opstartMs = 2500 } = {}) {
       ack: async () => {}, respond: async (r) => { antwoord += (typeof r === 'string' ? r : r.text) + '\n'; }, client });
     return antwoord;
   }
-  // Vuurt een Slack-event (app.event) af, bijvoorbeeld gebeurtenis('message', { user, text, channel, ts }).
-  const gebeurtenis = (naam, event) => handlers.event[naam]({ event, client, ack: async () => {} });
+  // Draait elke handler die met `app.event(naam, fn)` is geregistreerd, met { event, client, ack } (gebeurtenis('message', { user, text, channel, ts })).
+  const gebeurtenis = async (naam, event) => { for (const fn of handlers.event[naam] || []) await fn({ event, client, ack: async () => {} }); };
   const wacht = (ms) => new Promise((r) => setTimeout(r, ms));
   const ok = (cond, wat) => { console.log(`${cond ? '✔' : '✖'} ${wat}`); if (!cond) process.exitCode = 1; };
 

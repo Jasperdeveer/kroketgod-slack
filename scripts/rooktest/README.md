@@ -21,6 +21,7 @@ Draaien (vanuit de repo-root): `node scripts/rooktest/<script>.js`. Het harnas s
 
 - `klik(actionId, userId, extra)`: drukt een knop in, bijvoorbeeld `klik('wapen_kies', 'UA', { selected_option: { value: 'kroketmes' } })`.
 - `commando(userId, tekst)`: draait `/kroketgod <tekst>` en geeft het antwoord als tekst terug.
+- `gebeurtenis(naam, event)`: draait elke handler die met `app.event(naam, fn)` is geregistreerd met `{ event, client }`, bijvoorbeeld `gebeurtenis('reaction_added', { user, reaction, item, item_user, event_ts })`.
 - `lees(bestand)` en `schrijf(bestand, data)`: de JSON-state in de tijdelijke map.
 - `posts` (alle `chat.postMessage`, met `text`, `blocks`, `thread`, `ts`) en `updates` (alle `chat.update`).
 - `ok(voorwaarde, omschrijving)`: print ✔ of ✖ en zet de exitcode op 1 bij een falende voorwaarde.
