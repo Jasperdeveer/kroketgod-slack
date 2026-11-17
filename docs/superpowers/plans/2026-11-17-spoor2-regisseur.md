@@ -120,7 +120,7 @@ Het regieboek bevat alle ingrepen, verrassingen en praatjes uit de spec, met hun
 ### Task 2: Het geraamte in `index.js`, plus het harnas in de repo
 
 **Files:**
-- Create: `scripts/rooktest/harnas.js` en `scripts/rooktest/README.md`, uit `/private/tmp/claude-501/-Users-jasperdeveer-Projects-kroketgod-slack/5d289af3-2409-4795-8ab2-f96bd97daa92/scratchpad/spoor2/harnas/harnas.js` en `harnas-uitleg.md` (de seed-state staat ernaast), met de `commando(...)`-helper erin.
+- Create: `scripts/rooktest/harnas.js` en `scripts/rooktest/README.md`, uit het harnas en de uitleg in de tijdelijke werkmap van de bouwsessie (de seed-state staat ernaast), met de `commando(...)`-helper erin.
 - Modify:
   - `lib/instellingen.js`: `regieNiveau: 'normaal'`, plus validatie. `saveInstellingen` weigert waarden buiten `uit|laag|normaal|wild`. Test in `lib/instellingen.test.js`.
   - `index.js`:
