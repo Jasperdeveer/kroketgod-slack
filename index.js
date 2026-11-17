@@ -5041,10 +5041,16 @@ async function laatGastVertrekken(client) {
   logAudit('persona', `${persona.naam} (${id}) vertrokken na drie werkdagen`);
 }
 
+// Avatar van een persona: een directe afbeeldings-URL (http/https) gaat als icon_url, anders
+// behandelen we het als een emoji-shortcode (standaard of custom-geüpload in Slack) voor icon_emoji.
+function personaIcoon(icoon) {
+  const ruw = (icoon || ':question:').trim();
+  return /^https?:\/\//i.test(ruw) ? { icon_url: ruw } : { icon_emoji: ruw.startsWith(':') ? ruw : `:${ruw.replace(/:/g, '')}:` };
+}
+
 async function postAlsPersona(client, channelId, persona, text, options = {}) {
   const gefilterd = schoonOutput(text);
   const tekstVoorBlok = gefilterd.substring(0, 2999);
-  const ruwIcoon = (persona.icoon || ':question:').trim();
   const payload = {
     channel: channelId,
     text: gefilterd,
@@ -5053,14 +5059,8 @@ async function postAlsPersona(client, channelId, persona, text, options = {}) {
       { type: 'divider' },
       { type: 'section', text: { type: 'mrkdwn', text: tekstVoorBlok } },
     ],
+    ...personaIcoon(persona.icoon),
   };
-  // Avatar: een directe afbeeldings-URL (http/https) gaat als icon_url, anders behandelen we het
-  // als een emoji-shortcode (standaard of custom-geüpload in Slack) voor icon_emoji.
-  if (/^https?:\/\//i.test(ruwIcoon)) {
-    payload.icon_url = ruwIcoon;
-  } else {
-    payload.icon_emoji = ruwIcoon.startsWith(':') ? ruwIcoon : `:${ruwIcoon.replace(/:/g, '')}:`;
-  }
   if (options.thread_ts) payload.thread_ts = options.thread_ts;
   await slackLimiter.schedule(() => client.chat.postMessage(payload));
   if (channelId === process.env.SLACK_CHANNEL_ID && !options.thread_ts) {
@@ -12352,28 +12352,43 @@ async function updateRaidBericht(client, raid) {
   }
 }
 
-// De weekvijand in beeld (lib/vijandbeeld.js): onder een bericht dat al geplaatst is, komt een GIF
-// van de klap. Pas ná het posten, zodat niemand op het tekenen wacht. Alleen met R2: imgbb blokkeerde
-// de server om precies zulke GIF's (nov 2026). Ze gaan naar weekvijand/, zonder opruimregel, zodat
-// ze in de draad blijven staan. Lukt het niet, dan blijft de tekst gewoon staan.
-async function voegVijandGifToe(client, kanaal, bericht, tekst, maakFilm, alt) {
-  if (!process.env.R2_BUCKET || !bericht?.ts) return;
+// De weekvijand in beeld (lib/vijandbeeld.js): na een klap plaatst de vijand zelf, onder zijn eigen
+// naam en avatar, een GIF van die klap in het kanaal (wens eigenaar, 17 nov 2026; eerst stond hij
+// onder de draadregel van de Kroket God, en daar zag niemand hem). Bewust niet via postAlsPersona:
+// een onderschrift hoort niet in zijn gespreksgeheugen, en andere gasten hoeven er niet op te reageren.
+// Alleen met R2: imgbb blokkeerde de server om precies zulke GIF's (nov 2026). Ze gaan naar
+// weekvijand/, zonder opruimregel, zodat ze blijven staan. Lukt het niet, dan is er alleen de draadregel.
+async function stuurVijandGif(client, raid, maakFilm, onderschrift) {
+  if (!process.env.R2_BUCKET) return;
   try {
     const { buf } = await naarGif(maakFilm(), { breedte: 480 });
-    const url = await zetOpImgbb(buf, 'weekvijand', { map: 'weekvijand', timeout: 20000 });
-    const schoon = schoonOutput(tekst);
-    await slackLimiter.schedule(() => client.chat.update({
-      channel: kanaal, ts: bericht.ts, text: schoon,
-      blocks: [
-        { type: 'divider' },
-        ...splitsVoorBlokken(schoon).map(deel => ({ type: 'section', text: { type: 'mrkdwn', text: deel } })),
-        { type: 'image', image_url: url, alt_text: String(alt).substring(0, 1900) },
-      ],
+    let url = null;
+    for (let poging = 1; !url; poging++) {
+      try {
+        url = await zetOpImgbb(buf, 'weekvijand', { map: 'weekvijand', timeout: 20000 });
+      } catch (err) {
+        // 17 nov 2026: één upload brak af op een TLS-fout ("bad record mac"). Eén keer opnieuw.
+        if (poging >= 2) throw err;
+        await new Promise(r => setTimeout(r, 1500));
+      }
+    }
+    const vijand = weekvijandPersona(raid);
+    const kop = String(onderschrift).substring(0, 1900);
+    await slackLimiter.schedule(() => client.chat.postMessage({
+      channel: raid.kanaal || process.env.SLACK_CHANNEL_ID,
+      text: kop,
+      username: vijand?.naam || raid.vijand?.naam || 'De Weekvijand',
+      ...personaIcoon(vijand?.icoon),
+      blocks: [{ type: 'image', image_url: url, alt_text: kop, title: { type: 'plain_text', text: kop, emoji: true } }],
     }));
   } catch (err) {
     console.warn('⚠️ GIF van de weekvijand mislukt:', err.message);
   }
 }
+
+// Bij de genadeslag hoort de GIF vóór de overwinningspost in het kanaal, maar nooit langer dan een
+// paar seconden ophouden.
+const vijandGifVoorDeOverwinning = (gif) => Promise.race([gif, new Promise(r => setTimeout(r, 8000))]);
 
 // Gedeelde aanval-logica voor het `aanval`-commando én de knoppen op het raid-bord.
 // Retourneert { ok, tekst } — de tekst is ephemeral feedback voor de aanvaller.
@@ -12463,18 +12478,18 @@ async function voerBamischijfAanval(client, userId, metOffer) {
     gemist: schade === 0 && !wapen.ketst, ketst: wapen.ketst, terugslag: genomen, offer: metOffer,
     razend: isRazend(raid, gave), gave, pekelBonus: pekel.bonus,
   });
-  const klapAlt = `${vijandNaam} ${schade ? `krijgt −${schade} HP` : wapen.ketst ? 'laat een Vetbom terugketsen' : 'ontwijkt de klap'}${wapenKey ? ` (${WAPENS[wapenKey].naam})` : ''}`;
+  // Het onderschrift boven zijn GIF. Namen mogen hier wel: dit is Slack-tekst, geen plaatje op R2.
+  const klapKop = wapen.ketst ? `De Vetbom van ${bijnaam} ketst terug`
+    : schade === 0 ? `${bijnaam} mist`
+    : `${bijnaam}${wapenKey ? ` met ${WAPENS[wapenKey].icoon} ${WAPENS[wapenKey].naam}` : metOffer ? ' met een offer' : ''}: −${schade} HP${raid.hp <= 0 ? ', de genadeslag' : ''}`;
 
   if (raid.hp <= 0) {
     raid.actief = false;
     writeJSON('bamischijf.json', raid);
     await telActie(client, userId, 'raid_aanval'); // ook de genadeslag is een aanval
     await updateRaidBericht(client, raid);
-    if (raid.berichtTs) {
-      const regel = `⚔️ *${bijnaam}* ${uithaal}: de *genadeslag*.`;
-      const bericht = await postToChannel(client, kanaal, regel, { thread_ts: raid.berichtTs });
-      voegVijandGifToe(client, kanaal, bericht, regel, klapFilm, klapAlt);
-    }
+    if (raid.berichtTs) await postToChannel(client, kanaal, `⚔️ *${bijnaam}* ${uithaal}: de *genadeslag*.`, { thread_ts: raid.berichtTs });
+    await vijandGifVoorDeOverwinning(stuurVijandGif(client, raid, klapFilm, klapKop));
     await beslechtBamischijfOverwinning(client, kanaal, raid, userId, { knal: wapen.knal });
     return { ok: true, tekst: `⚔️ _Uw uithaal van −${schade} HP was de GENADESLAG — ${vijandNaam} is verslagen!_` };
   }
@@ -12490,8 +12505,8 @@ async function voerBamischijfAanval(client, userId, metOffer) {
     (wapen.pekel ? `\n🧂 Gepekeld: de volgende ${PEKEL_AANVALLEN} aanvallen van anderen vandaag doen +1.` : '');
   if (raid.berichtTs) {
     const regel = `${metOffer ? '🔥' : '⚔️'} *${bijnaam}* ${metOffer ? 'offert een kroketpunt en ' : ''}${uithaal} (${raid.hp}/${raid.maxHp} over).${terugRegel}`;
-    const bericht = await postToChannel(client, kanaal, regel, { thread_ts: raid.berichtTs });
-    voegVijandGifToe(client, kanaal, bericht, regel, klapFilm, klapAlt);
+    await postToChannel(client, kanaal, regel, { thread_ts: raid.berichtTs });
+    stuurVijandGif(client, raid, klapFilm, klapKop);
   } else {
     await postToChannel(client, kanaal,
       `⚔️ *AANVAL OP ${vijandNaam.toUpperCase()}* ⚔️\n\n> *${bijnaam}* ${metOffer ? 'offert een kroketpunt en ' : ''}${uithaal}.\n> ${vijandNaam}: *${raid.hp}/${raid.maxHp} HP*  ${hpBalk(raid.hp, raid.maxHp)}${terugRegel}\n\n— De Hoge Frituurraad`);
@@ -12606,20 +12621,22 @@ async function legInKanon(client, userId, n) {
   const schutters = Object.keys(raid.kanon.inleg).map(uid => members[uid]?.bijnaam || 'een volgeling').join(', ');
   logGebeurtenis('bamischijf', userId, `Het Frituurkanon vuurde op ${vijandNaam}: −${schade} HP (${schutters})`);
   const schotFilm = () => kanonFilm({ vijandKey: raid.vijand?.key, vijandNaam, schade, hpVoor, maxHp: raid.maxHp, razend: isRazend(raid, gaveVan(raid.vijand?.key)) });
-  const schotAlt = `Het Frituurkanon raakt ${vijandNaam}: −${Math.min(schade, hpVoor)} HP`;
+  const schotKop = `Het Frituurkanon: −${Math.min(schade, hpVoor)} HP${raid.hp <= 0 ? ', de genadeslag' : ''}`;
   if (raid.hp <= 0) {
     raid.actief = false;
     writeJSON('bamischijf.json', raid);
     await updateRaidBericht(client, raid);
     const regel = `🛢️💥 *HET FRITUURKANON VUURT* — −${schade} HP. ${vijandNaam} valt! Geladen door ${schutters}.`;
-    voegVijandGifToe(client, kanaal, await postToChannel(client, kanaal, regel), regel, schotFilm, schotAlt);
+    await postToChannel(client, kanaal, regel);
+    await vijandGifVoorDeOverwinning(stuurVijandGif(client, raid, schotFilm, schotKop));
     await beslechtBamischijfOverwinning(client, kanaal, raid, userId, { knal: false });
     return { ok: true, tekst: `_Uw inleg stak de lont aan: het kanon gaf de GENADESLAG._` };
   }
   writeJSON('bamischijf.json', raid);
   await updateRaidBericht(client, raid);
   const regel = `🛢️💥 *HET FRITUURKANON VUURT* op ${vijandNaam}: *−${schade} HP* (${raid.hp}/${raid.maxHp} over). Geladen door ${schutters}.`;
-  voegVijandGifToe(client, kanaal, await postToChannel(client, kanaal, regel), regel, schotFilm, schotAlt);
+  await postToChannel(client, kanaal, regel);
+  stuurVijandGif(client, raid, schotFilm, schotKop);
   return { ok: true, tekst: `_Uw inleg stak de lont aan: het kanon deed −${schade} HP._` };
 }
 
