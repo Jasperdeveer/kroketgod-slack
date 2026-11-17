@@ -11148,6 +11148,7 @@ const BINGO_POOL = [
   'Stel de Kroket God een filosofische vraag over de snackleer',
   'Reageer met :lekker_kroketje: op drie berichten van mede-leden',
   'Vraag de horoscoop op en handel ernaar',
+  'Overleef een poging tot zelflof',
 ];
 
 planCron('30 10 * * 1', async () => {
@@ -14378,7 +14379,7 @@ planCron('*/20 8-17 * * 1-5', async () => {
 }, { timezone: 'Europe/Amsterdam' });
 
 // De rooktests (scripts/rooktest/) komen zo bij de regisseur.
-if (process.env.KROKET_ROOKTEST) module.exports = { bouwDashboardData, voerDashboardActie, saveInstellingen, casinoOpen, regieTik, bouwRegieStand, voerIngreepUit, UITVOERDERS, regieStaat, bewaarRegie, mogAutonoomPosten, werkdagenStil, casinoToegangReden, casinoMax, casinoPlafond, boekCasinoUitslag, casinoOpen, sluitGeleKaartPoll, voerDuel, voerEer, winkelPrijs, prijsRedenen, prijsToelichting, CRON_LABELS, geplandeCronMeta };
+if (process.env.KROKET_ROOKTEST) module.exports = { bouwDashboardData, voerDashboardActie, saveInstellingen, casinoOpen, regieTik, bouwRegieStand, voerIngreepUit, UITVOERDERS, regieStaat, bewaarRegie, mogAutonoomPosten, werkdagenStil, casinoToegangReden, casinoMax, casinoPlafond, boekCasinoUitslag, casinoOpen, sluitGeleKaartPoll, voerDuel, voerEer, winkelPrijs, prijsRedenen, prijsToelichting, CRON_LABELS, geplandeCronMeta, kiesOpdrachten, opdrachtHaalbaar, opdrachtTekst, opdrachtPool, alleOpdrachten };
 
 // Wat het dashboard over het casino laat zien (bouwDashboardData) en kan (/api/casino).
 function casinoDashboardData(naam) {
@@ -14850,6 +14851,7 @@ async function koopWinkelItem(client, userId, itemKey, doelId, channelId) {
 //
 // Velden: id (uniek, ook de opslagsleutel) · soort 'dag'|'week' · actie (zie de hooks)
 //         doel (aantal) · beloning (kroketpunten) · tekst (weergave)
+const OPDRACHTEN_NIEUW_VANAF = '2026-11-18';
 const OPDRACHTEN = [
   // ── Dagelijks: klein, haalbaar, stuurt naar de spellen ──
   { id: 'd-offer',    soort: 'dag',  actie: 'offer',          doel: 1, beloning: 1, tekst: 'Offer aan het Grote Vetbad' },
@@ -14870,9 +14872,26 @@ const OPDRACHTEN = [
   { id: 'w-veiling',  soort: 'week', actie: 'veiling_bod',    doel: 1, beloning: 3, tekst: 'Bied op de Grote Veiling' },
   { id: 'w-roof',     soort: 'week', actie: 'roof_poging',    doel: 1, beloning: 3, tekst: 'Waag een Grote Kroketroof' },
   { id: 'w-goud',     soort: 'week', actie: 'gouden_kroket',  doel: 1, beloning: 5, tekst: 'Grijp de Gouden Kroket' },
-  // Houdt de weekpool op 8, zodat de weekkeuze (hash % pool) niet verschuift.
+  // Bestaande regels nooit weghalen of verplaatsen. Nieuwe regels komen achteraan en krijgen
+  // `vanaf` (zie opdrachtPool), zodat de keuze van een lopende dag/week (hash % pool) niet verschuift.
   { id: 'w-winkel',   soort: 'week', actie: 'winkel_koop',    doel: 3, beloning: 3, tekst: 'Doe drie aankopen in de Aflatenhandel' },
+
+  // ── Spoor 3: de teruggebrachte spellen krijgen een opdracht ──
+  { id: 'd-zegen',     soort: 'dag',  actie: 'gezegend',         doel: 1,  beloning: 2, tekst: 'Laat u zegenen door de profeet of op een zegendag', vanaf: OPDRACHTEN_NIEUW_VANAF },
+  { id: 'd-seizoen',   soort: 'dag',  actie: 'seizoen_daad',     doel: 3,  beloning: 1, tekst: 'Drijf {dreiging} terug met drie daden in de frituur', vanaf: OPDRACHTEN_NIEUW_VANAF },
+  { id: 'w-raad',      soort: 'week', actie: 'raad_stem',        doel: 1,  beloning: 3, tekst: 'Stem mee in de Raad over een gele kaart', vanaf: OPDRACHTEN_NIEUW_VANAF },
+  { id: 'w-genade',    soort: 'week', actie: 'begenade',         doel: 1,  beloning: 4, tekst: 'Help een balling terug met begenade', vanaf: OPDRACHTEN_NIEUW_VANAF },
+  { id: 'w-klacht',    soort: 'week', actie: 'klacht',           doel: 1,  beloning: 2, tekst: 'Dien een klacht in bij de Raad', vanaf: OPDRACHTEN_NIEUW_VANAF },
+  { id: 'w-tribunaal', soort: 'week', actie: 'tribunaal_stem',   doel: 1,  beloning: 3, tekst: 'Stem in een tribunaal', vanaf: OPDRACHTEN_NIEUW_VANAF },
+  { id: 'w-verbond',   soort: 'week', actie: 'verbond_gesloten', doel: 1,  beloning: 3, tekst: 'Sluit een verbond', vanaf: OPDRACHTEN_NIEUW_VANAF },
+  { id: 'w-premie',    soort: 'week', actie: 'premie_geind',     doel: 1,  beloning: 4, tekst: 'Claim een premie', vanaf: OPDRACHTEN_NIEUW_VANAF },
+  { id: 'w-missie',    soort: 'week', actie: 'missie_voltooid',  doel: 1,  beloning: 4, tekst: 'Voltooi een stille missie', vanaf: OPDRACHTEN_NIEUW_VANAF },
+  { id: 'w-seizoen',   soort: 'week', actie: 'seizoen_daad',     doel: 15, beloning: 4, tekst: 'Doe deze week vijftien daden tegen {dreiging}', vanaf: OPDRACHTEN_NIEUW_VANAF },
 ];
+
+// Dagsleutel (JJJJ-MM-DD) vanaf wanneer de nieuwe regels meedoen: dagen en weken met een
+// oudere sleutel houden hun oude keuze. Dagen: vanaf morgen (18 nov). Weken: de eerste maandag
+// daarna (23 nov). Schuif het niet op naar een datum die al voorbij is.
 
 const OPDRACHTEN_PER_DAG = 3;
 const OPDRACHTEN_PER_WEEK = 2;
@@ -14892,8 +14911,14 @@ function fnvHash(sleutel) {
 // Deterministische keuze uit de pool op basis van een sleutel (datum of weekstart). Iedereen
 // krijgt dezelfde opdrachten, en er is geen opgeslagen selectie die kan verdwijnen of
 // verouderen als een cron gemist wordt.
+function alleOpdrachten() { return OPDRACHTEN; } // voor de rooktest (de export staat boven de const)
+
+function opdrachtPool(soort, sleutel) {
+  return OPDRACHTEN.filter(o => o.soort === soort && (!o.vanaf || o.vanaf <= sleutel));
+}
+
 function kiesOpdrachten(soort, sleutel, aantal) {
-  const pool = OPDRACHTEN.filter(o => o.soort === soort);
+  const pool = opdrachtPool(soort, sleutel);
   let h = fnvHash(sleutel);
   const rest = [...pool];
   const gekozen = [];
@@ -14946,6 +14971,16 @@ function opdrachtHaalbaar(userId, o, resterend = o.doel) {
         const open = bingo.opdrachten.length - (bingo.claims?.[userId] || []).length;
         return open >= resterend;
       }
+      // Alleen haalbaar zolang er iemand is die zegent: een profeet met een ongebruikte zegen
+      // (niet jij zelf) of een zegendag van de regisseur.
+      case 'gezegend': {
+        const profeet = readJSON('profeet.json', {});
+        const zegenOver = profeet.userId && profeet.userId !== userId
+          && profeet.weekStart === getMondayOfWeek() && !profeet.zegenGebruikt;
+        return !!zegenOver || !!regie.effectActief(regieStaat(), 'zegendag', Date.now());
+      }
+      case 'seizoen_daad':
+        return loadSeizoen()?.status === 'actief';
       default:
         return true;
     }
@@ -14967,7 +15002,7 @@ function opdrachtHaalbaar(userId, o, resterend = o.doel) {
 function dagOpdrachtenVoor(userId, lopend = null) {
   const basis = kiesOpdrachten('dag', dagSleutel(), OPDRACHTEN_PER_DAG);
   if (!userId) return basis;
-  const pool = OPDRACHTEN.filter(o => o.soort === 'dag');
+  const pool = opdrachtPool('dag', dagSleutel());
   const { alles, dag, week } = opdrachtBakken(userId);
   const vervangen = { ...(dag.vervangen || {}) };
   const resterendVan = (o) => o.doel - (dag.voortgang?.[o.id] || 0)
@@ -15123,7 +15158,9 @@ async function telActie(client, userId, actie, aantal = 1, naspel = null) {
     // Per lid, want een onhaalbaar geworden dagopdracht is voor dit lid vervangen (zie
     // dagOpdrachtenVoor). `{ actie, aantal }` gaat mee zodat de daad die we NU bijschrijven
     // niet zelf voor "onhaalbaar" wordt aangezien — de poging is immers al verbruikt.
-    const actief = actieveOpdrachtenVoor(userId, { actie, aantal }).filter(o => o.actie === actie);
+    // Een daad die het seizoen raakt (seizoenNa) telt ook voor 'seizoen_daad'-opdrachten.
+    const actief = actieveOpdrachtenVoor(userId, { actie, aantal })
+      .filter(o => o.actie === actie || (seizoenNa && o.actie === 'seizoen_daad'));
     if (!actief.length) return;
     const { alles, dag, week } = opdrachtBakken(userId);
     const voltooid = [];
@@ -15190,7 +15227,14 @@ function huidigeVijandNaam({ middenInZin = false } = {}) {
 
 // Opdrachttekst met {vijand} opgelost. Elke plek die een opdracht toont gaat hierlangs.
 function opdrachtTekst(o) {
-  return String(o?.tekst || '').replace(/\{vijand\}/g, huidigeVijandNaam({ middenInZin: true }));
+  const dreiging = (() => {
+    const s = loadSeizoen();
+    const naam = s?.status === 'actief' && s.dreiging?.naam ? s.dreiging.naam : 'de dreiging van het seizoen';
+    return naam.replace(/^(De|Het|Een)\s/, (m) => m.toLowerCase());
+  })();
+  return String(o?.tekst || '')
+    .replace(/\{vijand\}/g, huidigeVijandNaam({ middenInZin: true }))
+    .replace(/\{dreiging\}/g, dreiging);
 }
 
 // Toelichting onder een opdrachtregel: waarom staat deze er (vervanging), of waarom lukt hij
