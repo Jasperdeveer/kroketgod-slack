@@ -9811,6 +9811,7 @@ app.event('reaction_added', async ({ event, client }) => {
 
     if (event.item.channel !== process.env.SLACK_CHANNEL_ID) return;
     if (event.user === event.item_user) return;
+    if (event.reaction === raadpleeg.HEILIG.emoji && await bevestigHeilige(client, event)) return;
 
     // ── Stille Missie: emoji-detectie ──────────────────────────────────────
     const missie = loadMissie();
@@ -14467,20 +14468,64 @@ const RITUEEL_UITVOERDERS = {
     return { tekst, regel: voorspeld ? `🔮 *Voorspelling:* ${voorspeld}. Komt die uit, dan krijgt *${naam}* 1 kroketpunt.`
       : '🔮 _Er is geen ander lid om over te voorspellen._' };
   },
+  canoniseer: async ({ userId, naam, rest, client, channelId }) => {
+    const kandidaat = rest ? getMemberByNaam(rest) : null;
+    if (!kandidaat || isVerbannen(kandidaat[0])) return { fout: 'onbekend', melding: '_Wie wilt u heilig laten verklaren? Noem een lid dat niet in ballingschap zit: `/kroketgod raadpleeg canoniseer <naam>`._' };
+    const [kandidaatId, lid] = kandidaat;
+    const toets = raadpleeg.draagVoor(raadpleegStaat(), { voorsteller: userId, kandidaat: kandidaatId, nu: Date.now(), ts: null, kanaal: channelId });
+    if (toets.fout) {
+      const meldingen = {
+        zelf: '_U kunt uzelf niet heilig verklaren. Laat het aan het genootschap over._',
+        al_heilige: '_Er is vandaag al een Heilige van de Dag. Morgen weer._',
+        open_voordracht: '_Er staat al een voordracht open. Wacht tot die is afgerond._',
+      };
+      return { fout: toets.fout, melding: meldingen[toets.fout] };
+    }
+    const tekst = await kroketResponseMetVangnet(
+      `${naam} draagt ${lid.bijnaam} voor als Heilige van de Dag. Het genootschap moet nog bevestigen. Kondig de voordracht plechtig aan. Eén tot twee zinnen. Geen inleidingszin.\n\n${wrapOnvertrouwd('De toelichting', rest)}`,
+      250, false, `😇 _${naam} draagt ${lid.bijnaam} voor als heilige van de dag. Het genootschap beslist._`);
+    return {
+      tekst,
+      regel: `😇 Bevestig met :${raadpleeg.HEILIG.emoji}:. Bij *${raadpleeg.HEILIG.drempel}* bevestigingen van anderen is *${lid.bijnaam}* vandaag heilig (de voordracht staat 2 uur open).`,
+      naPost: async (res) => {
+        if (!res?.ts) return;
+        const r = raadpleeg.draagVoor(raadpleegStaat(), { voorsteller: userId, kandidaat: kandidaatId, nu: Date.now(), ts: res.ts, kanaal: channelId });
+        if (r.fout) return;
+        bewaarRaadpleeg(r.staat);
+        await slackLimiter.schedule(() => client.reactions.add({ channel: channelId, timestamp: res.ts, name: raadpleeg.HEILIG.emoji })).catch(() => {});
+      },
+    };
+  },
 };
+
+// Een 😇 op de voordracht: telt alleen van een lid dat geen balling is. Geeft true als de reactie bij de voordracht hoorde.
+async function bevestigHeilige(client, event) {
+  const staat0 = raadpleegStaat();
+  const h = staat0.heilige;
+  if (!h || h.ts !== event.item?.ts || !loadMembers()[event.user] || isVerbannen(event.user)) return false;
+  const r = raadpleeg.bevestig(staat0, { userId: event.user, ts: event.item.ts, nu: Date.now() });
+  if (r.staat !== staat0) bewaarRaadpleeg(r.staat);
+  if (r.nieuwHeilig) {
+    const naam = loadMembers()[h.kandidaat]?.bijnaam || 'de kandidaat';
+    await postToChannel(client, h.kanaal || event.item.channel, `✨ *${naam} is de Heilige van de Dag.* Het genootschap heeft gesproken; de Kroket God spreekt ${naam} tot middernacht als heilige aan.`);
+    logGebeurtenis('heilige', h.kandidaat, `${naam} werd door het genootschap heilig verklaard`);
+  }
+  return true;
+}
 
 async function voerRitueelUit(client, { userId, ritueel, rest, channelId, respond, rng = Math.random }) {
   const uitvoerder = RITUEEL_UITVOERDERS[ritueel];
   const zeg = (text) => respond({ text, response_type: 'ephemeral' });
   if (!uitvoerder) return zeg(RITUELEN_TEKST);
   const naam = loadMembers()[userId]?.bijnaam || 'Ongepaneerde vreemdeling';
-  const uit = await uitvoerder({ userId, naam, rest, rng });
+  const uit = await uitvoerder({ userId, naam, rest, rng, client, channelId });
   if (uit.fout) return zeg(uit.melding || `_U heeft de Kroket God vandaag al om een ${ritueel} gevraagd. Morgen weer._`);
-  await postToChannel(client, channelId, `${uit.tekst}\n\n${uit.regel}`);
+  const res = await postToChannel(client, channelId, `${uit.tekst}\n\n${uit.regel}`);
+  if (uit.naPost) await uit.naPost(res);
 }
 
 // De rooktests (scripts/rooktest/) komen zo bij de regisseur.
-if (process.env.KROKET_ROOKTEST) module.exports = { voerRitueelUit, raadpleegStaat, bewaarRaadpleeg, bouwDashboardData, voerDashboardActie, saveInstellingen, casinoOpen, regieTik, bouwRegieStand, voerIngreepUit, UITVOERDERS, regieStaat, bewaarRegie, mogAutonoomPosten, werkdagenStil, casinoToegangReden, casinoMax, casinoPlafond, boekCasinoUitslag, casinoOpen, sluitGeleKaartPoll, voerDuel, bouwAppHomeBlocks, voerEer, winkelPrijs, prijsRedenen, prijsToelichting, CRON_LABELS, geplandeCronMeta };
+if (process.env.KROKET_ROOKTEST) module.exports = { bouwDossierBlok, voerRitueelUit, raadpleegStaat, bewaarRaadpleeg, bouwDashboardData, voerDashboardActie, saveInstellingen, casinoOpen, regieTik, bouwRegieStand, voerIngreepUit, UITVOERDERS, regieStaat, bewaarRegie, mogAutonoomPosten, werkdagenStil, casinoToegangReden, casinoMax, casinoPlafond, boekCasinoUitslag, casinoOpen, sluitGeleKaartPoll, voerDuel, bouwAppHomeBlocks, voerEer, winkelPrijs, prijsRedenen, prijsToelichting, CRON_LABELS, geplandeCronMeta };
 
 // Wat het dashboard over het casino laat zien (bouwDashboardData) en kan (/api/casino).
 function casinoDashboardData(naam) {
@@ -16361,6 +16406,8 @@ function bouwDossierBlok(userId) {
     if (titels.length) {
       regels.push(`draagt de titel${titels.length > 1 ? 's' : ''}: ${titels.map(t => `${t.naam}${t.verdedigingen ? ` (${t.verdedigingen}× verdedigd)` : ''}`).join(', ')}`);
     }
+
+    if (raadpleeg.heiligeVandaag(raadpleegStaat()) === userId) regels.push('is vandaag de Heilige van de Dag, bevestigd door het genootschap');
 
     const bondgenoten = getBondgenotenRuw(userId).filter(id => members[id]);
     if (bondgenoten.length) {
@@ -18346,6 +18393,7 @@ function bouwAppHomeBlocks(userId, melding = '', extraBlocks = []) {
   const raadpleegLid = raadpleegStaat().leden[userId] || {};
   if (raadpleegLid.horoscoop && !raadpleegLid.horoscoop.verbruikt) eretitels.push(`🔭 Horoscoop: ${raadpleegLid.horoscoop.teken} voor uw volgende duel vandaag`);
   if (raadpleegLid.orakel?.tekst && !raadpleegLid.orakel.uitgekomen) eretitels.push(`🔮 Uw voorspelling: ${raadpleegLid.orakel.tekst.replace('{naam}', loadMembers()[raadpleegLid.orakel.doel]?.bijnaam || 'een lid')}`);
+  if (raadpleeg.heiligeVandaag(raadpleegStaat()) === userId) eretitels.push('😇 Heilige van de Dag — tot middernacht');
   for (const t of titelsVan(userId)) {
     eretitels.push(`${t.icoon} ${t.naam}${t.verdedigingen ? ` — ${t.verdedigingen}× verdedigd` : ''}`);
   }

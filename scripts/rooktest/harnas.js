@@ -42,7 +42,7 @@ module.exports = async function harnas(test, { opstartMs = 2500 } = {}) {
   const updates = [];
   const ephemeral = []; // chat.postEphemeral: { user, text }
   const views = []; // client.views.* aanroepen: { fn, args }
-  const handlers = { action: [], command: {} };
+  const handlers = { action: [], command: {}, event: {} };
   let tsTeller = 1000;
   const schakel = { faalPost: false }; // true: chat.postMessage gooit (een mislukte Slack-post)
   const client = new Proxy({}, { get: (_, ns) => new Proxy({}, { get: (_, fn) => async (args = {}) => {
@@ -57,7 +57,8 @@ module.exports = async function harnas(test, { opstartMs = 2500 } = {}) {
     constructor() { this.client = client; }
     action(id, fn) { handlers.action.push([id, fn]); }
     command(naam, fn) { handlers.command[naam] = fn; }
-    event() {} view() {} shortcut() {} options() {} message() {} use() {} error() {}
+    event(naam, fn) { (handlers.event[naam] ||= []).push(fn); }
+    view() {} shortcut() {} options() {} message() {} use() {} error() {}
     async start() {} async stop() {}
   }
   const boltPad = require.resolve('@slack/bolt', { paths: [repo] });
@@ -75,6 +76,8 @@ module.exports = async function harnas(test, { opstartMs = 2500 } = {}) {
       ack: async () => {}, respond: async (r) => { antwoord += (typeof r === 'string' ? r : r.text) + '\n'; }, client });
     return antwoord;
   }
+  // Draait elke handler die met `app.event(naam, fn)` is geregistreerd, met { event, client }.
+  const gebeurtenis = async (naam, event) => { for (const fn of handlers.event[naam] || []) await fn({ event, client }); };
   const wacht = (ms) => new Promise((r) => setTimeout(r, ms));
   const ok = (cond, wat) => { console.log(`${cond ? '✔' : '✖'} ${wat}`); if (!cond) process.exitCode = 1; };
 
@@ -82,7 +85,7 @@ module.exports = async function harnas(test, { opstartMs = 2500 } = {}) {
   const index = require(path.join(repo, 'index.js'));
   await wacht(opstartMs);
   try {
-    await test({ klik, commando, lees, schrijf, posts, updates, ephemeral, views, ok, wacht, client, index, state, uitmap, r2, handlers, schakel });
+    await test({ klik, commando, gebeurtenis, lees, schrijf, posts, updates, ephemeral, views, ok, wacht, client, index, state, uitmap, r2, handlers, schakel });
   } catch (err) { console.error('FOUT', err); process.exitCode = 1; }
   process.exit();
 };
