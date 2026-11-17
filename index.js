@@ -2343,7 +2343,20 @@ function winkelPrijs(userId, item) {
   // van de twee geldt. De nalatenschap van het vorige seizoen komt er als vast bedrag bij:
   // een gewonnen seizoen maakt alles een punt goedkoper, een verloren seizoen een punt duurder.
   const korting = Math.max(getVoorrechten(userId).winkelKorting, heeftTitel(userId, 'aflatenmeester') ? 0.25 : 0);
-  return Math.max(1, Math.ceil(item.prijs * (1 - korting)) + nalatenschapPrijsDelta());
+  const prijs = Math.max(1, Math.ceil(item.prijs * (1 - korting)) + nalatenschapPrijsDelta());
+  // De regisseur komt als laatste, over de al aangepaste prijs van dit lid: inflatie verdubbelt,
+  // uitverkoop haalt er 1 af (minimum 1). Alleen de Aflatenhandel; wapens gebruiken deze functie niet.
+  if (casinoEffect('inflatie')) return prijs * 2;
+  if (casinoEffect('uitverkoop')) return Math.max(1, prijs - 1);
+  return prijs;
+}
+
+// De toelichting achter een afwijkende prijs: een korting toont de oude prijs doorgestreept, een
+// opslag (inflatie, verloren seizoen) heet opslag en wordt niet als korting voorgesteld.
+function prijsToelichting(userId, basis, prijs) {
+  if (prijs === basis) return '';
+  const redenen = prijsRedenen(userId).join(' + ') || 'aangepast';
+  return prijs < basis ? ` (~${basis}~ ${redenen})` : ` (basis ${basis}, opslag: ${redenen})`;
 }
 
 // Waarom wijkt de winkelprijs af van de basisprijs? Voor de App Home, zodat de korting (of
@@ -2357,6 +2370,8 @@ function prijsRedenen(userId) {
   const delta = nalatenschapPrijsDelta();
   if (delta < 0) redenen.push('zegen van het vorige seizoen');
   else if (delta > 0) redenen.push('nalatenschap van het verloren seizoen');
+  if (casinoEffect('inflatie')) redenen.push('inflatie');
+  else if (casinoEffect('uitverkoop')) redenen.push('uitverkoop');
   return redenen;
 }
 
@@ -7334,7 +7349,7 @@ async function voerKroketCommandoUit({ command, respond, client }) {
       const regels = Object.entries(WINKEL_ITEMS)
         .map(([key, w]) => {
           const p = winkelPrijs(command.user_id, w);
-          const kortingZin = p < w.prijs ? ` (~${w.prijs}~ rangkorting)` : '';
+          const kortingZin = prijsToelichting(command.user_id, w.prijs, p);
           return `${w.icoon} *${w.naam}* — *${p} pt*${kortingZin} — \`koop ${key}\`\n> _${w.uitleg}_`;
         })
         .join('\n');
@@ -12111,6 +12126,9 @@ async function voerDuel(client, userId, doelId, channelId, wapenId = null) {
   // Ban-check hoort HIER, niet alleen in de slash-gate: knoppen/modals uit de App Home komen
   // niet langs die gate, en een view die vóór de verbanning is geopend heeft de knoppen nog.
   if (isVerbannen(userId)) return { ok: false, tekst: '_Een balling voert geen duels. Toon eerst berouw._' };
+  // Duelverbod van de regisseur: vóór alles wat state schrijft (daglimiet, weerwoord, fortuin).
+  const verbod = casinoEffect('duelverbod');
+  if (verbod) return { ok: false, tekst: `_De Kroket God wil rust: tot ${hhmmAms(verbod.tot)} wordt er niet gedueld._` };
   const pauze = await gokpauzeWeigering(userId, 'een medelid uit te dagen voor een duel om punten');
   if (pauze) return { ok: false, tekst: pauze };
   const doelLid = members[doelId];
@@ -12162,11 +12180,9 @@ async function voerDuel(client, userId, doelId, channelId, wapenId = null) {
   const metWeerwoord = !!weerwoord && weerwoord.tegenId === doelId;
   if (metWeerwoord) verbruikWeerwoord(userId);
   const basisKansDuel = metWeerwoord ? WEERWOORD_KANS : 0.5;
-  const winnaarIsUitdager = fortuinUitdager ? true
+  let winnaarIsUitdager = fortuinUitdager ? true
     : fortuinDoelwit ? false
     : Math.random() < basisKansDuel + (getGeluk(userId) - getGeluk(doelId));
-  const [winId, winNaam] = winnaarIsUitdager ? [userId, uitdager.bijnaam] : [doelId, doelLid.bijnaam];
-  const [verliesId, verliesNaam] = winnaarIsUitdager ? [doelId, doelLid.bijnaam] : [userId, uitdager.bijnaam];
 
   // DE INZET komt uit lib/paar.js en nergens anders. Drie mechanieken willen hem verhogen —
   // openstaande kerven, een verklaarde eeuwige twist, en de vete van het Rijk — en los
@@ -12179,11 +12195,37 @@ async function voerDuel(client, userId, doelId, channelId, wapenId = null) {
   // De kerven van de VERLIEZER tegen de winnaar bepalen de inzet niet — die van de UITDAGER
   // tegen zijn doelwit doen dat, want dat is de wrok die dit duel veroorzaakte.
   const kervenNu = kerven(stokNu, userId, doelId);
-  const inzet = duelInzet({
+  let inzet = duelInzet({
     kerven: kervenNu, twist: twistNu, vete: veteNu,
     bezitA: scores[userId] || 0, bezitB: scores[doelId] || 0,
   });
-  const inzetRedenNu = inzetRedenen({ kerven: kervenNu, twist: twistNu, vete: veteNu });
+  let inzetRedenNu = inzetRedenen({ kerven: kervenNu, twist: twistNu, vete: veteNu });
+
+  // Omgekeerd uur (regisseur, regel P23): de uitslag keert om en de inzet is hoogstens 5. Een
+  // gegarandeerde winst (pakFortuin) gaat voor. Het blijft een overdracht tussen de twee leden
+  // (de Schatkist doet niet mee), maar telt voor de plafonds: past het niet in regie.ruimte(),
+  // dan staat de gewone uitslag. Een Talisman van de verliezer houdt diens nemen buiten beeld.
+  let omgekeerd = false;
+  if (casinoEffect('omgekeerdUur') && !fortuinUitdager && !fortuinDoelwit) {
+    const stak = Math.min(5, inzet);
+    const nuMs = Date.now();
+    const ruim = regie.ruimte(regieStaat(), nuMs);
+    const betaler = winnaarIsUitdager ? userId : doelId; // de gewone winnaar verliest nu
+    const ontvanger = winnaarIsUitdager ? doelId : userId;
+    const betaalt = !heeftPowerup(betaler, 'duel_talisman');
+    if (ruim.geven >= stak && (!betaalt || (ruim.nemen >= stak && ruim.nemenVan(betaler) >= stak && (scores[betaler] || 0) >= stak))) {
+      omgekeerd = true;
+      winnaarIsUitdager = !winnaarIsUitdager;
+      inzet = stak;
+      inzetRedenNu = [];
+      let staatNu = regieStaat();
+      if (betaalt) staatNu = regie.boekNawerking(staatNu, { nu: nuMs, id: 'omgekeerd_uur', doel: betaler, punten: -stak });
+      bewaarRegie(regie.boekNawerking(staatNu, { nu: nuMs, id: 'omgekeerd_uur', doel: ontvanger, punten: stak }));
+    }
+  }
+  // Vanaf hier staan winnaar en verliezer vast (ook na een omkering): hier hangen haken in.
+  const [winId, winNaam] = winnaarIsUitdager ? [userId, uitdager.bijnaam] : [doelId, doelLid.bijnaam];
+  const [verliesId, verliesNaam] = winnaarIsUitdager ? [doelId, doelLid.bijnaam] : [userId, uitdager.bijnaam];
 
   // Talisman van de Onverliesbare Korst (Grote Veiling): het eerstvolgende duelverlies
   // kost geen punt. De talisman is daarna verbruikt.
@@ -12249,6 +12291,7 @@ async function voerDuel(client, userId, doelId, channelId, wapenId = null) {
     `${uitdager.bijnaam} heeft ${doelLid.bijnaam} uitgedaagd voor een HEILIG FRITUURDUEL. Beiden zetten ${inzet} kroketpunt${inzet === 1 ? '' : 'en'} in. ` +
     wapenZin + wrokZin +
     `De Kroket God heeft het duel beslecht: ${winNaam} WINT (+${inzet}), ${verliesNaam} verliest (−${inzet}). ` +
+    (omgekeerd ? `Het is het Omgekeerde Uur: de uitslag is omgedraaid, de eigenlijke favoriet verloor — benoem dat kort. ` : '') +
     `Beschrijf het duel als een episch, absurd frituurgevecht in 3-5 zinnen — wapens uit de snackleer, dramatische wendingen. ` +
     `Eindig met de uitslag. Gebruik beide namen letterlijk. Noem GEEN puntenstanden — het systeem voegt die zelf toe. Geen inleidingszin.`,
     500, false,
@@ -12291,6 +12334,7 @@ async function voerDuel(client, userId, doelId, channelId, wapenId = null) {
   // thread open; de rest leest de uitslag en gaat door.
   const voetnoten = [
     talismanBlok && `🧿 De Talisman van de Onverliesbare Korst ving het verlies van ${verliesNaam} op — geen punt verloren, de talisman is verbruikt.`,
+    omgekeerd && `🔄 Het Omgekeerde Uur: de uitslag is omgedraaid en de inzet was hoogstens 5.`,
     inzetBlok && `🪵 De inzet was *${inzet}* — ${inzetRedenNu.join(' · ')}. Een gewoon duel kost 1.`,
     weerBlok && `🗣️ Dit was een WEERWOORD: ${uitdager.bijnaam} werd eerder eenzijdig aangevallen en vocht met de kans in zijn voordeel. Het recht is verbruikt.`,
     nieuwWeerwoord && `⏳ ${verliesNaam} houdt 24 uur een weerwoord tegen ${winNaam}: één duel buiten de daglimiet, met 60% in zijn voordeel.`,
@@ -13272,7 +13316,9 @@ async function voerEer(client, geverId, ontvangerIds, reden, channelId, opties =
   // herhaalstraf blijft staan, dus een hergebruikt huisonderwerp komt één klasse lager uit dan
   // een verse. Dat is precies de juiste rangorde.
   const huisGeraakt = raaktHuisonderwerp(schoneReden, huisonderwerpenUit(instelling('eerHuisonderwerpen')));
-  const basisKlasse = huisGeraakt ? promoveerKlasse(juryKlasse) : juryKlasse;
+  const metHuis = huisGeraakt ? promoveerKlasse(juryKlasse) : juryKlasse;
+  // Dubbele eer (regisseur): voor iedereen één trede hoger, zodat de aankondiging de gegeven klasse noemt.
+  const basisKlasse = casinoEffect('dubbeleEer') ? promoveerKlasse(metHuis) : metHuis;
   if (!vanGod) onthoudEerReden(geverId, schoneReden);
 
   const eerPunten = {};
@@ -14165,6 +14211,22 @@ const UITVOERDERS = {
     regieEffect('goudenUur', keuze.duurMinuten || 60);
     return { feiten: 'Een uur lang betaalt een gewonnen spel in het casino anderhalf keer uit, met hoogstens 5 extra punten per spel.' };
   },
+  duelverbod: async (client, keuze) => {
+    const verbod = regieEffect('duelverbod', keuze.duurMinuten || 120);
+    return { feiten: `Tot ${hhmmAms(verbod.tot)} mag niemand duelleren: de Kroket God wil rust.` };
+  },
+  inflatie: async (client, keuze) => {
+    regieEffect('inflatie', keuze.duurMinuten || 60);
+    return { feiten: 'Een uur lang is alles in de Aflatenhandel twee keer zo duur.' };
+  },
+  uitverkoop: async (client, keuze) => {
+    regieEffect('uitverkoop', keuze.duurMinuten || 60);
+    return { feiten: 'Een uur lang is alles in de Aflatenhandel 1 punt goedkoper, met een minimum van 1.' };
+  },
+  dubbele_eer: async (client, keuze) => {
+    regieEffect('dubbeleEer', keuze.duurMinuten || 60);
+    return { feiten: 'Een uur lang telt elke eer één klasse hoger, voor iedereen.' };
+  },
   belasting: async (client, keuze, stand, nu) => neemVoorSchatkist(keuze, nu),
   beslag: async (client, keuze, stand, nu) => neemVoorSchatkist(keuze, nu),
   schorsing: async (client, keuze, stand, nu) => {
@@ -14242,7 +14304,7 @@ planCron('*/20 8-17 * * 1-5', async () => {
 }, { timezone: 'Europe/Amsterdam' });
 
 // De rooktests (scripts/rooktest/) komen zo bij de regisseur.
-if (process.env.KROKET_ROOKTEST) module.exports = { regieTik, bouwRegieStand, voerIngreepUit, UITVOERDERS, regieStaat, bewaarRegie, mogAutonoomPosten, werkdagenStil, casinoToegangReden, casinoMax, casinoPlafond, boekCasinoUitslag, casinoOpen, sluitGeleKaartPoll };
+if (process.env.KROKET_ROOKTEST) module.exports = { regieTik, bouwRegieStand, voerIngreepUit, UITVOERDERS, regieStaat, bewaarRegie, mogAutonoomPosten, werkdagenStil, casinoToegangReden, casinoMax, casinoPlafond, boekCasinoUitslag, casinoOpen, sluitGeleKaartPoll, voerDuel, voerEer, winkelPrijs, prijsRedenen, prijsToelichting };
 
 // Wat het dashboard over het casino laat zien (bouwDashboardData) en kan (/api/casino).
 function casinoDashboardData(naam) {
@@ -17869,7 +17931,7 @@ const NASLAG = {
         const teDuur = eigenScore < prijs;
         const blok = {
           type: 'section',
-          text: { type: 'mrkdwn', text: `${w.icoon} *${w.naam}* — *${prijs} pt*${prijs !== w.prijs ? ` _(~${w.prijs}~ ${prijsRedenen(userId).join(' + ') || 'aangepast'})_` : ''}\n_${w.uitleg}_` },
+          text: { type: 'mrkdwn', text: `${w.icoon} *${w.naam}* — *${prijs} pt*${prijsToelichting(userId, w.prijs, prijs)}\n_${w.uitleg}_` },
         };
         // Geen knop bij wat al actief of onbetaalbaar is — een knop die gegarandeerd een
         // afwijzing oplevert, is een knop die liegt.
