@@ -129,6 +129,7 @@ casino.json
 casinobonus.json
 gokpauze.json
 casinostats.json
+regie.json
 
 # De seed-state van de rooktests is verzonnen (leden UA..UF) en hoort wel in git.
 !scripts/rooktest/seed-state/*.json

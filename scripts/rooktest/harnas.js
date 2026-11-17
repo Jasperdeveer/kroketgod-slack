@@ -12,12 +12,14 @@ module.exports = async function harnas(test, { opstartMs = 2500 } = {}) {
   const repo = path.join(__dirname, '..', '..');
   const state = fs.mkdtempSync(path.join(os.tmpdir(), 'rooktest-state-'));
   const uitmap = fs.mkdtempSync(path.join(os.tmpdir(), 'rooktest-uit-'));
+  process.on('exit', () => { for (const d of [state, uitmap]) fs.rmSync(d, { recursive: true, force: true }); });
   const seed = path.join(__dirname, 'seed-state');
   for (const f of fs.readdirSync(seed)) fs.copyFileSync(path.join(seed, f), path.join(state, f));
 
   Object.assign(process.env, {
     KROKET_STATE_DIR: state, KROKET_ROOKTEST: '1', SLACK_BOT_TOKEN: 'xoxb-nep', SLACK_APP_TOKEN: 'xapp-nep', SLACK_SIGNING_SECRET: 'nep',
     SLACK_CHANNEL_ID: 'CKANAAL', KROKET_EMOJI_VERTRAGING_MS: '0',
+    GROQ_BASE_URL: 'http://127.0.0.1:9', // groq-sdk leest dit: verbinding geweigerd, geen netwerk
     GEMINI_API_KEY: '', GEMINI_API_KEYS: '', GROQ_API_KEY: 'gsk-nep-ongeldig', OPENROUTER_API_KEY: '', CEREBRAS_API_KEY: '',
     SAMBANOVA_API_KEY: '', HF_API_TOKEN: '', IMGBB_API_KEY: '', CLOUDFLARE_API_TOKEN: '', DASHBOARD_TOKEN: 'nep',
     R2_ACCOUNT_ID: 'acc', R2_ACCESS_KEY_ID: 'id', R2_SECRET_ACCESS_KEY: 'geheim', R2_BUCKET: 'emmer', R2_PUBLIC_URL: 'https://beeld.voorbeeld.nl',

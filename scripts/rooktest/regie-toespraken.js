@@ -52,7 +52,7 @@ harnas(async (h) => {
   const gid3 = knopId(h.posts.at(-1), 'regie_gunst');
   h.schrijf('regie.json', { ...staat(), log: [{ ts: Date.now(), id: 'x', laag: 'ingreep', doel: null, punten: 15, soort: 'geven' }] });
   await h.klik('regie_gunst', 'UC', { value: gid3 });
-  h.ok(score('UC') === 10 && /genoeg weggegeven/.test(h.ephemeral.at(-1).text), 'dagplafond op: vriendelijk bericht, geen punten');
+  h.ok(score('UC') === 10 && /voor vandaag leeg/.test(h.ephemeral.at(-1).text), 'dagplafond op: vriendelijk bericht, geen punten');
   // Schatkist eerst.
   h.schrijf('regie.json', { ...staat(), log: [], schatkist: 5 });
   await h.klik('regie_gunst', 'UC', { value: gid3 });

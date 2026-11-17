@@ -9917,7 +9917,7 @@ const CRON_LABELS = {
   '30 9 * * 1':      { label: 'Weekvijand (opkomst)' },
   '0 11 * * 3':      { label: 'Premiejacht (kans)' },
   '0 11 * * 4':      { label: 'Het Verhoor' },
-  '*/20 8-17 * * 1-5': { label: 'Regisseur (kans)' },
+  '*/20 8-17 * * 1-5': { label: 'Regisseur (kans)', nietInLijst: true }, // elke werkdag-tik zou de lijst 'eerstvolgende' vullen
   '0 16 * * 5':      { label: 'Frituurloterij (trekking)' },
   '20 9 * * 1':      { label: 'Kroketkroniek' },
 };
@@ -9941,7 +9941,7 @@ function planCron(expression, handler, options = {}) {
   const taak = cron.schedule(expression, echteHandler, { timezone: 'Europe/Amsterdam', ...options });
   if (meta) {
     // toonExpr = de expressie voor de "volgende keer"-berekening (bij vrijdagOnly de vrijdag-variant).
-    geplandeCronMeta.push({ key: meta.label, label: meta.label, toonExpr: meta.toonExpr || expression, taak });
+    geplandeCronMeta.push({ key: meta.label, label: meta.label, toonExpr: meta.toonExpr || expression, taak, nietInLijst: !!meta.nietInLijst });
   }
   geplandeCrons.push(taak);
   return taak;
@@ -12325,7 +12325,12 @@ async function voerDuel(client, userId, doelId, channelId, wapenId = null) {
   await telActie(client, doelId, 'duel', 1, naspel);
   await telActie(client, winId, 'duel_gewonnen', 1, naspel);
   // De uitdaging van de regisseur (hekkensluiter wint van de koploper): mag het duel nooit breken.
-  try { const regel = regieUitdagingUitslag(winId, verliesId); if (regel) naspelRegel(naspel, regel); }
+  try {
+    const regel = regieUitdagingUitslag(winId, verliesId);
+    // Geen ruimte: alleen de winnaar hoort het (ephemeral), niet de hele duel-draad.
+    if (regel === REGIE_GEEN_RUIMTE) client.chat.postEphemeral({ channel: channelId, user: winId, text: regel }).catch(() => {});
+    else if (regel) naspelRegel(naspel, regel);
+  }
   catch (err) { console.error('Fout bij de uitdaging van de regisseur:', err?.message || err); }
   // Alles wat hierboven iets meldde, in één antwoord in de thread onder het vonnis.
   await postNaspel(client, channelId, hoofd?.ts, naspel);
@@ -14176,7 +14181,7 @@ function betaalNawerking({ nu = Date.now(), id, doel, punten }) {
   pasScoreAan(doel, n);
   return n;
 }
-const REGIE_GEEN_RUIMTE = '_De Kroket God heeft vandaag al genoeg weggegeven. Probeer het later nog eens._';
+const REGIE_GEEN_RUIMTE = '_De Schatkist van de Kroket God is voor vandaag leeg: er valt niets meer uit te keren. Morgen weer._';
 const regieKnopTekst = (tekst, action_id, value, style = 'primary') => [{ type: 'button', action_id, value, style, text: { type: 'plain_text', text: tekst } }];
 
 // De duelhaak van de uitdaging: wint de hekkensluiter van de koploper binnen de looptijd, dan 3 punten, één keer.
@@ -14264,7 +14269,10 @@ const UITVOERDERS = {
   },
   koploper_uitdagen: async (client, keuze, stand, nu) => {
     const r = stand.leden.filter((l) => !l.gast && !l.verbannen && !l.afwezig).sort((a, b) => b.score - a.score);
-    const [kop, hek] = [r[0].id, r[r.length - 1].id];
+    const kop = r[0].id;
+    // Een gegarandeerde weigering van voerDuel (0 punten, bondgenoot, gokpauze) is geen hekkensluiter.
+    const hek = r.slice(1).reverse().find((l) => l.score >= 1 && !isBondgenoot(kop, l.id) && !opGokpauze(l.id))?.id;
+    if (!hek || r[0].score < 1) return { tekst: null }; // niemand kan duelleren: niets aankondigen (wel geboekt)
     const duur = keuze.duurMinuten || 120;
     const id = zetRegieKnop(`uitdaging_${nu}`, 'uitdaging', duur, { koploper: kop, hekkensluiter: hek }, nu);
     return { tekst: `🔱 <@${kop}>, u staat bovenaan en dat is aan de Kroket God niet ontgaan. Daag <@${hek}> uit voor een duel, binnen ${duur / 60} uur (tot ${hhmmAms(nu + duur * 60_000)}). Wint <@${hek}>, dan krijgt die *3 punten* van de Kroket God.`,
@@ -14324,7 +14332,12 @@ async function voerIngreepUit(client, keuze, stand, nu = Date.now()) {
   const punten = uit.punten ?? keuze.punten;
   const straf = (ingreep.soort === 'nemen' || !!ingreep.schorsing) && !uit.afgeketst;
   const doelNaam = keuze.doel ? (loadMembers()[keuze.doel]?.bijnaam || 'een volgeling') : null;
-  const vangnet = `🔱 ${ingreep.opdracht}${doelNaam ? ` Het treft *${ontsnapMrkdwn(doelNaam)}*.` : ''}${straf && reden ? ` Reden: ${reden}.` : uit.afgeketst ? ' Maar de straf ketst af.' : ''}`;
+  // Boeken vóór de LLM-aanroep en de post (die kunnen tot ~35 s duren): anders ziet een tweede tik de ingreep niet.
+  const geboekt = uit.schorsing === false ? { ...keuze, ingreep: { ...ingreep, schorsing: false } } : keuze;
+  bewaarRegie(regie.boek(regieStaat(), geboekt, { nu, punten }));
+  logAudit('regie', `${ingreep.id}${keuze.doel ? ` -> ${doelNaam}` : ''}${punten ? ` (${punten > 0 ? '+' : ''}${punten})` : ''}${uit.afgeketst ? ' (afgeketst)' : ''}: ${reden || ''}`);
+  // Het vangnet noemt het echte bedrag (uit de uitkomst), niet het geplande.
+  const vangnet = `🔱 ${straf && punten < 0 && uit.feiten ? uit.feiten : ingreep.opdracht}${doelNaam ? ` Het treft *${ontsnapMrkdwn(doelNaam)}*.` : ''}${straf && reden ? ` Reden: ${reden}.` : uit.afgeketst ? ' Maar de straf ketst af.' : ''}`;
   const prompt = `Kondig in het kanaal aan wat je als Kroket God net hebt gedaan, in één tot drie korte zinnen in je eigen stem.\n` +
     `Wat er gebeurd is: ${uit.feiten}\n` +
     (doelNaam ? `Het treft: ${wrapOnvertrouwd('Naam van het lid', doelNaam)}\n` : '') +
@@ -14334,27 +14347,29 @@ async function voerIngreepUit(client, keuze, stand, nu = Date.now()) {
     'Voeg geen punten, namen of feiten toe die hierboven niet staan.';
   // Een uitvoerder mag `tekst` teruggeven: die staat dan letterlijk in het kanaal, zonder aankondiging (praatjes, knopberichten).
   const tekst = uit.tekst !== undefined ? uit.tekst : await kroketResponseMetVangnet(prompt, 200, false, vangnet, 'licht');
-  // Het effect is al gebeurd: boeken gaat altijd door, ook als de post faalt (anders komt dezelfde ingreep terug).
+  // Het effect is al gebeurd en geboekt: een mislukte post verandert daar niets aan.
   try { if (tekst) await postToChannel(client, KANAAL(), tekst, uit.knoppen ? { knoppen: uit.knoppen } : {}); }
   catch (err) { console.error(`Fout bij het aankondigen van ${ingreep.id}:`, err?.message || err); }
-  const geboekt = uit.schorsing === false ? { ...keuze, ingreep: { ...ingreep, schorsing: false } } : keuze;
-  bewaarRegie(regie.boek(regieStaat(), geboekt, { nu, punten }));
-  logAudit('regie', `${ingreep.id}${keuze.doel ? ` -> ${doelNaam}` : ''}${punten ? ` (${punten > 0 ? '+' : ''}${punten})` : ''}${uit.afgeketst ? ' (afgeketst)' : ''}: ${reden || ''}`);
   return uit;
 }
 
 // Eén tik: opruimen, kiezen, uitvoeren. Geeft de keuze terug (of null). `forceer` slaat kans, tijdvenster,
 // weekendrust, tempo, dagbudget en niveau 'uit' over; stille modus en alleen-testkanaal blokkeren altijd.
+let regieBezig = false; // tikken overlappen nooit (dubbelklik op de dashboardknop, cron + klik)
 async function regieTik(client, { forceer = false, nu = Date.now(), rng = Math.random } = {}) {
-  if (!mogAutonoomPosten(nu, { weekendTelt: !forceer })) return null;
-  bewaarRegie(regie.ruimOp(regieStaat(), nu));
-  const stand = bouwRegieStand(nu);
-  const keuze = regie.kiesIngreep(stand, regieStaat(), {
-    nu, rng, forceer, niveau: instelling('regieNiveau'), beschikbaar: Object.keys(UITVOERDERS),
-  });
-  if (!keuze) return null;
-  await voerIngreepUit(client, keuze, stand, nu);
-  return keuze;
+  if (regieBezig) return null;
+  regieBezig = true;
+  try {
+    if (!mogAutonoomPosten(nu, { weekendTelt: !forceer })) return null;
+    bewaarRegie(regie.ruimOp(regieStaat(), nu));
+    const stand = bouwRegieStand(nu);
+    const keuze = regie.kiesIngreep(stand, regieStaat(), {
+      nu, rng, forceer, niveau: instelling('regieNiveau'), beschikbaar: Object.keys(UITVOERDERS),
+    });
+    if (!keuze) return null;
+    await voerIngreepUit(client, keuze, stand, nu);
+    return keuze;
+  } finally { regieBezig = false; }
 }
 
 planCron('*/20 8-17 * * 1-5', async () => {
@@ -16985,12 +17000,14 @@ async function sluitGeleKaartPoll(client, { rng = Math.random } = {}) {
   let regisseur = false;
   const regieNu = Date.now(), regieWeek = regie.amsMoment(regieNu).week;
   const rs = regieStaat();
-  if ((toegekend || regie.ruimte(rs, regieNu).schorsing > 0)
+  const regieMag = instelling('regieNiveau') !== 'uit' && !instelling('stilModus') && !instelling('alleenTestkanaal');
+  if (regieMag && (toegekend || regie.ruimte(rs, regieNu).schorsing > 0)
       && !rs.log.some((r) => r.id === 'overrule' && regie.amsMoment(r.ts).week === regieWeek)
       && rng() < 0.2) {
     regisseur = true;
     toegekend = !toegekend;
     bewaarRegie(regie.boekNawerking(rs, { nu: regieNu, id: 'overrule', doel: poll.doelwitId, punten: 0, schorsing: toegekend }));
+    logAudit('regie', `overrule: de Raad is omgedraaid, ${members[poll.doelwitId]?.bijnaam || 'een lid'} ${toegekend ? 'krijgt de kaart toch' : 'houdt de kaart niet'}`);
   }
 
   poll.actief = false;
@@ -20717,8 +20734,8 @@ registreerFeature({
   state: [VOORRAAD_BESTAND],
 });
 
-// Doelvoorraad per soort. Iets ruimer dan het aantal posts per dag (feitje 1×/dag op werkdagen,
-// spontaan 2× op di/do met 50% kans), zodat een mislukte nacht niet direct tot stilte leidt.
+// Doelvoorraad per soort. De regisseur (praatjes kroketfeitje en gedachte: hoogstens 1 praatje per werkdag)
+// trekt hieruit; de voorraad is iets ruimer dan dat, zodat een mislukte nacht niet direct tot stilte leidt.
 const VOORRAAD_DOELEN = [
   { soort: 'feitje',   doel: 2, maker: maakKroketFeitje },
   { soort: 'spontaan', doel: 2, maker: maakAlgemeneSpontanePost },
@@ -20899,6 +20916,7 @@ async function bouwDashboardData() {
   // verkondigingen samen; alleen het eerstvolgende item wordt aan het dashboard getoond.
   const ingeplandPool = [];
   for (const m of geplandeCronMeta) {
+    if (m.nietInLijst) continue;
     const ts = volgendeCronTijd(m.toonExpr, nu);
     if (ts) ingeplandPool.push({ soort: 'terugkerend', key: m.key, label: m.label, ts });
   }

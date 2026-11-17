@@ -103,4 +103,36 @@ harnas(async (h) => {
   h.ok(klaar().uitkomst === 'onterecht' && klaar().uitslag.regisseur === true && !bannen().UB && !kaarten().UB, 'overrule: toegekend wordt geannuleerd, geen ban, geen kaart');
   const rij2 = staat().log.at(-1);
   h.ok(rij2.id === 'overrule' && !rij2.schorsing && rij2.punten === 0, 'annulering geboekt zonder schorsing');
+
+  // M7: het vangnet noemt het echt afgenomen bedrag (beslag vroeg 3, UA heeft er 2).
+  scores({ UA: 2, UB: 20 }); schoon(); powerups({}); h.posts.length = 0;
+  await voerIngreepUit(h.client, regel('beslag', 'UA', -3), {}, nu);
+  h.ok(score('UA') === 0 && /2 punten/.test(laatste()) && !/3 punten/.test(laatste()), `vangnet noemt het echte bedrag: ${laatste()}`);
+  // M8: de uitdaging kiest een hekkensluiter die kan duelleren (UD..UF hebben 0 punten, UC is bondgenoot van de koploper).
+  scores({ UA: 50, UB: 8, UC: 1, UD: 0, UE: 0, UF: 0 }); schoon(); powerups({});
+  h.schrijf('allianties.json', { UA: ['UC'], UC: ['UA'] });
+  const uitd = await voerIngreepUit(h.client, { ingreep: boek('koploper_uitdagen'), doel: null, punten: 0, duurMinuten: 120, reden: 'test' }, bouwRegieStand(nu), nu);
+  const knop = staat().effecten.find((e) => e.soort === 'uitdaging');
+  h.ok(knop?.data.hekkensluiter === 'UB', `hekkensluiter is UB, niet 0 punten of bondgenoot (${knop?.data.hekkensluiter})`);
+  scores({ UA: 50, UB: 0, UC: 0, UD: 0, UE: 0, UF: 0 }); schoon(); h.posts.length = 0;
+  await voerIngreepUit(h.client, { ingreep: boek('koploper_uitdagen'), doel: null, punten: 0, duurMinuten: 120, reden: 'test' }, bouwRegieStand(nu), nu);
+  h.ok(!staat().effecten.some((e) => e.soort === 'uitdaging') && h.posts.length === 0, 'zonder mogelijke hekkensluiter: geen knop, geen aankondiging');
+  // 7f. (I2) niveau uit, stille modus of alleen-testkanaal: geen overrule, ook niet met rng 0.
+  for (const inst of [{ regieNiveau: 'uit' }, { stilModus: true }, { alleenTestkanaal: true }]) {
+    schoonOverrule(); poll('onterecht'); h.schrijf('instellingen.json', inst);
+    await sluitGeleKaartPoll(h.client, { rng: () => 0 });
+    h.ok(klaar().uitkomst === 'onterecht' && !klaar().uitslag.regisseur && !bannen().UB, `${JSON.stringify(inst)}: geen overrule`);
+  }
+  h.schrijf('instellingen.json', {});
+  // 7g. (M10) een overrule staat in het auditlog, zonder de aanklager.
+  schoonOverrule(); poll('onterecht');
+  await sluitGeleKaartPoll(h.client, { rng: () => 0 });
+  const audit = JSON.stringify(h.lees('auditlog.json'));
+  h.ok(/overrule/.test(audit) && !audit.includes('UC') && !audit.includes(aanklager), 'overrule staat in het auditlog zonder de aanklager');
+
+  // 8. (I1) twee gelijktijdige geforceerde tikken: één ingreep, één straf.
+  scores({ UA: 40, UB: 20, UC: 10 }); schoon(); powerups({}); h.schrijf('instellingen.json', {});
+  const maandag = Date.parse('2026-11-23T10:00:00Z');
+  await Promise.all([h.index.regieTik(h.client, { forceer: true, nu: maandag, rng: () => 0 }), h.index.regieTik(h.client, { forceer: true, nu: maandag, rng: () => 0 })]);
+  h.ok(staat().log.filter((r) => r.laag === 'ingreep').length === 1, `twee gelijktijdige tikken: ${staat().log.filter((r) => r.laag === 'ingreep').length} ingreep`);
 });
