@@ -93,6 +93,7 @@ const saveDaglimieten = (d) => writeJSON('daglimieten.json', d);
 registreerFeature({ naam: 'daglimieten', state: ['daglimieten.json'] });
 registreerFeature({ naam: 'puntenhistorie', state: ['puntenhistorie.json'] });
 const puntenhistorie = require('./lib/puntenhistorie.js');
+const { bouwReeksen } = require('./lib/dashboardreeksen.js');
 const loadGunsten = () => readJSON('gunsten.json', {});
 const saveGunsten = (d) => writeJSON('gunsten.json', d);
 
@@ -10241,7 +10242,9 @@ planCron('45 23 * * 0', async () => {
 
 // Dagstanden: elke dag 23:55 (Amsterdam) de weekscore per lid vastleggen, ook zondag (vóór de reset van 23:59).
 function legDagstandVast() {
-  const staat = puntenhistorie.legDagstandVast(readJSON('puntenhistorie.json', {}), dagSleutel(), loadScores());
+  const raid = readJSON('bamischijf.json', {});
+  const raidStand = raid.actief && Number.isFinite(raid.hp) ? { key: raid.weekStart || raid.vijand?.key, hp: raid.hp, maxHp: raid.maxHp } : null;
+  const staat = puntenhistorie.legDagstandVast(readJSON('puntenhistorie.json', {}), dagSleutel(), loadScores(), { schatkist: regieStaat().schatkist, raid: raidStand });
   writeJSON('puntenhistorie.json', puntenhistorie.ruimOp(staat, Date.now()));
 }
 planCron('55 23 * * *', () => {
@@ -11276,6 +11279,7 @@ async function voerBamischijfAanval(client, userId, metOffer) {
   const puntenTekst = `${genomen} kroketpunt${genomen === 1 ? '' : 'en'}`;
   const werdRazend = !wasRazend && isRazend(raid, gave);
   raid.log = [...(raid.log || []), { naam: bijnaam, schade, offer: metOffer, terug: genomen, wapen: wapenKey }].slice(-10);
+  if (wapenKey) raid.wapenTelling = { ...raid.wapenTelling, [wapenKey]: (raid.wapenTelling?.[wapenKey] || 0) + 1 }; // voor de dashboardgrafiek (log houdt er maar tien)
   const kanaal = raid.kanaal || process.env.SLACK_CHANNEL_ID;
   // De GIF van deze klap (lib/vijandbeeld.js). `gave` en niet `wapen.gave`: ook als het wapen zijn
   // gave brak, hoort de banier te zeggen welke ("door het pantser").
@@ -21376,6 +21380,23 @@ async function bouwDashboardData() {
       voorraad: voorraadStand(),
     },
     grafieken,
+    reeksen: (() => {
+      const leesVeilig = (f, leeg) => { try { return readJSON(f, leeg); } catch (_) { return leeg; } }; // kapot bestand = lege reeks
+      return bouwReeksen({
+      nu, naam,
+      itemNaam: (k) => WINKEL_ITEMS[k]?.naam,
+      wapenNaam: (k) => WAPENS[k]?.naam,
+      schatkistNu: regieDash.schatkist,
+      puntenhistorie: leesVeilig('puntenhistorie.json', {}),
+      regie: regieStaat(),
+      geleKaarten: leesVeilig('geleKaarten.json', {}),
+      berichten: (() => { try { return entriesTussen({ soort: 'lid', van: nu - 28 * DAG_MS, max: 50000 }); } catch (_) { return []; } })(),
+      winkel: { items: winkelHistItems },
+      casinostats: leesVeilig('casinostats.json', {}),
+      raid: leesVeilig('bamischijf.json', {}),
+      llmstats: leesVeilig('llmstats.json', { dagen: {} }),
+      });
+    })(),
     activiteit: (week.events || []).slice(-30).reverse()
       .map(e => ({ ts: e.ts, type: e.type, naam: e.userId ? naam(e.userId) : null, actorNaam: e.actorId ? naam(e.actorId) : null, beschrijving: e.beschrijving })),
     llmstats: readJSON('llmstats.json', { dagen: {} }),
