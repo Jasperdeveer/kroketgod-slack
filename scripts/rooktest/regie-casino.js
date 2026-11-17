@@ -30,6 +30,26 @@ harnas(async (h) => {
   h.ok(staat().effecten.find((x) => x.soort === 'dicht').tot === e.tot && casinoToegangReden('UA') === reden, 'dicht blijft tot dezelfde tijd (live uit regie.json)');
   effect('dicht', Date.now() - 1000);
   h.ok(casinoToegangReden('UA') === null, 'na tot werkt het casino weer');
+  // Een open hand bevriest zolang het casino dicht is en gaat daarna verder.
+  schoon();
+  const venster = (hash) => ({ view: { id: 'V1', hash, private_metadata: JSON.stringify({ spel: 'hogerlager', inzet: 1 }) } });
+  await h.klik('casino_zet_start', 'UA', {}, venster('h1'));
+  const hand = () => JSON.stringify(h.lees('casino.json').UA || null);
+  const hand0 = hand();
+  h.ok(hand0 !== 'null', 'er staat een open hand voor UA');
+  effect('dicht', Date.now() + 60 * MIN);
+  const score0 = score('UA');
+  h.views.length = 0;
+  await h.klik('open_casino', 'UA');
+  h.ok(h.views.some((v) => v.fn === 'publish' && /dicht tot \d\d:\d\d/.test(JSON.stringify(v.args))) && !h.views.some((v) => v.fn === 'open'), 'open_casino weigert met "dicht tot" en opent geen venster');
+  for (const [i, zet] of ['hoger', 'lager', 'cash'].entries()) await h.klik(`casino_zet_${zet}`, 'UA', {}, venster(`d${i}`));
+  h.ok(hand() === hand0 && score('UA') === score0, 'dicht: zetten veranderen niets (hand en score ongewijzigd)');
+  h.ok(h.views.some((v) => v.fn === 'update' && /dicht tot/.test(JSON.stringify(v.args))), 'de zet-handler zegt "dicht tot" in het venster');
+  effect('dicht', Date.now() - 1000);
+  h.ok(hand() === hand0, 'na tot staat de open hand er nog');
+  await h.klik('casino_zet_hoger', 'UA', {}, venster('n1'));
+  await h.klik('casino_zet_lager', 'UA', {}, venster('n2'));
+  h.ok(hand() !== hand0 || score('UA') !== score0, 'na tot speelt een zet weer mee');
 
   // 2. Hoge tafel: de maximale inzet is x2.
   schoon();

@@ -38,6 +38,7 @@ module.exports = async function harnas(test, { opstartMs = 2500 } = {}) {
 
   const posts = [];
   const updates = [];
+  const views = []; // client.views.* aanroepen: { fn, args }
   const handlers = { action: [], command: {} };
   let tsTeller = 1000;
   const schakel = { faalPost: false }; // true: chat.postMessage gooit (een mislukte Slack-post)
@@ -45,7 +46,8 @@ module.exports = async function harnas(test, { opstartMs = 2500 } = {}) {
     if (ns === 'chat' && fn === 'postMessage' && schakel.faalPost) throw new Error('nep-429: post mislukt');
     if (ns === 'chat' && fn === 'postMessage') posts.push({ text: args.text, blocks: args.blocks, thread: args.thread_ts || null, ts: String(++tsTeller) });
     if (ns === 'chat' && fn === 'update') updates.push(args);
-    return { ok: true, ts: String(tsTeller), channel: 'CKANAAL', user_id: 'UBOT', view: { id: 'V1' }, members: [], channels: [], user: { profile: {} }, response_metadata: {} };
+    if (ns === 'views') views.push({ fn, args });
+    return { ok: true, ts: String(tsTeller), channel: 'CKANAAL', user_id: 'UBOT', view: { id: 'V1' }, members: ['UA', 'UB', 'UC', 'UD', 'UE', 'UF'], channels: [], user: { profile: {} }, response_metadata: {} };
   } }) });
   class App {
     constructor() { this.client = client; }
@@ -60,8 +62,8 @@ module.exports = async function harnas(test, { opstartMs = 2500 } = {}) {
   const lees = (f) => JSON.parse(fs.readFileSync(path.join(state, f), 'utf8'));
   const schrijf = (f, d) => fs.writeFileSync(path.join(state, f), JSON.stringify(d));
   const actie = (id) => handlers.action.find(([k]) => (k instanceof RegExp ? k.test(id) : k === id))[1];
-  const body = (user) => ({ user: { id: user }, channel: { id: 'CKANAAL' }, container: { type: 'message' }, actions: [{}] });
-  const klik = (id, user, extra = {}) => actie(id)({ ack: async () => {}, body: body(user), action: { action_id: id, ...extra }, client });
+  const body = (user, extra = {}) => ({ user: { id: user }, channel: { id: 'CKANAAL' }, container: { type: 'message' }, actions: [{}], ...extra });
+  const klik = (id, user, extra = {}, bodyExtra = {}) => actie(id)({ ack: async () => {}, body: body(user, bodyExtra), action: { action_id: id, ...extra }, client });
   // Draait `/kroketgod <tekst>` als dit lid en geeft het antwoord terug (een commando werkt alleen in kroket-illuminati).
   async function commando(user, text) {
     let antwoord = '';
@@ -76,7 +78,7 @@ module.exports = async function harnas(test, { opstartMs = 2500 } = {}) {
   const index = require(path.join(repo, 'index.js'));
   await wacht(opstartMs);
   try {
-    await test({ klik, commando, lees, schrijf, posts, updates, ok, wacht, client, index, state, uitmap, r2, handlers, schakel });
+    await test({ klik, commando, lees, schrijf, posts, updates, views, ok, wacht, client, index, state, uitmap, r2, handlers, schakel });
   } catch (err) { console.error('FOUT', err); process.exitCode = 1; }
   process.exit();
 };
