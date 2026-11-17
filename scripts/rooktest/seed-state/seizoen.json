@@ -1,0 +1,20 @@
+{
+  "nummer": 1,
+  "dreiging": {
+    "key": "verkilling",
+    "naam": "De Grote Verkilling",
+    "icoon": "🧊",
+    "omschrijving": "de heilige olie koelt af; wat lauw wordt, wordt slap, en wat slap wordt sterft"
+  },
+  "startWeek": "2026-11-16",
+  "maxHp": 324,
+  "hp": 304,
+  "bijdragen": {
+    "UA": 5,
+    "UB": 5,
+    "UC": 5,
+    "UD": 5
+  },
+  "fase": 1,
+  "status": "actief"
+}

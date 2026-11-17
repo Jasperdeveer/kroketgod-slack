@@ -1,0 +1,22 @@
+{
+  "UA": {
+    "raid_aanval": 1,
+    "opdracht_klaar": 1,
+    "raid_overwonnen": 1
+  },
+  "UB": {
+    "raid_aanval": 1,
+    "opdracht_klaar": 1,
+    "raid_overwonnen": 1
+  },
+  "UC": {
+    "raid_aanval": 1,
+    "opdracht_klaar": 1,
+    "raid_overwonnen": 1
+  },
+  "UD": {
+    "raid_aanval": 1,
+    "opdracht_klaar": 1,
+    "raid_overwonnen": 1
+  }
+}

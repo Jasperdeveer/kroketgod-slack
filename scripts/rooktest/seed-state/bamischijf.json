@@ -1,0 +1,112 @@
+{
+  "actief": false,
+  "hp": 0,
+  "maxHp": 51,
+  "strijders": {
+    "UA": {
+      "schade": 3,
+      "laatsteAanval": "16-11-2026"
+    },
+    "UB": {
+      "schade": 3,
+      "laatsteAanval": "16-11-2026",
+      "verloren": 1
+    },
+    "UC": {
+      "schade": 3,
+      "laatsteAanval": "16-11-2026",
+      "verloren": 1
+    },
+    "UD": {
+      "schade": 4,
+      "laatsteAanval": "16-11-2026"
+    }
+  },
+  "log": [
+    {
+      "naam": "Alfa",
+      "schade": 3,
+      "offer": false,
+      "terug": 0,
+      "wapen": "kroketmes"
+    },
+    {
+      "naam": "Bravo",
+      "schade": 3,
+      "offer": false,
+      "terug": 1,
+      "wapen": "pekelspuit"
+    },
+    {
+      "naam": "Charlie",
+      "schade": 3,
+      "offer": false,
+      "terug": 1,
+      "wapen": null
+    },
+    {
+      "naam": "Het Frituurkanon",
+      "schade": 8,
+      "kanon": true
+    },
+    {
+      "naam": "Delta",
+      "schade": 4,
+      "offer": false,
+      "terug": 0,
+      "wapen": "ovenwant"
+    }
+  ],
+  "buit": 23,
+  "sindsBeurt": [
+    "UA",
+    "UB",
+    "UC",
+    "UD"
+  ],
+  "deadlineTs": 1795082449083,
+  "kanaal": "CKANAAL",
+  "berichtTs": "111.222",
+  "vijand": {
+    "key": "eierbal",
+    "naam": "De Eierbal",
+    "hpFactor": 1
+  },
+  "weekStart": "2026-11-16",
+  "wrok": 0,
+  "verslagen": true,
+  "arsenaal": {
+    "UA": {
+      "inHand": null,
+      "gekocht": 1,
+      "vetbom": false,
+      "uitgegeven": 8
+    },
+    "UB": {
+      "inHand": null,
+      "gekocht": 1,
+      "vetbom": false,
+      "uitgegeven": 10
+    },
+    "UD": {
+      "uitgegeven": 3,
+      "inHand": null,
+      "gekocht": 1,
+      "vetbom": false
+    }
+  },
+  "pekel": {
+    "dag": "16-11-2026",
+    "door": "UB",
+    "over": 0
+  },
+  "kanon": {
+    "inleg": {
+      "UA": 5,
+      "UB": 7,
+      "UD": 1
+    },
+    "gevuurd": true,
+    "schade": 8
+  }
+}

@@ -1,0 +1,83 @@
+{
+  "weekStart": "2026-11-16",
+  "events": [
+    {
+      "ts": 1794823264988,
+      "type": "bamischijf",
+      "userId": "UA",
+      "beschrijving": "Alfa kocht een Kroketmes tegen De Eierbal (−3)"
+    },
+    {
+      "ts": 1794823280582,
+      "type": "bamischijf",
+      "userId": "UA",
+      "beschrijving": "Alfa deed 3 schade aan De Eierbal (48/51 HP over)"
+    },
+    {
+      "ts": 1794823280635,
+      "type": "opdracht",
+      "userId": "UA",
+      "beschrijving": "Alfa volbracht de dagopdracht \"Val de Eierbal aan (als die rondwaart)\" (+2)"
+    },
+    {
+      "ts": 1794823285385,
+      "type": "bamischijf",
+      "userId": "UB",
+      "beschrijving": "Bravo kocht een Pekelspuit tegen De Eierbal (−3)"
+    },
+    {
+      "ts": 1794823292584,
+      "type": "bamischijf",
+      "userId": "UB",
+      "beschrijving": "Bravo deed 3 schade aan De Eierbal (45/51 HP over)"
+    },
+    {
+      "ts": 1794823292631,
+      "type": "opdracht",
+      "userId": "UB",
+      "beschrijving": "Bravo volbracht de dagopdracht \"Val de Eierbal aan (als die rondwaart)\" (+2)"
+    },
+    {
+      "ts": 1794823297387,
+      "type": "bamischijf",
+      "userId": "UC",
+      "beschrijving": "Charlie deed 3 schade aan De Eierbal (42/51 HP over)"
+    },
+    {
+      "ts": 1794823297437,
+      "type": "opdracht",
+      "userId": "UC",
+      "beschrijving": "Charlie volbracht de dagopdracht \"Val de Eierbal aan (als die rondwaart)\" (+2)"
+    },
+    {
+      "ts": 1794823321378,
+      "type": "bamischijf",
+      "userId": "UD",
+      "beschrijving": "Het Frituurkanon vuurde op De Eierbal: −8 HP (Alfa, Bravo, Delta)"
+    },
+    {
+      "ts": 1794823328583,
+      "type": "bamischijf",
+      "userId": "UD",
+      "beschrijving": "Delta kocht een Ovenwant tegen De Eierbal (−2)"
+    },
+    {
+      "ts": 1794823335791,
+      "type": "opdracht",
+      "userId": "UD",
+      "beschrijving": "Delta volbracht de dagopdracht \"Val de vijand van de week aan (als die rondwaart)\" (+2)"
+    },
+    {
+      "ts": 1794823337044,
+      "type": "bamischijf",
+      "userId": "UD",
+      "beschrijving": "De Eierbal verslagen — genadeslag: Delta; zwaarste slager: Delta"
+    },
+    {
+      "ts": 1794823339391,
+      "type": "titel",
+      "userId": "UD",
+      "beschrijving": "Delta claimde de vacante titel Slachter der Weekvijand (richtte de meeste schade aan in de val van De Eierbal (4 HP))"
+    }
+  ]
+}

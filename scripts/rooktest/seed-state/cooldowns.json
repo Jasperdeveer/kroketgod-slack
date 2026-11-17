@@ -1,0 +1,22 @@
+{
+  "llmBank": {
+    "groq:openai/gpt-oss-120b": {
+      "tot": 1794825053100,
+      "trap": 0,
+      "status": 401,
+      "reden": "Sleutel klopt niet.",
+      "label": "Groq gpt-oss-120b",
+      "sinds": 1794823253100,
+      "laatsteFout": 1794823253100
+    },
+    "groq:openai/gpt-oss-20b": {
+      "tot": 1794825053176,
+      "trap": 0,
+      "status": 401,
+      "reden": "Sleutel klopt niet.",
+      "label": "Groq gpt-oss-20b",
+      "sinds": 1794823253176,
+      "laatsteFout": 1794823253176
+    }
+  }
+}

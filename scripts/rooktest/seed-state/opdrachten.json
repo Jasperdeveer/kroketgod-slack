@@ -1,0 +1,66 @@
+{
+  "UA": {
+    "dag": {
+      "datum": "2026-11-16",
+      "voortgang": {
+        "d-raid": 1
+      },
+      "beloond": [
+        "d-raid"
+      ]
+    },
+    "week": {
+      "weekStart": "2026-11-16",
+      "voortgang": {},
+      "beloond": []
+    }
+  },
+  "UB": {
+    "dag": {
+      "datum": "2026-11-16",
+      "voortgang": {
+        "d-raid": 1
+      },
+      "beloond": [
+        "d-raid"
+      ]
+    },
+    "week": {
+      "weekStart": "2026-11-16",
+      "voortgang": {},
+      "beloond": []
+    }
+  },
+  "UC": {
+    "dag": {
+      "datum": "2026-11-16",
+      "voortgang": {
+        "d-raid": 1
+      },
+      "beloond": [
+        "d-raid"
+      ]
+    },
+    "week": {
+      "weekStart": "2026-11-16",
+      "voortgang": {},
+      "beloond": []
+    }
+  },
+  "UD": {
+    "dag": {
+      "datum": "2026-11-16",
+      "voortgang": {
+        "d-raid": 1
+      },
+      "beloond": [
+        "d-raid"
+      ]
+    },
+    "week": {
+      "weekStart": "2026-11-16",
+      "voortgang": {},
+      "beloond": []
+    }
+  }
+}

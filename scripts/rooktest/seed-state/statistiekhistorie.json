@@ -1,0 +1,15 @@
+{
+  "dagen": {
+    "2026-11-16": {
+      "events": 13,
+      "perType": {
+        "bamischijf": 8,
+        "opdracht": 4,
+        "titel": 1
+      },
+      "commandos": {
+        "winkel": 2
+      }
+    }
+  }
+}

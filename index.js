@@ -133,6 +133,7 @@ const {
 } = require('./lib/casinobeeld.js');
 const { GOKPAUZE_DAGEN, GOKPAUZE_VERBOD, rustEinde, schuif: schuifDag, naCasinoSpel, opRustdag, moetWaarschuwen, naWaarschuwing, naPoging, zonderRustdag, standVan } = require('./lib/gokpauze.js');
 const { boekSpel: boekCasinoStat, vatSamen: vatCasinoSamen, feiten: casinoFeiten, kiesFeiten: kiesCasinoFeiten } = require('./lib/casinostats.js');
+const regie = require('./lib/regie.js');
 const { LOT_PRIJS, stand: loterijStand, koopLot, trek: trekLoterij } = require('./lib/loterij.js');
 const { gaveVan, maxHpVoor, isRazend, slaatTerug, terugslagBuit, schadeNaGave, komtTerug, vijandBeurt, aanvalsLimiet, aanvallenGedaan } = require('./lib/weekvijand.js');
 const {
@@ -9904,6 +9905,7 @@ const CRON_LABELS = {
   '0 11 * * 3':      { label: 'Premiejacht (kans)' },
   '0 11 * * 4':      { label: 'Het Verhoor' },
   '30 16 * * 2':     { label: 'Casinoroddel' },
+  '*/20 8-17 * * 1-5': { label: 'Regisseur (kans)' },
   '0 16 * * 5':      { label: 'Frituurloterij (trekking)' },
   '20 9 * * 1':      { label: 'Kroketkroniek' },
 };
@@ -14017,6 +14019,143 @@ planCron('0 16 * * 5', async () => {
       `\n\n_Volgende trekking: vrijdag om 16:00. Een lot kost ${LOT_PRIJS} punt in de casinolobby (\`/kroketgod casino\`), één per dag._`);
   } catch (err) { console.error('Fout bij de trekking van de loterij:', err); }
 }, { timezone: 'Europe/Amsterdam' });
+
+// ── De regisseur: de Kroket God beslist zelf (lib/regie.js is de pure kern) ───
+// Elke 20 minuten op werkdagen kijkt regieTik of er iets te doen is: bouwRegieStand leest de stand van
+// het kanaal, kiesIngreep kiest hoogstens één ingreep, een uitvoerder voert hem uit, de Kroket God
+// kondigt hem aan en boek + het auditlog leggen hem vast. Elke ingreep heeft een uitvoerder in
+// UITVOERDERS; wat daar niet in staat, wordt nooit gekozen.
+registreerFeature({ naam: 'regisseur', state: ['regie.json'] });
+
+const DAG_MS = 86_400_000;
+const regieStaat = () => ({ ...regie.nieuweStaat(), ...readJSON('regie.json', {}) });
+const bewaarRegie = (staat) => writeJSON('regie.json', staat);
+
+// Mag de Kroket God uit zichzelf iets in het kanaal zeggen? `weekendTelt: false` negeert de weekendrust
+// (een geforceerde tik); stille modus en alleen-testkanaal gelden altijd.
+function mogAutonoomPosten(nu = Date.now(), { weekendTelt = true } = {}) {
+  if (instelling('stilModus') || instelling('alleenTestkanaal')) return false;
+  return !(weekendTelt && isWeekendAms(new Date(nu)) && instelling('weekendRust'));
+}
+
+// Hoeveel volledige werkdagen (ma-vr) sinds de laatste activiteit van dit lid. Zonder activiteitsregel
+// of zonder tijdstempel: 0 (geen straf of gunst op een gok).
+function werkdagenStil(userId, nu = Date.now(), activiteit = loadActiviteit()) {
+  const laatste = Math.max(activiteit[userId]?.laatsteBericht || 0, activiteit[userId]?.laatsteDaad || 0);
+  if (!laatste) return 0;
+  const eerste = regie.amsMoment(laatste).dag;
+  let n = 0;
+  for (let t = nu - DAG_MS, i = 0; i < 90; t -= DAG_MS, i++) { // gisteren en verder terug, tot de dag van de laatste activiteit
+    const m = regie.amsMoment(t);
+    if (m.dag <= eerste) break;
+    if (m.weekdag <= 5) n++;
+  }
+  return n;
+}
+
+// De stand van het kanaal voor kiesIngreep (zie de kop van lib/regie.js voor de vorm).
+// Niet gevuld: duelGewonnenVandaag, casino.spellen en raid.weekdag (nog door geen enkele voorwaarde gelezen).
+function bouwRegieStand(nu = Date.now()) {
+  const dag = regie.amsMoment(nu).dag;
+  const leden = loadMembers(), activiteit = loadActiviteit(), scores = loadScores();
+  const cijfers = readJSON('casinostats.json', {})[dag] || {};
+  const verbanning = loadVerbanning(), vergrijpen = loadVergrijpen();
+  const vandaagTs = (ts) => !!ts && regie.amsMoment(ts).dag === dag;
+  const ledenStand = Object.keys(leden).map((id) => {
+    const spellen = Object.values(cijfers.leden?.[id] || {});
+    const reeks = (cijfers.uitslagen?.[id] || '').match(/W*$/)[0].length;
+    return {
+      id, score: scores[id] || 0,
+      actiefVandaag: vandaagTs(activiteit[id]?.laatsteBericht) || vandaagTs(activiteit[id]?.laatsteDaad),
+      werkdagenStil: werkdagenStil(id, nu, activiteit),
+      verbannen: !!verbanning[id] && nu <= new Date(verbanning[id].tot).getTime(),
+      afwezig: nu < (activiteit[id]?.afwezigTot || 0),
+      gast: false, // gasten zijn personas en staan niet in members.json
+      zegen: heeftPowerup(id, 'zegen'), goudenKorst: heeftPowerup(id, 'gouden_korst'),
+      geleKaartDezeWeek: heeftGeleKaartDezeWeek(id),
+      vergrijpVandaag: (vergrijpen[id] || []).some((v) => vandaagTs(v.ts)),
+      casino: {
+        netto: spellen.reduce((a, s) => a + (s.uitbetaald || 0) - (s.ingezet || 0), 0),
+        winreeks: reeks,
+      },
+    };
+  });
+  const raid = readJSON('bamischijf.json', {});
+  const maandGeleden = new Date(`${dag}T12:00:00Z`); maandGeleden.setUTCMonth(maandGeleden.getUTCMonth() - 1);
+  const dagMaandGeleden = maandGeleden.toISOString().slice(0, 10);
+  const berichten = ledenStand.map((l) => activiteit[l.id]?.laatsteBericht || 0);
+  return {
+    leden: ledenStand,
+    casino: {
+      spellenVandaag: ledenStand.reduce((a, l) => a + Object.values(cijfers.leden?.[l.id] || {}).reduce((b, s) => b + (s.spellen || 0), 0), 0),
+      open: instelling('casinoAan') !== false,
+    },
+    raid: {
+      actief: !!raid.actief && raid.hp > 0, hp: raid.hp || 0, maxHp: raid.maxHp || 0,
+      strijders: Object.keys(raid.strijders || {}).length, leden: vechtbareLeden().length,
+      extraAanvalVandaag: raid.extraAanval === dag, // vorm van raid.extraAanval legt de taak "extra aanvalsdag" vast
+    },
+    kanaal: { laatsteLidBerichtMs: Math.max(0, ...berichten) || null },
+    archiefKandidaat: entriesTussen({ soort: 'lid', van: nu - 33 * DAG_MS, tot: nu - 27 * DAG_MS, max: 3000 })
+      .some((e) => regie.amsMoment(e.ts).dag === dagMaandGeleden),
+  };
+}
+
+// Per ingreep: wat de uitvoerder doet. async (client, keuze, stand) -> { feiten, reden, knoppen? }
+//   feiten  wat er nu gebeurd is, in gewone zinnen (voor de aankondiging)
+//   reden   waarom (valt terug op keuze.reden)
+//   knoppen Slack-knoppen onder de aankondiging (hoogstens 5)
+// Uitbetalingen achteraf (knop, verrassing) boeken met regie.boekNawerking en begrenzen zichzelf tegen
+// regie.ruimte() op het moment van uitbetalen.
+const UITVOERDERS = {
+  huis_geeft: async () => {
+    voerCasinoBeheerUit({ soort: 'bonus', aantal: casinoBonusVandaag() + 3 });
+    return { feiten: 'Het Huis geeft iedereen vandaag 3 extra casinospellen.' };
+  },
+};
+
+// Voert de ingreep uit, kondigt hem aan in het kanaal en boekt hem. Geeft de uitkomst terug.
+async function voerIngreepUit(client, keuze, stand, nu = Date.now()) {
+  const { ingreep } = keuze;
+  const uit = await UITVOERDERS[ingreep.id](client, keuze, stand);
+  const reden = uit.reden ?? keuze.reden;
+  const straf = ingreep.soort === 'nemen' || !!ingreep.schorsing;
+  const doelNaam = keuze.doel ? (loadMembers()[keuze.doel]?.bijnaam || 'een volgeling') : null;
+  const vangnet = `🔱 ${ingreep.opdracht}${doelNaam ? ` Het treft *${ontsnapMrkdwn(doelNaam)}*.` : ''}${straf && reden ? ` Reden: ${reden}.` : ''}`;
+  const prompt = `Kondig in het kanaal aan wat je als Kroket God net hebt gedaan, in één tot drie korte zinnen in je eigen stem.\n` +
+    `Wat er gebeurd is: ${uit.feiten}\n` +
+    (doelNaam ? `Het treft: ${wrapOnvertrouwd('Naam van het lid', doelNaam)}\n` : '') +
+    (reden ? `Reden: ${reden}\n` : '') +
+    (straf ? 'Dit is een straf: noem de reden uitdrukkelijk.\n' : '') +
+    'Voeg geen punten, namen of feiten toe die hierboven niet staan.';
+  const tekst = await kroketResponseMetVangnet(prompt, 200, false, vangnet, 'licht');
+  await postToChannel(client, KANAAL(), tekst, uit.knoppen ? { knoppen: uit.knoppen } : {});
+  bewaarRegie(regie.boek(regieStaat(), keuze, { nu }));
+  logAudit('regie', `${ingreep.id}${keuze.doel ? ` -> ${doelNaam}` : ''}${keuze.punten ? ` (${keuze.punten > 0 ? '+' : ''}${keuze.punten})` : ''}: ${reden || ''}`);
+  return uit;
+}
+
+// Eén tik: opruimen, kiezen, uitvoeren. Geeft de keuze terug (of null). `forceer` slaat kans, tijdvenster,
+// weekendrust, tempo, dagbudget en niveau 'uit' over; stille modus en alleen-testkanaal blokkeren altijd.
+async function regieTik(client, { forceer = false, nu = Date.now(), rng = Math.random } = {}) {
+  if (!mogAutonoomPosten(nu, { weekendTelt: !forceer })) return null;
+  bewaarRegie(regie.ruimOp(regieStaat(), nu));
+  const stand = bouwRegieStand(nu);
+  const keuze = regie.kiesIngreep(stand, regieStaat(), {
+    nu, rng, forceer, niveau: instelling('regieNiveau'), beschikbaar: Object.keys(UITVOERDERS),
+  });
+  if (!keuze) return null;
+  await voerIngreepUit(client, keuze, stand, nu);
+  return keuze;
+}
+
+planCron('*/20 8-17 * * 1-5', async () => {
+  try { await regieTik(app.client); }
+  catch (err) { console.error('Fout bij de regisseur:', err); }
+}, { timezone: 'Europe/Amsterdam' });
+
+// De rooktests (scripts/rooktest/) komen zo bij de regisseur.
+if (process.env.KROKET_ROOKTEST) module.exports = { regieTik, bouwRegieStand, voerIngreepUit, UITVOERDERS, regieStaat, bewaarRegie, mogAutonoomPosten, werkdagenStil };
 
 // Wat het dashboard over het casino laat zien (bouwDashboardData) en kan (/api/casino).
 function casinoDashboardData(naam) {
