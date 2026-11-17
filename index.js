@@ -1226,6 +1226,8 @@ const EER_DAGELIJKS_BASIS = 3; // rang-voorrechten kunnen dit verhogen, zie eerL
 // LADEN wordt geëvalueerd en die deze getallen in zijn helptekst noemt. Stonden ze verderop,
 // dan viel de bot bij het opstarten om op een temporal dead zone — en `node --check` ziet dat
 // niet, alleen echt starten wel.
+// Buiten elke tabel die bij het laden wordt geëvalueerd (zie boven), want help en Home lezen hem.
+const KROKETGOD_VERSIE = '5.0';
 const ROOF_DOELWIT_MIN = 3;
 const ROOF_DADER_MIN   = 1;
 const ROOF_BOETE       = 1;
@@ -3837,7 +3839,7 @@ function buildHelpText() {
   const regels = alleCommandos()
     .map(c => `\`${c.gebruik}\` — _${c.verwacht}_`)
     .join('\n');
-  return `⚜️ *KROKET GOD* ⚜️\n\n${regels}`;
+  return `⚜️ *KROKET GOD ${KROKETGOD_VERSIE}* ⚜️\n\n${regels}`;
 }
 
 // ── System prompt ──────────────────────────────────────────────────────────────
@@ -17873,6 +17875,15 @@ function bouwAppHomeBlocks(userId, melding = '', extraBlocks = []) {
   // geldt maar tot middernacht, en een uitnodiging die je moet zoeken, is er geen.
   blocks.push(...perkamentHomeBlocks(userId));
 
+  // De raadpleegkaart: één blok, niet voor ballingen.
+  if (!verbannen) {
+    const openR = raadpleeg.openRituelen(raadpleegStaat(), userId).map(r => (r === 'canoniseer' ? 'canonisatie' : r));
+    blocks.push({ type: 'section',
+      text: { type: 'mrkdwn', text: `🔱 *Raadpleeg de Kroket God* · _versie ${KROKETGOD_VERSIE}_\n` +
+        (openR.length ? `Vandaag nog: ${openR.join(' · ')}` : '_U heeft vandaag alles gevraagd. Morgen spreekt hij weer._') },
+      ...(openR.length ? { accessory: { type: 'button', text: { type: 'plain_text', text: 'Raadpleeg', emoji: true }, style: 'primary', action_id: 'open_raadpleeg' } } : {}) });
+  }
+
   // ── Wat u nu kunt doen ──
   // Dit was drie monospace-tabellen (VANDAAG / DEZE WEEK / ELK UUR), elk met een eigen
   // samenvattingsregel, plus een legenda die uitlegde wat de blokjes betekenden. Veertien
@@ -18083,7 +18094,7 @@ function bouwAppHomeBlocks(userId, melding = '', extraBlocks = []) {
     { type: 'button', text: { type: 'plain_text', text: '🔄 Verversen', emoji: true }, action_id: 'home_verversen' },
   ] });
   blocks.push({ type: 'context', elements: [{ type: 'mrkdwn',
-    text: `Kroketpunten resetten zondagnacht, maandag 08:00 ${ZAKGELD} zakgeld, roem blijft eeuwig · alle commando's via \`/kroketgod help\` · bijgewerkt ${new Date().toLocaleTimeString('nl-NL', { timeZone: 'Europe/Amsterdam', hour: '2-digit', minute: '2-digit' })}` }] });
+    text: `Kroket God ${KROKETGOD_VERSIE} · Kroketpunten resetten zondagnacht, maandag 08:00 ${ZAKGELD} zakgeld, roem blijft eeuwig · alle commando's via \`/kroketgod help\` · bijgewerkt ${new Date().toLocaleTimeString('nl-NL', { timeZone: 'Europe/Amsterdam', hour: '2-digit', minute: '2-digit' })}` }] });
   return blocks;
 }
 
@@ -18510,6 +18521,12 @@ app.action('vetbad_dubbel', async ({ ack, body, client }) => {
       ? `🎲 *DUBBEL OF NIKS* 🎲\n\n> *${bijnaam}* zet de buit van *${kans.winst}* opnieuw in het vet… en het vet zegt *JA*. *+${delta}* kroketpunten.\n\n_Nieuwe stand: *${stand} kroketpunten*_\n\n— De Hoge Frituurraad`
       : `🎲 *DUBBEL OF NIKS* 🎲\n\n> *${bijnaam}* zet de buit van *${kans.winst}* opnieuw in het vet… en het vet slokt alles op. *−${kans.winst}* kroketpunten.\n\n_Nieuwe stand: *${stand} kroketpunten*_\n\n— De Hoge Frituurraad`);
   } catch (err) { console.error('Fout bij dubbel of niks:', err); }
+});
+
+app.action('open_raadpleeg', async ({ ack, body, client }) => {
+  await ack();
+  try { await openRaadpleegVenster(client, body.trigger_id); }
+  catch (err) { console.error('Fout bij openen raadpleegvenster:', err); }
 });
 
 app.action('open_visioen', async ({ ack, body, client }) => {
