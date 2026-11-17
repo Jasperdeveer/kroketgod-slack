@@ -84,11 +84,15 @@ harnas(async (h) => {
   h.ok(nb.raid.actief && nb.raid.naam === 'Testvijand' && nb.raid.hp === 40 && nb.raid.maxHp === 85, 'nuBezig.raid');
   h.ok(nb.veiling.open === true && nb.tribunaal.fase === 'stemming' && nb.gelekaart.actief && nb.gelekaart.sluitTs === t0 + 900_000, 'nuBezig: veiling, tribunaal, gelekaart');
   h.ok(/id="nubezig"/.test(html) && /nuBezig/.test(html), 'dashboard.html bevat de strook');
-  h.ok(!/Wat de Kroket God vandaag deed/.test(html), 'de oude regisseurkaart is weg');
-  // Alleen bestaande acties in de strook.
-  const strook = html.slice(html.indexOf('function renderNuBezig'), html.indexOf('function renderNuBezig') + 6000);
-  const gebruikt = [...strook.matchAll(/nbActie\(\\'(\w+)\\'\)|regieNu\(\)|regieStop\(|regieVerrassingStop\(\)|regieZaakStop\(\)|nbNiveau\(/g)].length;
-  h.ok(gebruikt >= 7, `strook roept bestaande acties aan (${gebruikt})`);
+  // De tijdlijn "Wat de Kroket God vandaag deed" is alleen lezen; de oude kaart met eigen bediening is weg.
+  const functie = (naam) => { const i = html.indexOf('function ' + naam + '('); return i < 0 ? '' : html.slice(i, html.indexOf('\n}', i)); };
+  const tijdlijn = functie('renderVandaag');
+  h.ok(/Wat de Kroket God vandaag deed/.test(html) && tijdlijn && !/<button|data-actie|data-do|onclick/.test(tijdlijn), 'de tijdlijn van vandaag is er, zonder eigen bediening');
+  // De strook: knop en niveau van de regisseur staan vast in het skelet, wat loopt komt uit renderNuBezig.
+  const strook = functie('renderNuBezig') + functie('effectChips');
+  const knoppen = [...strook.matchAll(/data-(?:actie|do)="(\w+)"/g)].map((m) => m[1]);
+  for (const k of ['effectStop', 'verrassingStop', 'zaakStop', 'weekvijandBeurt', 'bamischijfOntsnap', 'veilingHamer', 'gelekaartSluiten']) h.ok(knoppen.includes(k), `strook heeft de knop ${k}`);
+  h.ok(/data-actie="regisseurNu"/.test(html) && /id="i_regieNiveau"/.test(html), 'strook: "Laat hem nu iets doen" en het niveau');
   const indexSrc = require('fs').readFileSync(require('path').join(__dirname, '../../index.js'), 'utf8');
-  for (const a of [...strook.matchAll(/nbActie\(\\'(\w+)\\'\)/g)].map((m) => m[1])) h.ok(new RegExp(`case '${a}'`).test(indexSrc), `actie ${a} bestaat in voerDashboardActie`);
+  for (const a of [...strook.matchAll(/data-actie="(\w+)"/g)].map((m) => m[1])) h.ok(new RegExp(`case '${a}'`).test(indexSrc), `actie ${a} bestaat in voerDashboardActie`);
 });
