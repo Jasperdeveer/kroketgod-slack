@@ -134,6 +134,7 @@ const {
 const { GOKPAUZE_DAGEN, GOKPAUZE_VERBOD, rustEinde, schuif: schuifDag, naCasinoSpel, opRustdag, moetWaarschuwen, naWaarschuwing, naPoging, zonderRustdag, standVan } = require('./lib/gokpauze.js');
 const { boekSpel: boekCasinoStat, vatSamen: vatCasinoSamen, feiten: casinoFeiten, kiesFeiten: kiesCasinoFeiten } = require('./lib/casinostats.js');
 const regie = require('./lib/regie.js');
+const raadpleeg = require('./lib/raadpleeg.js');
 const { LOT_PRIJS, stand: loterijStand, koopLot, trek: trekLoterij } = require('./lib/loterij.js');
 const { gaveVan, maxHpVoor, isRazend, slaatTerug, terugslagBuit, schadeNaGave, komtTerug, vijandBeurt, aanvalsLimiet, aanvallenGedaan } = require('./lib/weekvijand.js');
 const {
@@ -6379,6 +6380,14 @@ async function voerKroketCommandoUit({ command, respond, client }) {
       return;
     }
 
+    // ── Raadpleeg: zonder ritueel een venster (vóór de ontvangstbevestiging: trigger_id), met een onbekend woord de lijst.
+    const raadpleegVraag = /^raadpleeg\b/i.test(input) ? raadpleeg.parseRaadpleeg(input) : null;
+    if (raadpleegVraag && !raadpleegVraag.ritueel) {
+      if (raadpleegVraag.rest) await respond({ text: RITUELEN_TEKST, response_type: 'ephemeral' });
+      else await openRaadpleegVenster(client, command.trigger_id);
+      return;
+    }
+
     // ── Ephemeral bevestiging: alleen voor commando's die even duren (niet voor directe data-opvragen)
     const STILLE_COMMANDO_S = ['ranglijst', 'dossier', 'status', 'help', 'prompts', 'kroketprompts', 'horoscoop',
       'vetgeschrift', 'kerfstok', 'wrok', 'kerven',
@@ -6398,6 +6407,16 @@ async function voerKroketCommandoUit({ command, respond, client }) {
       }
       const tekst = await kroketResponse(`Spreek ${lid[1].bijnaam} aan met een willekeurige uitspraak — zegen, waarschuwing, observatie of compliment. Verras met de toon. Geen inleidingszin.`);
       await postToChannel(client, command.channel_id, tekst);
+      return;
+    }
+
+    // ── Raadpleeg <ritueel>: alleen leden.
+    if (raadpleegVraag?.ritueel) {
+      if (!members[command.user_id]) {
+        await respond({ text: '_Alleen leden van het genootschap mogen de Kroket God raadplegen._', response_type: 'ephemeral' });
+        return;
+      }
+      await voerRitueelUit(client, { userId: command.user_id, ritueel: raadpleegVraag.ritueel, rest: raadpleegVraag.rest, channelId: command.channel_id, respond });
       return;
     }
 
@@ -14377,8 +14396,84 @@ planCron('*/20 8-17 * * 1-5', async () => {
   catch (err) { console.error('Fout bij de regisseur:', err); }
 }, { timezone: 'Europe/Amsterdam' });
 
+
+// ── Raadpleeg: horoscoop, biecht, orakel (lib/raadpleeg.js is de pure kern) ───
+// De staat staat in raadpleeg.json en wisselt bij het lezen van dag. Elk ritueel leest, verwerkt en schrijft zonder
+// await ertussen; pas daarna volgt het taalmodel en de post.
+registreerFeature({
+  naam: 'raadpleeg',
+  state: ['raadpleeg.json'],
+  help: [{ gebruik: '/kroketgod raadpleeg', verwacht: 'horoscoop (geluk of pech in uw volgende duel), biecht (vrijspraak of een boetedoening, +1), orakel (een voorspelling; komt die uit, +1) of canoniseer [naam] (heilige van de dag). Elk 1×/dag' }],
+});
+
+const raadpleegStaat = () => raadpleeg.dagStaat(readJSON('raadpleeg.json', {}), dagSleutel());
+const bewaarRaadpleeg = (staat) => writeJSON('raadpleeg.json', staat);
+const RITUELEN_TEKST = `_De Kroket God kent vier rituelen: ${raadpleeg.RITUELEN.join(', ')}. Typ bijvoorbeeld \`/kroketgod raadpleeg horoscoop\`._`;
+
+const openRaadpleegVenster = (client, triggerId) => client.views.open({
+  trigger_id: triggerId,
+  view: bouwCommandoModal(raadpleeg.RAADPLEEG_SJABLOON, 'Raadpleeg de Kroket God: kies een ritueel. Elk ritueel mag u één keer per dag.', []),
+});
+
+const RITUEEL_UITVOERDERS = {
+  horoscoop: async ({ userId, naam, rng }) => {
+    const r = raadpleeg.trekHoroscoop(raadpleegStaat(), userId, rng);
+    if (r.fout) return { fout: r.fout };
+    bewaarRaadpleeg(r.staat);
+    const gunstig = r.teken === 'gunstig';
+    const tekst = await kroketResponseMetVangnet(
+      `Spreek de horoscoop uit voor ${naam}: de sterren boven de frituur staan vandaag ${gunstig ? 'gunstig' : 'scheef'} voor het eerstvolgende duel. Eén tot twee zinnen. Geen inleidingszin.`,
+      150, false,
+      gunstig ? `🔭 _De sterren boven de frituur staan gunstig voor ${naam}. Het vet is helder, de korst houdt._`
+        : `🔭 _De sterren boven de frituur staan scheef voor ${naam}. Het vet spat; wees op uw hoede._`);
+    return { tekst, regel: `🔭 *${gunstig ? 'Gunstig' : 'Ongunstig'}* · in het eerstvolgende duel van vandaag weegt de kans 10% in het ${gunstig ? 'voordeel' : 'nadeel'} van *${naam}*.` };
+  },
+  biecht: async ({ userId, naam, rest, rng }) => {
+    if (!rest) return { fout: 'leeg', melding: '_Een lege biecht? Vertel de Kroket God wat u op uw geweten heeft: `/kroketgod raadpleeg biecht <uw zonde>`._' };
+    const raid = readJSON('bamischijf.json', {});
+    const r = raadpleeg.biecht(raadpleegStaat(), userId, rng, { raidActief: !!(raid.actief && raid.hp > 0) });
+    if (r.fout) return { fout: r.fout };
+    bewaarRaadpleeg(r.staat);
+    const vrij = r.uitkomst === 'vrijspraak';
+    const tekst = await kroketResponseMetVangnet(
+      `${naam} biecht een zonde op. De uitkomst is: ${vrij ? 'vrijspraak' : 'een boetedoening volgt'}. Spreek het oordeel uit als de Kroket God, zonder zelf een boete te verzinnen. Eén tot twee zinnen. Geen inleidingszin.\n\n${wrapOnvertrouwd('De zonde', rest)}`,
+      250, false,
+      vrij ? `🕯️ _De Kroket God hoort uw biecht, ${naam}. U bent vrijgesproken: het vet vergeeft._`
+        : `🕯️ _De Kroket God hoort uw biecht, ${naam}. Het vet vergeeft niet zomaar: er volgt een boetedoening._`);
+    logGebeurtenis('biecht', null, 'Een anonieme volgeling deed openbare biecht', rest);
+    return { tekst, regel: vrij ? `🕯️ *Vrijspraak voor ${naam}:* een schoon geweten, zonder boete.`
+      : `🕯️ *Boetedoening voor ${naam}:* ${r.boete.tekst}. Volbracht vóór middernacht: +1 kroketpunt.` };
+  },
+  orakel: async ({ userId, naam, rest, rng }) => {
+    if (!rest) return { fout: 'leeg', melding: '_Het orakel wacht op een vraag: `/kroketgod raadpleeg orakel <uw vraag>`._' };
+    const members = loadMembers();
+    const raid = readJSON('bamischijf.json', {});
+    const kandidaten = Object.keys(members).filter((id) => id !== userId && !isVerbannen(id) && !isAfwezig(id));
+    const r = raadpleeg.orakel(raadpleegStaat(), userId, rng, { kandidaten, raidActief: !!(raid.actief && raid.hp > 0) });
+    if (r.fout) return { fout: r.fout };
+    bewaarRaadpleeg(r.staat);
+    const v = r.voorspelling;
+    const voorspeld = v && v.tekst.replace('{naam}', members[v.doel]?.bijnaam || 'een lid');
+    const tekst = await kroketResponseMetVangnet(
+      `${naam} stelt een vraag aan het orakel. ${voorspeld ? `Het orakel voorspelt: "${voorspeld}". Kleed die voorspelling dramatisch in, en verander er niets aan.` : 'Het orakel ziet niemand om over te voorspellen; antwoord vaag.'} Eén tot twee zinnen. Geen inleidingszin.\n\n${wrapOnvertrouwd('De vraag', rest)}`,
+      250, false, `🔮 _De Kroket God tuurt in het vet en spreekt, ${naam}._`);
+    return { tekst, regel: voorspeld ? `🔮 *Voorspelling:* ${voorspeld}. Komt die uit, dan krijgt *${naam}* 1 kroketpunt.`
+      : '🔮 _Er is geen ander lid om over te voorspellen._' };
+  },
+};
+
+async function voerRitueelUit(client, { userId, ritueel, rest, channelId, respond, rng = Math.random }) {
+  const uitvoerder = RITUEEL_UITVOERDERS[ritueel];
+  const zeg = (text) => respond({ text, response_type: 'ephemeral' });
+  if (!uitvoerder) return zeg(RITUELEN_TEKST);
+  const naam = loadMembers()[userId]?.bijnaam || 'Ongepaneerde vreemdeling';
+  const uit = await uitvoerder({ userId, naam, rest, rng });
+  if (uit.fout) return zeg(uit.melding || `_U heeft de Kroket God vandaag al om een ${ritueel} gevraagd. Morgen weer._`);
+  await postToChannel(client, channelId, `${uit.tekst}\n\n${uit.regel}`);
+}
+
 // De rooktests (scripts/rooktest/) komen zo bij de regisseur.
-if (process.env.KROKET_ROOKTEST) module.exports = { bouwDashboardData, voerDashboardActie, saveInstellingen, casinoOpen, regieTik, bouwRegieStand, voerIngreepUit, UITVOERDERS, regieStaat, bewaarRegie, mogAutonoomPosten, werkdagenStil, casinoToegangReden, casinoMax, casinoPlafond, boekCasinoUitslag, casinoOpen, sluitGeleKaartPoll, voerDuel, voerEer, winkelPrijs, prijsRedenen, prijsToelichting, CRON_LABELS, geplandeCronMeta };
+if (process.env.KROKET_ROOKTEST) module.exports = { voerRitueelUit, raadpleegStaat, bewaarRaadpleeg, bouwDashboardData, voerDashboardActie, saveInstellingen, casinoOpen, regieTik, bouwRegieStand, voerIngreepUit, UITVOERDERS, regieStaat, bewaarRegie, mogAutonoomPosten, werkdagenStil, casinoToegangReden, casinoMax, casinoPlafond, boekCasinoUitslag, casinoOpen, sluitGeleKaartPoll, voerDuel, voerEer, winkelPrijs, prijsRedenen, prijsToelichting, CRON_LABELS, geplandeCronMeta };
 
 // Wat het dashboard over het casino laat zien (bouwDashboardData) en kan (/api/casino).
 function casinoDashboardData(naam) {
