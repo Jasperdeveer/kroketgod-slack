@@ -315,8 +315,9 @@ const app = new App({
       handler: async (req, res) => {
         if (!dashboardAuth(req, res)) return;
         try {
-          const { actie } = await leesBody(req);
-          const bericht = await voerDashboardActie(actie);
+          const body = await leesBody(req);
+          const { actie } = body;
+          const bericht = await voerDashboardActie(actie, body);
           logAudit('actie', actie);
           res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
           res.end(JSON.stringify({ ok: true, bericht }));
@@ -14362,7 +14363,7 @@ planCron('*/20 8-17 * * 1-5', async () => {
 }, { timezone: 'Europe/Amsterdam' });
 
 // De rooktests (scripts/rooktest/) komen zo bij de regisseur.
-if (process.env.KROKET_ROOKTEST) module.exports = { regieTik, bouwRegieStand, voerIngreepUit, UITVOERDERS, regieStaat, bewaarRegie, mogAutonoomPosten, werkdagenStil, casinoToegangReden, casinoMax, casinoPlafond, boekCasinoUitslag, casinoOpen, sluitGeleKaartPoll, voerDuel, voerEer, winkelPrijs, prijsRedenen, prijsToelichting, CRON_LABELS, geplandeCronMeta };
+if (process.env.KROKET_ROOKTEST) module.exports = { bouwDashboardData, voerDashboardActie, saveInstellingen, casinoOpen, regieTik, bouwRegieStand, voerIngreepUit, UITVOERDERS, regieStaat, bewaarRegie, mogAutonoomPosten, werkdagenStil, casinoToegangReden, casinoMax, casinoPlafond, boekCasinoUitslag, casinoOpen, sluitGeleKaartPoll, voerDuel, voerEer, winkelPrijs, prijsRedenen, prijsToelichting, CRON_LABELS, geplandeCronMeta };
 
 // Wat het dashboard over het casino laat zien (bouwDashboardData) en kan (/api/casino).
 function casinoDashboardData(naam) {
@@ -20791,6 +20792,21 @@ setTimeout(() => logQuotaStatus().catch(() => {}), 15000);
 
 // ── Dashboard (poort 3001) ───────────────────────────────────────────────────
 // Verzamelt alle dashboard-data: bot-status, LLM/provider-status, ranglijst, bans, activiteit.
+// Het regisseur-deel van het dashboard: wat de Kroket God vandaag zelf deed en wat er nog loopt.
+function bouwRegieDashboard(nu) {
+  const s = regieStaat();
+  const leden = loadMembers();
+  const vandaag = regie.amsMoment(nu).dag;
+  return {
+    niveau: instelling('regieNiveau'),
+    schatkist: s.schatkist,
+    vandaag: s.log.filter((r) => regie.amsMoment(r.ts).dag === vandaag)
+      .map((r) => ({ ts: r.ts, id: r.id, laag: r.laag, doel: r.doel ? (leden[r.doel]?.bijnaam || r.doel) : null, punten: r.punten || 0 })),
+    effecten: s.effecten.filter((e) => e.tot > nu).map((e) => ({ id: e.id || e.soort, soort: e.soort, tot: e.tot })),
+    verrassing: s.verrassing,
+  };
+}
+
 async function bouwDashboardData() {
   // Verse Groq-meting als de snapshot ouder is dan 5 min (anders cache gebruiken).
   if (!laatsteGroqQuota || Date.now() - laatsteGroqQuota.ts > 5 * 60_000) {
@@ -20995,6 +21011,7 @@ async function bouwDashboardData() {
     winkel,
     spel,
     instellingen: loadInstellingen(),
+    regie: bouwRegieDashboard(nu),
     // Geen scheveKansen-veld meer: de eigenaar wil de kansmechaniek nergens vermeld hebben, dus hij
     // staat ook niet in deze API. Zie de noot bij getGeluk — dat is een bewuste keuze, geen omissie.
     stemmingOpties: STEMMINGEN.map(s => s.naam),
@@ -21211,8 +21228,21 @@ async function voerOverslaan(soort, { key, ts, id }) {
   throw new Error('Onbekend type');
 }
 
-async function voerDashboardActie(actie) {
+async function voerDashboardActie(actie, body = {}) {
   switch (actie) {
+    // De regisseur: laat hem nu iets doen (slaat kans, venster, weekend, tempo, budget en niveau over), of een effect beëindigen.
+    case 'regisseurNu': {
+      const keuze = await regieTik(app.client, { forceer: true });
+      return keuze ? `De Kroket God deed: ${keuze.ingreep.id}${keuze.doel ? ` (${loadMembers()[keuze.doel]?.bijnaam || keuze.doel})` : ''}.` : 'Niets: stille modus, alleen-testkanaal, of geen ingreep die binnen de plafonds past.';
+    }
+    case 'regieEffectStop': {
+      const s = regieStaat();
+      const weg = s.effecten.filter((e) => (e.id || e.soort) === body.id);
+      if (!weg.length) return 'Dat effect is niet gevonden (al verlopen?).';
+      bewaarRegie({ ...s, effecten: s.effecten.filter((e) => !weg.includes(e)) });
+      logAudit('regie', `effect beëindigd door de eigenaar: ${body.id}`);
+      return `Effect ${body.id} beëindigd.`;
+    }
     case 'resetCooldowns':
       geminiKeyCooldownTot.clear(); providerCooldownTot.clear(); wisBank();
       return 'Cooldowns en bank gewist.';

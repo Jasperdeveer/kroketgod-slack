@@ -357,6 +357,16 @@ function render(d){
     +'<tr><td>Actieve verbanningen</td><td class="num">'+k.bans.length+'</td></tr>'
     +'</table>'+(k.kroketVanDeDag?'<div style="margin-top:8px" class="muted">Kroket v/d dag: <b style="color:var(--txt)">'+esc(k.kroketVanDeDag.naam)+'</b></div>':'');
   ohtml+=card('Cijfers',cijfers);
+  // De regisseur: wat de Kroket God vandaag zelf deed
+  var rg=d.regie||{};
+  var uur=function(ts){return new Date(ts).toLocaleTimeString('nl-NL',{hour:'2-digit',minute:'2-digit'});};
+  var rIng=(rg.vandaag||[]).map(function(r){return '<div class="row"><span class="t">'+uur(r.ts)+'</span> · <b>'+esc(r.id)+'</b>'+(r.doel?' → '+esc(r.doel):'')+(r.punten?' <span class="muted">('+(r.punten>0?'+':'')+r.punten+')</span>':'')+(r.laag!=='ingreep'?' <span class="muted">'+esc(r.laag)+'</span>':'')+'</div>';}).join('')||'<span class="muted">nog niets vandaag</span>';
+  var rEff=(rg.effecten||[]).map(function(e){return '<div class="row"><b>'+esc(e.id)+'</b> <span class="muted">tot '+uur(e.tot)+'</span> <button class="skip" onclick="regieStop(\''+esc(e.id)+'\')">beëindig</button></div>';}).join('')||'<span class="muted">geen lopende effecten</span>';
+  ohtml+=card('🔱 Wat de Kroket God vandaag deed'+tip('De ingrepen die de Kroket God vandaag zelf deed, wat er nog loopt (met "beëindig" haal je een effect meteen weg) en wat er in de Schatkist zit. "Laat hem nu iets doen" negeert kans, tijdvenster, weekend, tempo en dagbudget, maar niet de plafonds. Het niveau stel je in bij Instellingen.'),
+    '<div class="lbl">Ingrepen vandaag · niveau '+esc(rg.niveau||'')+'</div>'+rIng
+    +'<div class="lbl" style="margin-top:10px">Lopende effecten</div>'+rEff
+    +'<div class="lbl" style="margin-top:10px">Schatkist: <b>'+(rg.schatkist||0)+'</b> punten</div>'
+    +'<button class="btn" onclick="regieNu()">🔱 Laat hem nu iets doen</button> <span id="rg_status" class="muted"></span>');
   // Geplande posts (de eerstvolgende vijf, met tijdstip)
   var ing=(d.ingepland||[]).map(function(p){
     var terug=p.soort==='terugkerend';
@@ -698,6 +708,7 @@ function renderInstellingen(d){
   var provs=d.providerOpties.map(function(p){return '<label class="tog"><input type="checkbox" data-prov="'+p+'"'+(s.providerUit.indexOf(p)>=0?' checked':'')+'> '+p+'</label>';}).join('');
   var html='<div class="card"><h2>⚙️ Instellingen <span id="i_status" class="muted" style="font-weight:400;text-transform:none;margin-left:8px"></span></h2><div class="setgrid">'
     +'<div><div class="lbl">Dagstemming'+tip('De dagelijkse bui die alle reacties kleurt. Automatisch kiest elke dag een vaste stemming op basis van de datum; of kies er zelf een. Werkt direct na opslaan.')+'</div><select id="i_stemming">'+moods+'</select></div>'
+    +'<div><div class="lbl">Regisseur-niveau'+tip('Hoe vaak de Kroket God zelf ingrijpt: uit, laag, normaal of wild.')+'</div><select id="i_regieNiveau">'+['uit','laag','normaal','wild'].map(function(n){return '<option value="'+n+'"'+((s.regieNiveau||'normaal')===n?' selected':'')+'>'+n+'</option>';}).join('')+'</select></div>'
     +'<div><div class="lbl">Modi</div>'
       +chk('i_stil',s.stilModus,'Stil-modus (mute)','De Kroket God reageert nergens meer op, behalve in het testkanaal. Handig bij onderhoud.')
       +chk('i_weekend',s.weekendRust,'Weekend-rust','Aan = rust in het weekend (geen reacties). Uit = reageert ook in het weekend.')
@@ -794,8 +805,10 @@ function renderInstellingen(d){
 }
 function bewaar(){
   var uit=[];document.querySelectorAll('[data-prov]').forEach(function(c){if(c.checked)uit.push(c.getAttribute('data-prov'));});
-  post('/api/instellingen',{stemmingOverride:document.getElementById('i_stemming').value,stilModus:document.getElementById('i_stil').checked,weekendRust:document.getElementById('i_weekend').checked,statusMeldingen:document.getElementById('i_dm').checked,menties:document.getElementById('i_menties').checked,alleenTestkanaal:document.getElementById('i_test').checked,spaarstand:document.getElementById('i_spaar').checked,alliantiesActief:document.getElementById('i_allianties').checked,straattaal:document.getElementById('i_straattaal').checked,emojiRegels:document.getElementById('i_emojiRegels').checked,emojiSlim:document.getElementById('i_emojiSlim').checked,emojiFrequentie:document.getElementById('i_emojiFreq').value,providerUit:uit,kortafKans:(+document.getElementById('i_kortaf').value||0)/100,warrigKans:(+document.getElementById('i_warrig').value||0)/100,vrijdagAppendKans:(+document.getElementById('i_vrijdag').value||0)/100,decreetVanDeDag:document.getElementById('i_decreet').value,decreetIntensiteit:(+document.getElementById('i_decreetInt').value||0)/100,eerHuisonderwerpen:document.getElementById('i_huis').value,casinoAan:document.getElementById('i_casinoAan').checked,casinoMaxInzet:+document.getElementById('i_casinoMax').value||5,casinoPerDag:+document.getElementById('i_casinoPerDag').value||10},'Opgeslagen');
+  post('/api/instellingen',{stemmingOverride:document.getElementById('i_stemming').value,stilModus:document.getElementById('i_stil').checked,weekendRust:document.getElementById('i_weekend').checked,statusMeldingen:document.getElementById('i_dm').checked,menties:document.getElementById('i_menties').checked,alleenTestkanaal:document.getElementById('i_test').checked,spaarstand:document.getElementById('i_spaar').checked,alliantiesActief:document.getElementById('i_allianties').checked,straattaal:document.getElementById('i_straattaal').checked,emojiRegels:document.getElementById('i_emojiRegels').checked,emojiSlim:document.getElementById('i_emojiSlim').checked,emojiFrequentie:document.getElementById('i_emojiFreq').value,providerUit:uit,kortafKans:(+document.getElementById('i_kortaf').value||0)/100,warrigKans:(+document.getElementById('i_warrig').value||0)/100,vrijdagAppendKans:(+document.getElementById('i_vrijdag').value||0)/100,decreetVanDeDag:document.getElementById('i_decreet').value,decreetIntensiteit:(+document.getElementById('i_decreetInt').value||0)/100,eerHuisonderwerpen:document.getElementById('i_huis').value,casinoAan:document.getElementById('i_casinoAan').checked,casinoMaxInzet:+document.getElementById('i_casinoMax').value||5,casinoPerDag:+document.getElementById('i_casinoPerDag').value||10,regieNiveau:document.getElementById('i_regieNiveau').value},'Opgeslagen');
 }
+function regieNu(){post('/api/actie',{actie:'regisseurNu'},'Gedaan','rg_status').then(function(){setTimeout(tick,800);});}
+function regieStop(id){post('/api/actie',{actie:'regieEffectStop',id:id},'Beëindigd','rg_status').then(function(){setTimeout(tick,800);});}
 function doeActie(a){post('/api/actie',{actie:a},'Uitgevoerd','i_actiestatus');}
 function skip(soort,key,ts,id){post('/api/overslaan',{soort:soort,key:key?decodeURIComponent(key):'',ts:ts,id:id},'Overgeslagen');}
 var verkondigBezig=false;
