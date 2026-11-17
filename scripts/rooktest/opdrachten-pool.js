@@ -10,7 +10,7 @@ const OUDE_IDS = ['d-offer', 'd-eer', 'd-duel', 'd-raid', 'd-eer2', 'd-winkel', 
   'w-duelwin', 'w-offer', 'w-eer', 'w-raid', 'w-veiling', 'w-roof', 'w-goud', 'w-winkel'];
 
 harnas(async (h) => {
-  const { kiesOpdrachten, opdrachtHaalbaar, opdrachtTekst, opdrachtPool, alleOpdrachten } = h.index;
+  const { kiesOpdrachten, opdrachtHaalbaar, opdrachtTekst, opdrachtPool, alleOpdrachten, getMondayOfWeek } = h.index;
   const OPDRACHTEN = alleOpdrachten();
   const ids = (l) => l.map((o) => o.id);
 
@@ -41,8 +41,7 @@ harnas(async (h) => {
 
   // Dode zegenopdracht
   const dZegen = OPDRACHTEN.find((o) => o.id === 'd-zegen');
-  const maandag = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Amsterdam' }).format(
-    (() => { const d = new Date(); const dag = (d.getUTCDay() + 6) % 7; return new Date(d.getTime() - dag * 86400000); })());
+  const maandag = getMondayOfWeek();
   const regieLeeg = { schatkist: 0, effecten: [], log: [], verrassing: null };
   h.schrijf('regie.json', regieLeeg);
   h.schrijf('profeet.json', { userId: 'UA', weekStart: maandag });
