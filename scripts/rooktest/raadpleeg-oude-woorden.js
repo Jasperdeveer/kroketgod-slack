@@ -18,7 +18,7 @@ harnas(async (h) => {
     h.ok(/raadpleeg \w+/.test(antwoord) === metTip(woord), `"${woord}": tip naar raadpleeg ${metTip(woord) ? 'aanwezig' : 'afwezig'}`);
   }
   const { BINGO_POOL } = require('../../index.js');
-  h.ok(BINGO_POOL.length === 12, 'bingo: 12 vakjes');
+  h.ok(BINGO_POOL.length === 13, 'bingo: 13 vakjes (12 + zelflof van spoor 3)');
   for (const t of ['Raadpleeg het orakel en zie de voorspelling uitkomen', 'Biecht via raadpleeg een kroket-zonde op die u nog nooit heeft gedeeld', 'Win een duel op een gunstige horoscoop']) {
     h.ok(BINGO_POOL.includes(t), `bingo bevat: ${t}`);
   }
