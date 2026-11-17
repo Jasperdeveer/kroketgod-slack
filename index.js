@@ -14328,7 +14328,9 @@ async function voerRitueelUit(client, { userId, ritueel, rest, channelId, respon
   const naam = loadMembers()[userId]?.bijnaam || 'Ongepaneerde vreemdeling';
   const uit = await uitvoerder({ userId, naam, rest, rng, client, channelId });
   if (uit.fout) return zeg(uit.melding || `_U heeft de Kroket God vandaag al om een ${ritueel} gevraagd. Morgen weer._`);
-  const res = await postToChannel(client, channelId, `${uit.tekst}\n\n${uit.regel}`);
+  let res;
+  try { res = await postToChannel(client, channelId, `${uit.tekst}\n\n${uit.regel}`); }
+  catch (err) { await uit.naPost?.(null); throw err; } // geeft een canonisatie-reservering vrij
   if (uit.naPost) await uit.naPost(res);
 }
 
