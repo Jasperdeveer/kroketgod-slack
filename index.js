@@ -76,7 +76,7 @@ const {
   SOORTEN, randSleutel, warmte: weefselWarmte, wrijving: weefselWrijving,
   graadPerLid, sterksteBand, grootsteVete, meestScheef, spil, eenlingen, relatiesVan,
 } = require('./lib/weefsel.js');
-const { geleKaarten, kleurVoorNieuweKaart, schorsingUren, voegKaartToe, zonderLaatsteGeleKaart } = require('./lib/kaarten.js');
+const { kleurVoorNieuweKaart, schorsingUren, voegKaartToe } = require('./lib/kaarten.js');
 // Het Paarboek: één bladzijde per paar plus de claim-ladder. Vervangt op termijn de hele
 // wroklaag; draait voorlopig NAAST de kerfstok zodat beide dezelfde feiten zien en de
 // overgang te vergelijken is. De rekenkunde staat in de module, hier staat de bedrading.
@@ -122,11 +122,6 @@ const {
   paarSleutel, KERF_GEWICHT, KERF_MAX, kerfBij, kerven, vergeef, kerfstokVan,
   TWIST_DUELS, twistRijp, twistStand, INZET_MAX, duelInzet, inzetRedenen,
 } = require('./lib/paar.js');
-const {
-  AMBTEN, AMBT_KEYS, VENSTER_DAGEN, LEVENSTEKEN_DADEN,
-  vensterSleutels, snoeiVenster, dadenInVenster, aanspraakVan,
-  stichtingsBezetting, bepaalAmbten, zegelBudget,
-} = require('./lib/ambten.js');
 const {
   ZAKGELD, uitdeelMomentGeweest, nogTeOntvangen, naUitkering, verdiendeStand, kampioenWaardig,
   beschermdTegenRoof, roofbaar,
@@ -1130,7 +1125,7 @@ function legRelatieVast(vanId, naarId, soort, aantal = 1, opties = {}) {
     if (!vanId || !naarId || vanId === naarId) return false;
     if (!SOORTEN[soort]) return false;
     // Warme daden tillen de bladzijde op. Dit is het enige punt waar ze állemaal langskomen —
-    // eer, een kroketje, uitlenen, een ambtsdaad — dus hier en niet bij elke bron apart.
+    // eer, een kroketje, uitlenen, een gunst — dus hier en niet bij elke bron apart.
     // De dagregel in boekDaad voorkomt dat een vrijgevige middag de schaal laat ontploffen.
     if (soort === 'eer') {
       try {
@@ -1715,7 +1710,7 @@ const WINKEL_ITEMS = {
   },
   gouden_korst: {
     naam: 'Gouden Korst', icoon: '👑', prijs: 3, duurUren: 24,
-    uitleg: '24 uur: één ambtsdaad die op u landt glijdt van u af — en gouden status in de ranglijst',
+    uitleg: '24 uur: een gele kaart die op u landt, glijdt van u af — en gouden status in de ranglijst',
   },
 };
 
@@ -2257,7 +2252,6 @@ const saveRoem  = (data) => schrijfEnMarkeerHomes('roem.json', data);
 //   offerExtra      extra Vetbad-offers per dag
 //   duelExtra       extra duels per dag
 //   winkelKorting   fractie korting in de Aflatenhandel (0,2 = 20%)
-//   zegelExtra      extra ambtszegels per week — het voorrecht dat met je ambt meeschaalt
 //   gunstAanwijzen  elke maandag een gratis gunst, die u AAN IEMAND ANDERS toewijst
 //   decreet         mag zelf het Decreet van de Dag uitvaardigen
 const RANG_KORST_VANAF = 300;   // vanaf hier beginnen de Korsten
@@ -2265,40 +2259,24 @@ const RANG_KORST_STAP  = 100;   // en elke zoveel roem komt er één bij
 
 const RANGEN = [
   { drempel: 300, naam: '🏅 Opperkroket der Korsten',      kort: 'Korsten',
-    voorrecht: { zegelExtra: 2 }, voorrechtTekst: 'twee extra ambtszegels per week — en per Korst komt er één bij' },
+    voorrecht: { offerExtra: 1 }, voorrechtTekst: 'een extra Vetbad-offer per dag — en elke volgende Korst geeft nóg een eerbewijs per dag' },
   { drempel: 210, naam: '👑 Kroon van de Onderste Codex',  kort: 'Kroon',
-    voorrecht: { zegelExtra: 1 }, voorrechtTekst: 'een extra ambtszegel per week, en de Kroket God spreekt u aan als Gekroonde' },
+    voorrecht: { eerExtra: 1 }, voorrechtTekst: 'een extra eerbewijs per dag, en de Kroket God spreekt u aan als Gekroonde' },
   { drempel: 140, naam: '🔱 Opperkroket der Illuminati',   kort: 'Opperkroket',
     voorrecht: { decreet: true }, voorrechtTekst: 'u mag zelf het Decreet van de Dag uitvaardigen (`/kroketgod decreet [tekst]`)' },
   { drempel:  90, naam: '⚜️ Grote Paneermeester',          kort: 'Grote Paneermeester',
     voorrecht: { gunstAanwijzen: true }, voorrechtTekst: 'elke maandag een gratis gunst uit de Aflatenhandel — die ú aan een medelid toewijst' },
   { drempel:  55, naam: '🥇 Meester der Ragout',           kort: 'Meester der Ragout',
-    voorrecht: { winkelKorting: 0.20, zegelExtra: 1 }, voorrechtTekst: '20% korting in de Heilige Aflatenhandel en een extra ambtszegel' },
+    voorrecht: { winkelKorting: 0.20 }, voorrechtTekst: '20% korting in de Heilige Aflatenhandel' },
   { drempel:  30, naam: '🛡️ Frituurridder',                kort: 'Frituurridder',
     voorrecht: { duelExtra: 1 }, voorrechtTekst: 'een tweede duel per dag' },
   { drempel:  15, naam: '🥩 Paneerknecht',                 kort: 'Paneerknecht',
-    voorrecht: { zegelExtra: 1 }, voorrechtTekst: 'een extra ambtszegel per week' },
+    voorrecht: { offerExtra: 1 }, voorrechtTekst: 'een extra Vetbad-offer per dag' },
   { drempel:   5, naam: '🧂 Volgeling der Korst',          kort: 'Volgeling der Korst',
-    voorrecht: { eerExtra: 1 }, voorrechtTekst: 'een extra eerbewijs per dag en de volle ambtsnorm' },
+    voorrecht: { eerExtra: 1 }, voorrechtTekst: 'een extra eerbewijs per dag' },
   { drempel:   0, naam: '🥚 Ongepaneerd Aspirant',         kort: 'Ongepaneerd Aspirant',
-    voorrecht: { zegelKorting: 1 }, voorrechtTekst: 'nog geen voorrechten — en één ambtszegel minder dan de norm' },
+    voorrecht: {}, voorrechtTekst: 'nog geen voorrechten' },
 ];
-
-// De rangen zoals de EERSTE codex ze kende. Bewaard omdat de openbaring elk lid bij naam zijn
-// oude rang moet kunnen noemen; zonder deze tabel is die erkenning niet meer te reconstrueren.
-const RANGEN_EERSTE_CODEX = [
-  { drempel: 500, naam: '🔱 Opperkroket der Illuminati' },
-  { drempel: 200, naam: '⚜️ Grote Paneermeester' },
-  { drempel: 100, naam: '🥇 Meester der Ragout' },
-  { drempel:  50, naam: '🛡️ Frituurridder' },
-  { drempel:  25, naam: '🥩 Paneerknecht' },
-  { drempel:  10, naam: '🧂 Volgeling der Korst' },
-  { drempel:   0, naam: '🥚 Ongepaneerd Aspirant' },
-];
-
-function rangEersteCodex(roem) {
-  return (RANGEN_EERSTE_CODEX.find(r => roem >= r.drempel) || RANGEN_EERSTE_CODEX.at(-1)).naam;
-}
 
 // Het hoeveelste Korstniveau iemand draagt: 0 onder de drempel, daarna 1 per RANG_KORST_STAP.
 // Dit is wat de ladder een open einde geeft in plaats van een plafond.
@@ -2331,7 +2309,7 @@ function volgendeDrempel(roem) {
   return {
     drempel: RANG_KORST_VANAF + (nr - 1) * RANG_KORST_STAP,
     kort: `${nr}${nr === 1 ? 'ste' : 'de'} Korst`,
-    voorrechtTekst: 'nóg een ambtszegel per week — de Korsten houden niet op',
+    voorrechtTekst: 'nóg een eerbewijs per dag — de Korsten houden niet op',
   };
 }
 
@@ -2344,7 +2322,7 @@ function getVoorrechten(userId) {
   const roem = loadRoem()[userId] || 0;
   const totaal = {
     eerExtra: 0, offerExtra: 0, duelExtra: 0, winkelKorting: 0,
-    zegelExtra: 0, gunstAanwijzen: false, decreet: false,
+    gunstAanwijzen: false, decreet: false,
   };
   for (const r of RANGEN) {
     if (roem < r.drempel) continue;
@@ -2353,17 +2331,12 @@ function getVoorrechten(userId) {
     totaal.offerExtra += v.offerExtra || 0;
     totaal.duelExtra += v.duelExtra || 0;
     totaal.winkelKorting = Math.max(totaal.winkelKorting, v.winkelKorting || 0);
-    totaal.zegelExtra += v.zegelExtra || 0;
     totaal.gunstAanwijzen = totaal.gunstAanwijzen || !!v.gunstAanwijzen;
     totaal.decreet = totaal.decreet || !!v.decreet;
   }
-  // Elke Korst boven de tabel is nóg een zegel. Dit is wat het open einde van de ladder
-  // mechanisch waard maakt: een Korst is een echt zegel, geen sterretje.
-  totaal.zegelExtra += Math.max(0, korstVan(roem) - 1);
-  // De malus van de onderste trede geldt ALLEEN daar. Hij hoort niet in de cumulatieve lus
-  // hierboven: voorrechten stapelen, dus een korting die je op trede 1 krijgt zou je daarna
-  // nooit meer kwijtraken en op élke trede één zegel kosten.
-  totaal.zegelExtra -= getRang(roem).voorrecht?.zegelKorting || 0;
+  // Elke Korst boven de eerste is nóg een eerbewijs per dag. Dit is wat het open einde van de
+  // ladder mechanisch waard maakt: een Korst is een echt voorrecht, geen sterretje.
+  totaal.eerExtra += Math.max(0, korstVan(roem) - 1);
   return totaal;
 }
 
@@ -2402,7 +2375,7 @@ function voorrechtRegels(roem) {
 }
 
 // Voeg roem toe en controleer op rang-upgrade. Geeft { roem, rang, upgrade } terug.
-async function pasRoemAan(client, userId, delta, opties = {}) {
+async function pasRoemAan(client, userId, delta) {
   if (delta <= 0) return null; // roem daalt nooit
   const roemData = loadRoem();
   const oudeRoem = roemData[userId] || 0;
@@ -2414,13 +2387,6 @@ async function pasRoemAan(client, userId, delta, opties = {}) {
   const nieuweRang = getRang(nieuweRoem);
 
   if (nieuweRang.drempel > oudeRang.drempel) {
-    // `stil`: de verheffing wordt wél geboekt en gelogd, maar niet apart verkondigd. Alleen
-    // voor de migratieschenking van de openbaring, die de nieuwe rang zelf al per lid noemt.
-    if (opties.stil) {
-      const bijnaamStil = loadMembers()[userId]?.bijnaam || 'Een volgeling';
-      logGebeurtenis('achievement', userId, `${bijnaamStil} steeg naar rang "${nieuweRang.naam}"`);
-      return { roem: nieuweRoem, rang: nieuweRang, upgrade: true };
-    }
     // Rang-upgrade — plechtige aankondiging
     const members = loadMembers();
     const bijnaam = members[userId]?.bijnaam || 'Een volgeling';
@@ -3003,8 +2969,14 @@ function heeftGeleKaartDezeWeek(userId) {
 }
 
 // Registreert de kaart en schorst het lid: geel een uur, rood een dag. Geeft het einde terug.
+// Draagt het lid de Gouden Korst, dan glijdt de kaart af: de korst is op, er komt geen kaart en
+// geen schorsing, en de uitkomst is null. Elke aanroeper meldt dat zelf.
 // Logt niet zelf: de aanroeper weet waarom de kaart viel (stemming, vergrijp) en logt dat.
 function legKaartSchorsingOp(userId, kleur, reden, citaat) {
+  if (heeftPowerup(userId, 'gouden_korst')) {
+    verwijderPowerup(userId, 'gouden_korst');
+    return null;
+  }
   const nu = new Date();
   // Schorsing is een vaste tijdsduur — gewoon optellen bij huidige UTC, geen tijdzone nodig
   const eindeUtc = new Date(nu.getTime() + schorsingUren(kleur) * 3_600_000);
@@ -3027,10 +2999,17 @@ function legKaartSchorsingOp(userId, kleur, reden, citaat) {
 }
 
 // Helper: geef een rode kaart (een dag geschorst) aan wie deze week al geel had, en post het vonnis.
-async function legRodeKaartOp(client, channelId, userId, bijnaam, reden, citaat, threadTs, actorId = null) {
+// `aankondiging` gaat het kanaal in zodra de kaart ligt, vóór het vonnis (dat op de LLM wacht).
+// Geeft het einde terug, of null als de Gouden Korst de kaart opving; de aanroeper meldt dat.
+async function legRodeKaartOp(client, channelId, userId, bijnaam, reden, citaat, threadTs, actorId = null, aankondiging = null) {
   reden = reden || 'tweede gele kaart deze week';
   const eindeUtc = legKaartSchorsingOp(userId, 'rood', reden, citaat);
+  if (!eindeUtc) {
+    logGebeurtenis('verbanning', userId, `${bijnaam} droeg de Gouden Korst: de rode kaart gleed af`, citaat, actorId);
+    return null;
+  }
   logGebeurtenis('verbanning', userId, `${bijnaam} kreeg een rode kaart: een dag geschorst`, citaat, actorId);
+  if (aankondiging) await postToChannel(client, channelId, aankondiging);
 
   // Een dag later staat de klok op dezelfde tijd: noem de dag erbij, anders leest het als vandaag.
   const opties = { timeZone: 'Europe/Amsterdam' };
@@ -3046,6 +3025,7 @@ async function legRodeKaartOp(client, channelId, userId, bijnaam, reden, citaat,
     `🟥 ${verdictTekst}\n\n_De poorten heropenen zich ${terugDag} om ${terugTijd}._`,
     { thread_ts: threadTs });
   await verbanAlliantiePartnerMee(client, userId, bijnaam, channelId);
+  return eindeUtc;
 }
 
 // Sleep de bondgenoten mee als een lid verbannen wordt: een verbond deelt glorie én val. Wie nog
@@ -3255,8 +3235,9 @@ const ACHIEVEMENTS = [
   { id: 'diamanten_mosterdpot',drempel: 100, naam: '💎 Diamanten Mosterdpot',     tekst: 'Honderd kroketpunten. U behoort tot een zeer select gezelschap.' },
 
   // ── Eenmalig, op gebeurtenis ──
-  // Geen `drempel` en geen `actie`/`doel`: geen automatische check pakt ze op. Ze worden
-  // expliciet toegekend met kenRelikwieToe() op het moment dat de gebeurtenis zich voordoet.
+  // Geen `drempel` en geen `actie`/`doel`: geen automatische check pakt ze op. De getuige werd
+  // alleen bij de openbaring van het Vetgeschrift uitgedeeld. Die is voorbij, maar wie hem
+  // heeft, houdt hem.
   { id: 'getuige', naam: '👁️ Getuige van de Vondst',
     tekst: 'U zag het Vetgeschrift toen niemand nog wist wat het was. Uw naam staat in de kantlijn.' },
 
@@ -3283,8 +3264,6 @@ const ACHIEVEMENTS = [
   { id: 'goudgrijper',    actie: 'gouden_kroket', doel: 3,  naam: '🥇 Gouden Grijper',          tekst: 'Drie keer de Gouden Kroket gegrepen. Snelheid is een sacrament.' },
   { id: 'plichtsgetrouw', actie: 'opdracht_klaar', doel: 25, naam: '📜 Plichtsgetrouwe',        tekst: 'Vijfentwintig opdrachten volbracht. De Raad rekent op u — en dat blijkt terecht.' },
   { id: 'onvermoeibaar',  actie: 'opdracht_klaar', doel: 100, naam: '🏅 Onvermoeibare Dienaar', tekst: 'Honderd opdrachten volbracht. Uw toewijding grenst aan het verontrustende.' },
-  { id: 'zegelaar',       actie: 'ambtsdaad', doel: 10,  naam: '🖋️ Zegelaar',              tekst: 'Tien ambtsdaden gelegd. U gebruikt uw macht in plaats van haar te bewaren.' },
-  { id: 'ambtsdrager',    actie: 'ambtsdaad', doel: 40,  naam: '⚖️ Gezalfd Ambtsdrager',   tekst: 'Veertig ambtsdaden. Het Ambtsboek staat vol van u — en nooit van uzelf.' },
   { id: 'kroketrijk',     actie: 'kroketje_gegeven', doel: 25, naam: '🥔 Rijk aan Kroketjes', tekst: 'Vijfentwintig keer het heilige kroketje gegeven. Het gebaar kostte u niets en betekende alles.' },
 ];
 
@@ -3373,25 +3352,6 @@ async function controleerAchievements(client, userId, oudeScore, nieuweScore, op
 // opdrachten — één hook in de spellogica, meerdere afnemers.
 const loadTellers = () => readJSON('tellers.json', {});
 
-// Venstertellers: { userId: { 'YYYY-MM-DD': { actie: aantal } } }. Wordt bij elke write
-// gesnoeid tot het venster plus een week marge, zodat het bestand niet eindeloos groeit.
-// Bewust gewone JSON: lib/state.js geeft alleen `.json` de mtime-cache en de atomaire write,
-// en de backupdekking in lib/backup.js globt op `.json`.
-function bumpVenster(userId, actie, aantal = 1) {
-  try {
-    const vandaag = dagSleutel();
-    const alles = snoeiVenster(readJSON('venstertellers.json', {}), vandaag);
-    const eigen = alles[userId] || {};
-    const dag = eigen[vandaag] || {};
-    dag[actie] = (dag[actie] || 0) + aantal;
-    eigen[vandaag] = dag;
-    alles[userId] = eigen;
-    writeJSON('venstertellers.json', alles);
-  } catch (err) {
-    console.error('⚠️ Venstertellers bijwerken mislukt:', err.message);
-  }
-}
-
 function bumpTeller(userId, actie, aantal = 1) {
   const data = loadTellers();
   const eigen = data[userId] || {};
@@ -3425,32 +3385,6 @@ async function controleerPrestaties(client, userId, actie, stand, naspel = null)
     }
   } catch (err) {
     console.error('⚠️ Prestatie-controle mislukt:', err.message);
-  }
-}
-
-// Kent één relikwie op id toe, los van tellers en drempels — voor eenmalige gebeurtenissen
-// (de getuige van de vondst). Idempotent: wie het al heeft, krijgt niets en er wordt niets
-// gepost. Zelfde uitbetaling als controleerPrestaties, zodat een relikwie altijd hetzelfde
-// waard is, hoe het ook is verdiend.
-async function kenRelikwieToe(client, userId, id) {
-  try {
-    const a = ACHIEVEMENTS.find(x => x.id === id);
-    if (!a || !loadMembers()[userId]) return false;
-    const all = loadAchievements();
-    const eigen = new Set(all[userId] || []);
-    if (eigen.has(id)) return false;
-    eigen.add(id);
-    all[userId] = [...eigen];
-    saveAchievements(all);
-    const bijnaam = loadMembers()[userId].bijnaam;
-    logGebeurtenis('achievement', userId, `${bijnaam} verdiende het relikwie "${a.naam}"`);
-    await postToChannel(client, process.env.SLACK_CHANNEL_ID,
-      `🏆 *RELIKWIE ONTGRENDELD* 🏆\n\n> ${bijnaam} heeft *${a.naam}* verworven.\n> _${a.tekst}_\n> ⚜️ *+${PRESTATIE_ROEM} roem*.\n\n— De Hoge Frituurraad`);
-    await pasRoemAan(client, userId, PRESTATIE_ROEM);
-    return true;
-  } catch (err) {
-    console.error('⚠️ Relikwie toekennen mislukt:', err.message);
-    return false;
   }
 }
 
@@ -3987,28 +3921,6 @@ function buildHelpText() {
   return `⚜️ *KROKET GOD* ⚜️\n\n${regels}`;
 }
 
-// ── Ambten in de systeemprompt ────────────────────────────────────────────────
-// Het `rol`-veld uit members.json werd precies één keer gelezen: als regel hieronder. Nu staat
-// er naast die historische Rijkstitel ook het AMBT dat iemand werkelijk draagt, met zijn
-// resterende zegels — zodat de Kroket God kan zeggen "Muntmeester, u heeft nog twee aflaten".
-function ambtRegelVoor(userId) {
-  try {
-    const ambt = ambtVan(userId);
-    if (!ambt) return null;
-    const over = Math.max(0, ambt.zegels || 0);
-    return `AMBT: ${ambt.naam} (${over} ${ambt.zegelNaam}-zegel(s) over deze week)`;
-  } catch (_) { return null; }
-}
-
-// De ambtsstaat als cachesleutel: houder + resterende zegels per ambt. Verandert er iets, dan
-// wordt de systeemprompt herbouwd.
-function ambtenKey() {
-  try {
-    const { ambten } = loadAmbten();
-    return AMBT_KEYS.map(k => `${k}:${ambten[k]?.houderId || '-'}:${ambten[k]?.zegels ?? 0}`).join(',');
-  } catch (_) { return ''; }
-}
-
 // ── System prompt ──────────────────────────────────────────────────────────────
 
 // Cache de buildSystemPrompt resultaat zolang members.json niet wijzigt
@@ -4035,7 +3947,7 @@ function buildSystemPrompt() {
   const wereldKey = kroketSeizoen?.status === 'actief'
     ? `${kroketSeizoen.nummer}:${kroketSeizoen.fase}:${Math.round(((kroketSeizoen.maxHp - kroketSeizoen.hp) / kroketSeizoen.maxHp) * 10)}`
     : 'geen';
-  const cacheKey = `${ledenJson}|${tijd.dagdeel}|${tijd.dagNaam}|${tijd.seizoen}|${stemming.naam}|${decreet}|${decreetInt.toFixed(2)}|${feestdag?.localName || ''}|${wereldKey}|${nalatenschapNu?.soort || ''}|${ambtenKey()}|${straattaalAan ? 'straat' : 'formeel'}`;
+  const cacheKey = `${ledenJson}|${tijd.dagdeel}|${tijd.dagNaam}|${tijd.seizoen}|${stemming.naam}|${decreet}|${decreetInt.toFixed(2)}|${feestdag?.localName || ''}|${wereldKey}|${nalatenschapNu?.soort || ''}|${straattaalAan ? 'straat' : 'formeel'}`;
 
   if (_systemPromptCache.key === cacheKey) return _systemPromptCache.value;
 
@@ -4046,11 +3958,10 @@ function buildSystemPrompt() {
     .join('\n\n');
 
   // Aanvullende details per lid voor personalisering
-  const ledenExtra = Object.entries(members)
-    .map(([id, m]) => [
+  const ledenExtra = Object.values(members)
+    .map(m => [
       m.bijnaam,
       m.rol             ? `historische Rijkstitel: ${m.rol}` : null,
-      ambtRegelVoor(id),
       m.favorieteKroket ? `favoriete kroket: ${m.favorieteKroket}` : null,
       m.kroketZonde     ? `grootste zonde: "${m.kroketZonde}"` : null,
       m.motto           ? `motto: "${m.motto}"` : null,
@@ -6416,7 +6327,7 @@ async function voerKroketCommandoUit({ command, respond, client }) {
     // ── Verbanning check — verbannen leden kunnen geen publieke commando's uitvoeren
     //    Passieve commando's (ranglijst, dossier, help, prompts) zijn wel toegestaan
     const PASSIEVE_COMMANDO_S = ['ranglijst', 'dossier', 'help', 'prompts', 'kroketprompts', 'beroep', 'uitbreken',
-      'vetgeschrift', 'ambt', 'ambten', 'ambtsboek'];
+      'vetgeschrift'];
     if (isVerbannen(command.user_id) && !PASSIEVE_COMMANDO_S.includes(eersteWoord) && !isTestKanaalCmd) {
       const banData = loadVerbanning()[command.user_id];
       const terugTijd = banData ? new Date(banData.tot).toLocaleString('nl-NL', {
@@ -6458,7 +6369,7 @@ async function voerKroketCommandoUit({ command, respond, client }) {
 
     // ── Ephemeral bevestiging: alleen voor commando's die even duren (niet voor directe data-opvragen)
     const STILLE_COMMANDO_S = ['ranglijst', 'dossier', 'status', 'help', 'prompts', 'kroketprompts', 'horoscoop',
-      'vetgeschrift', 'ambt', 'ambten', 'zegels', 'ambtsboek', 'boek', 'kerfstok', 'wrok', 'kerven',
+      'vetgeschrift', 'kerfstok', 'wrok', 'kerven',
       'bladzijde', 'bladzijden', 'bladzijdes'];
     const isStilCommando = STILLE_COMMANDO_S.some(c => eersteWoord === c);
     if (input && !isDM && !isStilCommando) {
@@ -8234,27 +8145,6 @@ async function voerKroketCommandoUit({ command, respond, client }) {
         return;
       }
 
-      if (blad === 'ambten' || blad === 'ambt') {
-        const regels = AMBT_KEYS.map(key => {
-          const def = AMBTEN[key];
-          const houder = ambtHouder(key);
-          const aanspraak = Object.entries(def.aanspraak)
-            .map(([a, g]) => `${a}${g > 1 ? `×${g}` : ''}`).join(' + ');
-          return `${def.icoon} *${def.naam}* — ${def.zegelNorm} zegel(s)/week\n` +
-                 `> ${def.bevoegdheid}\n` +
-                 `> Drager: ${houder ? `*${members[houder]?.bijnaam || 'onbekend'}*` : '_vacant_'}\n` +
-                 `> Aanspraak: _${aanspraak}_`;
-        });
-        await respond({
-          text: `📜 *HET VETGESCHRIFT — BLAD II: DE WET VAN DE VIJF AMBTEN* 📜\n\n${regels.join('\n\n')}\n\n` +
-            `> _"Wat gij uzelf toebedeelt weegt niets. Wat een ander u toebedeelt, weegt eeuwig."_\n` +
-            `> Een zegel landt nooit op de houder zelf, nooit op een balling en nooit op wie afwezig is gemeld.\n` +
-            `> Hertelling elke maandag 09:10 over de laatste ${VENSTER_DAGEN} dagen; minimaal ${LEVENSTEKEN_DADEN} daden om een ambt te dragen.\n\n— Het Vetgeschrift, blad II`,
-          response_type: 'ephemeral',
-        });
-        return;
-      }
-
       // Zonder blad: het boek zelf, plus het vers van vandaag.
       const vers = versVanDeDag();
       await respond({
@@ -8269,71 +8159,7 @@ async function voerKroketCommandoUit({ command, respond, client }) {
           `> *De wet van het boek:*\n> _"Wat gij uzelf toebedeelt weegt niets. Wat een ander u toebedeelt, weegt eeuwig."_\n\n` +
           (vers ? `> *Het vers van vandaag:*\n> _"${vers}"_\n\n` : '') +
           `> \`/kroketgod vetgeschrift rangen\` — blad I, de acht treden en de Korsten\n` +
-          `> \`/kroketgod vetgeschrift ambten\` — blad II, de vijf ambten en hun bevoegdheden\n` +
-          `> Het derde blad zit met vet dichtgeplakt. De Raad weekt eraan.\n\n— Het Vetgeschrift`,
-        response_type: 'ephemeral',
-      });
-      return;
-    }
-
-    // ── Uw ambt: wat draagt u, wat mag u, en hoeveel zegels heeft u nog ──────
-    if (input === 'ambt' || input === 'ambten' || input === 'zegels') {
-      const { ambten } = loadAmbten();
-      const eigen = ambtVan(command.user_id);
-      const venster = readJSON('venstertellers.json', {})[command.user_id];
-      const sleutels = vensterSleutels(dagSleutel());
-      const daden = dadenInVenster(venster, sleutels);
-
-      const regels = AMBT_KEYS.map(key => {
-        const def = AMBTEN[key];
-        const houder = ambtHouder(key);
-        const rec = ambten[key] || {};
-        if (!houder) return `${def.icoon} *${def.kort}* — _vacant_ · ${def.bevoegdheid}`;
-        const zegels = houder === command.user_id ? ` · *${Math.max(0, rec.zegels || 0)}/${zegelNormVoor(key, houder)}* zegels over` : '';
-        return `${def.icoon} *${def.kort}* — ${members[houder]?.bijnaam || 'onbekend'}${houder === command.user_id ? ' _(u)_' : ''}${zegels}`;
-      });
-
-      const aanspraken = AMBT_KEYS
-        .map(key => ({ key, n: aanspraakVan(venster, AMBTEN[key].aanspraak, sleutels) }))
-        .filter(a => a.n > 0).sort((a, b) => b.n - a.n)
-        .map(a => `${AMBTEN[a.key].icoon} ${AMBTEN[a.key].kort}: *${a.n}*`);
-
-      const eigenBlok = eigen
-        ? `\n\n> ${eigen.icoon} *U draagt ${eigen.naam}.*\n` +
-          `> ${eigen.bevoegdheid}.\n` +
-          `> Nog *${Math.max(0, eigen.zegels || 0)}* van ${zegelNormVoor(eigen.key, command.user_id)} ${eigen.zegelNaam}-zegel(s) deze week — ze vervallen vrijdag ${AMBTSWEEK_EINDE.uur}:00.\n` +
-          `> Leg er een via de knop in de Home-tab van de bot.`
-        : `\n\n> _U draagt geen ambt._ Bouw aanspraak op met daden; de Raad hertelt elke maandag 09:10 over ${VENSTER_DAGEN} dagen.` +
-          (daden < LEVENSTEKEN_DADEN ? `\n> U staat op *${daden}* ${daden === 1 ? 'daad' : 'daden'} — er zijn minstens *${LEVENSTEKEN_DADEN}* nodig om een ambt te mógen dragen.` : '');
-
-      await respond({
-        text: `📜 *DE VIJF AMBTEN* 📜\n\n${regels.map(r => `> ${r}`).join('\n')}${eigenBlok}\n\n` +
-          `> *Uw aanspraak (${VENSTER_DAGEN} dagen, ${daden} ${daden === 1 ? 'daad' : 'daden'}):* ${aanspraken.length ? aanspraken.join(' · ') : '_nog geen_'}\n` +
-          `> \`/kroketgod ambtsboek\` · \`/kroketgod vetgeschrift ambten\`\n\n— De Hoge Frituurraad`,
-        response_type: 'ephemeral',
-      });
-      return;
-    }
-
-    // ── Het Ambtsboek: openbaar, want geheime macht is niet te bevechten ─────
-    if (input === 'ambtsboek' || input === 'boek') {
-      const daden = [...(loadAmbtsboek().daden || [])].reverse().slice(0, 20);
-      if (!daden.length) {
-        await respond({ text: '📖 _Het Ambtsboek is nog leeg. Er is geen zegel gelegd._', response_type: 'ephemeral' });
-        return;
-      }
-      const regels = daden.map(d => {
-        const def = AMBTEN[d.ambt];
-        const houder = members[d.houderId]?.bijnaam || 'een vergeten volgeling';
-        const doel = d.doelId ? (members[d.doelId]?.bijnaam || 'een vergeten volgeling') : 'het hele Rijk';
-        const wanneer = new Date(d.ts).toLocaleString('nl-NL', {
-          timeZone: 'Europe/Amsterdam', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
-        });
-        return `> ${def?.icoon || '•'} *${houder}* → *${doel}* — ${d.daad} _(${wanneer})_`;
-      });
-      await respond({
-        text: `📖 *HET AMBTSBOEK* 📖\n\n${regels.join('\n')}\n\n` +
-          `_Artikel IV: elke ambtsdaad staat in het Ambtsboek. Geheime macht is niet te bevechten, en wat niet te bevechten is, is geen ambt maar een gewoonte._`,
+          `> De andere bladen zitten met vet dichtgeplakt. De Raad weekt eraan.\n\n— Het Vetgeschrift`,
         response_type: 'ephemeral',
       });
       return;
@@ -9409,8 +9235,11 @@ app.event('app_mention', async ({ event, client }) => {
         // Heeft dit lid al een gele kaart deze week? → dit is de tweede: rood, geen vergrijp-accumulatie
         if (heeftGeleKaartDezeWeek(userId)) {
           const thread_ts = antwoordThread(event);
-          await legRodeKaartOp(client, event.channel, userId, bijnaam,
-            `${type} na gele kaart`, input, thread_ts);
+          if (!await legRodeKaartOp(client, event.channel, userId, bijnaam, `${type} na gele kaart`, input, thread_ts)) {
+            await postEphemeral(client, event.channel, userId,
+              '👑 _Dit was uw tweede kaart deze week: rood. Maar u draagt de Gouden Korst, en de kaart glijdt eraf. Geen schorsing — de Korst is nu op._',
+              { thread_ts });
+          }
           return true;
         }
 
@@ -9985,23 +9814,6 @@ app.event('reaction_added', async ({ event, client }) => {
       if (await grijpGoudenKroket(client, event.user)) return;
     }
 
-    // ── Getuige van de Vondst: de kantlijn van het Vetgeschrift ───────────────
-    // Eenmalig, alleen op het vondst-bericht, alleen met :illuminati-kroket:. Kost geen punten
-    // maar levert een permanent relikwie op — genoeg om het hele genootschap binnen een dag
-    // in beweging te brengen zonder dat er iets te verliezen valt.
-    const openbaringNu = loadOpenbaring();
-    if (openbaringNu?.vondstTs && event.item?.ts === openbaringNu.vondstTs
-        && event.reaction === 'illuminati-kroket' && loadMembers()[event.user]) {
-      if (!openbaringNu.getuigen?.[event.user]) {
-        saveOpenbaring({
-          ...openbaringNu,
-          getuigen: { ...(openbaringNu.getuigen || {}), [event.user]: Date.now() },
-        });
-        await kenRelikwieToe(client, event.user, 'getuige');
-      }
-      return;
-    }
-
     if (event.item.channel !== process.env.SLACK_CHANNEL_ID) return;
     if (event.user === event.item_user) return;
 
@@ -10063,7 +9875,7 @@ app.event('reaction_added', async ({ event, client }) => {
     // Het gebaar telt nu mee. Alleen de gever telt: hij deed de daad.
     // Geen punten en geen roem — dit is het gratis, onbegrensde gebaar en dat moet het blijven.
     // Wél: teken van leven (het tribunaal zag een zwijgende maar meelevende volgeling als
-    // inactief), een draad in het weefsel, en de aanspraak op De Voorspraak der Zachte Korst.
+    // inactief) en een draad in het weefsel.
     if (members[event.user]) {
       if (markeerActiviteit(event.user, 'daad')) {
         await blaasTribunaalAf(client, 'de beschuldigde eerde een medelid met de heilige emoji');
@@ -10095,14 +9907,11 @@ const geplandeCrons = [];
 // toon/skip op de eerstvolgende vrijdag via toonExpr.
 const CRON_LABELS = {
   '0 9 * * *':       { label: 'Inhaalslag kampioen & seizoen' },
-  '10 9 * * 1':      { label: 'Ambtswissel' },
-  '20 9 * * 1-5':    { label: 'Ambtsvacatures' },
   '15 9 * * 1':      { label: 'Vete van het Rijk' },
   '40 9 * * 1':      { label: 'Zwarte Korst' },
   '35 9 * * 1-5':    { label: 'Dubbele Korst' },
   '20 10 * * 1':     { label: 'Vetpapier' },
   '25 10 * * 1':     { label: 'Blinde Handdruk' },
-  '0 17 * * 5':      { label: 'Zegelverval' },
   '30 8 * * *':      { label: 'Verjaardagszegen' },
   '0 8 * * *':       { label: 'Verborgen Hand (uitnodiging)' },
   '50 14 * * 5':     { label: 'Weekvijand ontsnapping' },
@@ -13165,8 +12974,8 @@ async function zorgVoorVete(client) {
   }
 }
 
-// De vrede. Bewust NIET voorbehouden aan de Voorspraak: die is bij drie of vier actieve leden
-// vaak zelf partij, en dan zou de enige uitweg dood zijn. Elk lid dat geen partij is mag sussen.
+// De vrede. Elk lid dat geen partij is mag sussen: bij drie of vier actieve leden is bijna
+// iedereen wel ergens partij, en dan mag de enige uitweg niet aan één lid hangen.
 async function susVete(client, susserId) {
   const v = loadVete();
   const members = loadMembers();
@@ -13666,7 +13475,7 @@ const VETBAD_MAX_INZET = 10;
 // Paneerknecht een ambtszegel in plaats daarvan, en daarmee viel iedereen stilletjes terug op één
 // offer per dag — terwijl offeren het meest gespeelde kansspel was (spelers gebruikten hun derde
 // offer op tientallen dagen). Nu staat het getal hier zelf, zodat een herziening van de rangen het
-// niet nog eens ongemerkt kan wegnemen. offerExtra in RANGEN telt er nog steeds bij op.
+// niet nog eens ongemerkt kan wegnemen. offerExtra in RANGEN (Paneerknecht, Korsten) telt erbij op.
 const VETBAD_BASIS_PER_DAG = 3;
 
 // ── De Gokpauze (regels en waarom: lib/gokpauze.js) ───────────────────────────
@@ -14702,7 +14511,7 @@ async function koopWinkelItem(client, userId, itemKey, doelId, channelId) {
   const effect = {
     zegen: 'elke puntenstraf ketst 24 uur af op de heilige korst',
     dubbele_eer: 'ontvangen eer telt 24 uur dubbel',
-    gouden_korst: '24 uur de gouden status — de Kroket God spreekt van de Gezalfde',
+    gouden_korst: '24 uur glijdt een gele kaart van u af, en de Kroket God spreekt van de Gezalfde',
     korstverstevig: '48 uur halve kans op een geslaagde roof',
   }[itemKey] || item.uitleg;
   await postToChannel(client, channelId,
@@ -15093,10 +14902,6 @@ const OPDRACHTEN = [
   { id: 'w-beurs',    soort: 'week', actie: 'beurs_koop',     doel: 2, beloning: 3, tekst: 'Koop twee aandelen op de Frituurbeurs' },
 ];
 
-// Waarmee de beloning van een herautsplicht wordt vermenigvuldigd. Staat hier en niet bij de
-// ambten, omdat dagOpdrachtenVoor hem eerder in het bestand nodig heeft.
-const HERAUT_BELONING_FACTOR = 2;
-
 const OPDRACHTEN_PER_DAG = 3;
 const OPDRACHTEN_PER_WEEK = 2;
 
@@ -15231,16 +15036,6 @@ function dagOpdrachtenVoor(userId, lopend = null) {
     const namen = Object.entries(vervangen).map(([oud, nieuw]) => `${oud}→${nieuw}`).join(', ');
     console.log(`📜 Dagopdracht vervangen voor ${loadMembers()[userId]?.bijnaam || userId}: ${namen}`);
   }
-
-  // De Heraut der Frituur kan een lid een VIERDE dagopdracht uitschrijven, met dubbele
-  // beloning. Hij hangt hier en niet in een eigen lijst, zodat telActie() hem automatisch
-  // meepakt: de voortgangsboekhouding, de haalbaarheidstoets en de uitbetaling werken al.
-  if (dag.heraut) {
-    const hp = pool.find(o => o.id === dag.heraut.id);
-    if (hp && !uit.some(o => o.id === hp.id)) {
-      uit.push({ ...hp, beloning: hp.beloning * HERAUT_BELONING_FACTOR, heraut: dag.heraut.door });
-    }
-  }
   return uit;
 }
 
@@ -15308,7 +15103,7 @@ async function weegDubbeleKorst(client, userId, actie, naspel = null) {
 }
 
 // De ochtendmelding. Eén templated bericht met alle korsten die in het donker zijn gevallen;
-// niets als er geen waren. Ma-vr 09:35, dus ná de ambtswissel en vóór de weekvijand.
+// niets als er geen waren. Ma-vr 09:35, dus ná de weekopening en vóór de weekvijand.
 async function meldDubbeleKorsten(client) {
   const data = readJSON('dubbelekorst.json', { open: [], gemeld: [], geschiedenis: [] });
   const gemeld = data.gemeld || [];
@@ -15337,10 +15132,6 @@ async function telActie(client, userId, actie, aantal = 1, naspel = null) {
 
     // Altijd tellen, ook als er vandaag geen opdracht op deze actie staat.
     const stand = bumpTeller(userId, actie, aantal);
-    // Rollend venster van veertien dagen: dit is waar de aanspraak op de vijf ambten uit komt.
-    // De levenslange teller kan dat niet leveren — die vergeet nooit, en een ambt dat op een
-    // levenslang totaal rust, wisselt na een half jaar nooit meer van hand.
-    bumpVenster(userId, actie, aantal);
     // De Dubbele Korst: in het donker kan dezelfde daad van twee verschillende leden samenvallen.
     // In een eigen try — een exception hier mag nooit de puntenboeking hierboven ongedaan maken.
     try { await weegDubbeleKorst(client, userId, actie, naspel); }
@@ -15433,10 +15224,6 @@ function opdrachtTekst(o) {
 // Toelichting onder een opdrachtregel: waarom staat deze er (vervanging), of waarom lukt hij
 // vandaag niet meer. Zonder dit verandert de lijst stilletjes en snapt niemand waarom.
 function opdrachtNoot(o) {
-  if (o.heraut) {
-    const naam = loadMembers()[o.heraut]?.bijnaam || 'de Heraut der Frituur';
-    return `\n>    _herautsplicht — ${naam} schreef deze voor u uit, met dubbele beloning_`;
-  }
   if (o.verving) return `\n>    _herkansing — "${opdrachtTekst(o.verving)}" was vandaag niet meer haalbaar_`;
   if (o.onhaalbaar) return '\n>    _vandaag niet meer haalbaar; morgen staat er een nieuwe_';
   return '';
@@ -15480,356 +15267,6 @@ registreerFeature({
 // Alle vier zijn TEMPLATED waar het vaak vuurt (titelwissels, bijdragen, het bord) en kosten
 // LLM-quota alleen bij de zeldzame, grote momenten: een fase-overgang en de seizoensfinale.
 
-
-// ── DE VIJF AMBTEN (Het Vetgeschrift, blad II) ─────────────────────────────────
-// De tweede as van het spel, en de enige die geen getal is. Rang is wat u BENT; een ambt is
-// wat u MAG — en wat u alleen op iemand anders kunt uitoefenen.
-//
-// Aanleiding: alles wat betrouwbaar punten opleverde kon alleen met de bot. Roem liep 1:1 mee
-// met kroketpunten, dus er was niets te kiezen tussen "punten" en "aanzien", en de vijf
-// `rol`-velden in members.json — Rijkscampagnecommandant, Hoofd Rijksintelligentie & Data,
-// Rijksmarketeer, Opperpaneerder & Rijksontwerper, Rijkssmaakdiplomaat — werden precies één
-// keer gelezen: als regel in de systeemprompt. Die rollen zijn nu de stichtingsbezetting.
-//
-// De wet uit vetgeschrift.txt, en de reden dat dit werkt: een zegel landt NOOIT op de houder
-// zelf. Wie macht heeft, kan haar alleen uitoefenen door zich tot een ander te wenden.
-//
-// De tabel, de aanspraakformules en de hertelling staan in lib/ambten.js (puur en getest);
-// hier staat alleen wat state en Slack nodig heeft.
-
-const loadAmbten     = () => readJSON('ambten.json', { weekStart: null, ambten: {}, laatsteAmbt: {} });
-const saveAmbten     = (data) => writeJSON('ambten.json', data);
-const loadAmbtsboek  = () => readJSON('ambtsboek.json', { daden: [] });
-const AMBTSBOEK_MAX  = 200;
-
-// Zegels vervallen vrijdag 17:00 — de ambtsweek is een WERKweek. Bewust niet zondagnacht:
-// de Kroket God rust in het weekend (weekendRust), dus een zegel dat zaterdag nog geldig is,
-// is een zegel dat niemand kan leggen.
-const AMBTSWEEK_EINDE = { dag: 5, uur: 17, min: 0 };
-
-// Hoeveel roem een ambtshouder per week uit zijn ambtsdaden kan halen. De zegelnorm is macht,
-// geen roeminkomen: zonder deze cap verdient de Heraut (5 zegels) structureel 2,5× zoveel roem
-// als de Opperpaneerder (1 zegel), en dat is een permanente spreiding op functietitel.
-const AMBTSDAAD_ROEM_WEEKCAP = 2;
-
-const zegelWoord = (n) => `${n} zegel${n === 1 ? '' : 's'}`;
-
-function ambtVan(userId) {
-  if (!userId) return null;
-  // Een balling draagt geen ambt. Zonder deze poort zag hij in zijn App Home nog de ambtskaart
-  // met knoppen die bij elke klik weigeren — een knop die gegarandeerd nee zegt, liegt.
-  if (isVerbannen(userId)) return null;
-  const { ambten } = loadAmbten();
-  const key = AMBT_KEYS.find(k => ambten[k]?.houderId === userId);
-  return key ? { key, ...AMBTEN[key], ...ambten[key] } : null;
-}
-
-// Alle ambten van een lid. Sinds een waarneming een tijdelijk TWEEDE ambt kan zijn, is dit de
-// juiste vraag voor de App Home en de knoppen; ambtVan geeft alleen het eerste terug.
-function ambtenVan(userId) {
-  if (!userId || isVerbannen(userId)) return [];
-  const { ambten } = loadAmbten();
-  return AMBT_KEYS
-    .filter(k => ambten[k]?.houderId === userId)
-    .map(k => ({ key: k, ...AMBTEN[k], ...ambten[k] }));
-}
-
-function ambtHouder(key) {
-  const houder = loadAmbten().ambten[key]?.houderId || null;
-  // Een ambt bij een vertrokken lid of een balling is onbruikbaar; anders blijft de
-  // bevoegdheid die de anderen nodig hebben onbereikbaar hangen. Zelfde regel als titelHouder.
-  if (!houder || !loadMembers()[houder] || isVerbannen(houder)) return null;
-  return houder;
-}
-
-function zegelNormVoor(key, houderId) {
-  return zegelBudget(key, getVoorrechten(houderId).zegelExtra);
-}
-
-// ── De enige doorgang voor een ambtsdaad ──────────────────────────────────────
-// Vijf ambten met elk hun eigen zegel-aftrek, immuniteitscheck en roemboeking zouden binnen
-// twee weken uiteendrijven. Alles loopt hier langs, in deze orde, en het ambt-specifieke
-// effect is één callback.
-//
-// Geeft { ok, tekst } terug — hetzelfde contract als voerDuel/voerRoof/koopWinkelItem, zodat
-// zowel een slash-commando als een App Home-knop hem kan aanroepen.
-async function boekAmbtsdaad(client, { ambtKey, houderId, doelId, daad, uitvoering, channelId }) {
-  const def = AMBTEN[ambtKey];
-  if (!def) return { ok: false, tekst: '_De Onderste Codex kent dat ambt niet._' };
-  const members = loadMembers();
-  if (!members[houderId]) return { ok: false, tekst: 'Alleen leden van de Kroket Illuminati dragen een ambt.' };
-  if (ambtHouder(ambtKey) !== houderId) {
-    return { ok: false, tekst: `_U draagt ${def.naam} niet. Het Ambtsboek is openbaar: \`/kroketgod ambtsboek\`._` };
-  }
-  if (isVerbannen(houderId)) return { ok: false, tekst: '_Een balling oefent geen ambt uit. Toon eerst berouw._' };
-
-  // De wet van het boek: wat gij uzelf toebedeelt weegt niets.
-  if (doelId === houderId) {
-    return { ok: false, tekst: '_Een zegel op uw eigen naam is geen zegel maar een stempel. De Codex verbiedt dit._' };
-  }
-  if (!members[doelId]) return { ok: false, tekst: 'De Kroket God kent die volgeling niet.' };
-  if (isVerbannen(doelId)) {
-    return { ok: false, tekst: `_${members[doelId].bijnaam} is verbannen. Een zegel bereikt het ballingschap niet._` };
-  }
-  // Artikel III: wat men in een leeg huis achterlaat, vindt niemand. Zonder deze poort zou de
-  // afwezige juist het aantrekkelijkste doelwit worden — hij kan immers niet terugslaan.
-  if (isAfwezig(doelId)) {
-    return { ok: false, tekst: `_${members[doelId].bijnaam} staat als afwezig gemeld. Een zegel op een leeg huis is verspild._` };
-  }
-
-  const staat = loadAmbten();
-  const rec = staat.ambten[ambtKey];
-  if (!rec || (rec.zegels ?? 0) <= 0) {
-    return { ok: false, tekst: `_Uw ${def.zegelNaam}-zegels zijn op. Vrijdag ${AMBTSWEEK_EINDE.uur}:00 vervallen ze; maandag komen er nieuwe._` };
-  }
-
-  const houderNaam = members[houderId].bijnaam;
-  const doelNaam = members[doelId].bijnaam;
-
-  // De Gouden Korst is het tegenwapen van deze hele as, en dit is het eerste getal dat hij ooit
-  // raakt: hij bestond uit een sterretje in de ranglijst en een regel in een prompt. Het zegel
-  // is wél op — anders is de Korst een gratis blokkade in plaats van een schild dat opgaat.
-  if (heeftPowerup(doelId, 'gouden_korst')) {
-    verwijderPowerup(doelId, 'gouden_korst');
-    rec.zegels -= 1;
-    saveAmbten(staat);
-    await postToChannel(client, channelId || process.env.SLACK_CHANNEL_ID,
-      `👑 *HET ZEGEL GLIJDT AF* 👑\n\n` +
-      `> ${def.icoon} *${houderNaam}* legde een ${def.zegelNaam} op *${doelNaam}* — maar die draagt de *Gouden Korst*.\n` +
-      `> Het zegel glijdt eraf en is verbruikt. De Korst is dat nu ook.\n\n— De Hoge Frituurraad`);
-    return { ok: true, tekst: `👑 _${doelNaam} droeg de Gouden Korst. Uw ${def.zegelNaam} glipte weg — en is verbruikt._` };
-  }
-
-  // Zegel af en vastleggen VÓÓR de uitvoering: valt daar iets om (een LLM-keten, een
-  // Slack-call), dan is de macht verbruikt en niet stilzwijgend gratis herbruikbaar.
-  rec.zegels -= 1;
-  rec.gelegd = (rec.gelegd || 0) + 1;
-  saveAmbten(staat);
-
-  const boek = loadAmbtsboek();
-  boek.daden.push({ ts: Date.now(), ambt: ambtKey, houderId, doelId, daad });
-  boek.daden = boek.daden.slice(-AMBTSBOEK_MAX);
-  writeJSON('ambtsboek.json', boek);
-
-  let uitkomst = null;
-  try {
-    uitkomst = typeof uitvoering === 'function' ? await uitvoering() : null;
-  } catch (err) {
-    console.error(`⚠️ Ambtsdaad ${ambtKey} mislukte:`, err.message);
-    return { ok: false, tekst: `_De ${def.zegelNaam} is gelegd maar het gevolg bleef uit: ${err.message}_` };
-  }
-
-  // Roem voor de houder: een ambtsdaad is per definitie een daad voor iemand anders, en dat is
-  // exact wat de tweede as hoort te belonen. Gecapt op +2 per week, want de zegelnorm is macht
-  // en geen roeminkomen — zonder cap zou de Heraut met 5 zegels structureel 2,5× zoveel roem
-  // verdienen als de Opperpaneerder met 1, toegekend op functietitel.
-  const week = getMondayOfWeek();
-  if (rec.roemWeek !== week) { rec.roemWeek = week; rec.roemDezeWeek = 0; }
-  if ((rec.roemDezeWeek || 0) < AMBTSDAAD_ROEM_WEEKCAP) {
-    rec.roemDezeWeek = (rec.roemDezeWeek || 0) + 1;
-    const versStaat = loadAmbten();
-    versStaat.ambten[ambtKey] = { ...versStaat.ambten[ambtKey], roemWeek: week, roemDezeWeek: rec.roemDezeWeek };
-    saveAmbten(versStaat);
-    await pasRoemAan(client, houderId, 1);
-  }
-
-  await telActie(client, houderId, 'ambtsdaad');
-  legRelatieVast(houderId, doelId, 'eer'); // een ambtsdaad is een draad in het weefsel
-
-  const regel = uitkomst?.regel || daad;
-  await postToChannel(client, channelId || process.env.SLACK_CHANNEL_ID,
-    `${def.icoon} *${def.kort.toUpperCase()}: ${(uitkomst?.kop || def.zegelNaam).toUpperCase()}* ${def.icoon}\n\n` +
-    `> *${houderNaam}* oefent zijn ambt uit op *${doelNaam}*.\n> ${regel}\n` +
-    `> _Nog ${Math.max(0, rec.zegels)} ${def.zegelNaam}-zegel(s) deze week._\n\n— De Hoge Frituurraad`);
-
-  return { ok: true, tekst: uitkomst?.bevestiging || `${def.icoon} _Gelegd op ${doelNaam}. Nog ${Math.max(0, rec.zegels)} zegel(s) deze week._` };
-}
-
-
-// ── De vijf bevoegdheden ──────────────────────────────────────────────────────
-// Elk is één `uitvoering()`-callback voor boekAmbtsdaad. Alle vijf volledig templated (0 LLM),
-// alle vijf werkend met precies twee aanwezige leden.
-
-// 🪙 DE AFLAAT — de Muntmeester schenkt een medelid een gratis artikel uit de Aflatenhandel.
-// Bij een prijspeil van 2-3 punten en weeksaldi van een handvol punten is een gratis Zegen of
-// Gouden Korst geen fooi maar een schild. Drie zegels voor vier medeleden: hij moet iemand
-// overslaan, en dat is precies de reden dat men bij hem langsgaat.
-async function ambtsdaadAflaat(client, houderId, doelId, itemKey, channelId) {
-  const item = WINKEL_ITEMS[itemKey];
-  if (!item) return { ok: false, tekst: '_De Aflatenhandel kent dat artikel niet._' };
-  if (itemKey === 'vloek') {
-    return { ok: false, tekst: '_Een aflaat is een gunst. De Vloek der Slappe Korst is dat niet — die koopt u zelf._' };
-  }
-  return boekAmbtsdaad(client, {
-    ambtKey: 'muntmeester', houderId, doelId, channelId,
-    daad: `schonk ${item.naam}`,
-    uitvoering: async () => {
-      geefPowerup(doelId, itemKey);
-      const doelNaam = loadMembers()[doelId].bijnaam;
-      logGebeurtenis('winkel', doelId, `${doelNaam} ontving ${item.naam} als aflaat`, null, houderId);
-      return {
-        kop: 'een aflaat is verleend',
-        regel: `${item.icoon} *${item.naam}* wordt kosteloos verleend — ${item.uitleg}`,
-        bevestiging: `🪙 _${item.naam} geschonken aan ${doelNaam}._`,
-      };
-    },
-  });
-}
-
-// 📜 DE EXTRA PLICHT — de Heraut schrijft een medelid een vierde dagopdracht uit, met dubbele
-// beloning (HERAUT_BELONING_FACTOR staat bij de opdrachtmotor). Zijn zegel is daarmee de
-// betrouwbaarste extra puntenbron van het spel, en hij bepaalt hoe de dag van iemand anders
-// eruitziet.
-async function ambtsdaadPlicht(client, houderId, doelId, opdrachtId, channelId) {
-  const opdracht = OPDRACHTEN.find(o => o.id === opdrachtId && o.soort === 'dag');
-  if (!opdracht) return { ok: false, tekst: '_De Codex kent die dagopdracht niet._' };
-  const doelNaamVoor = loadMembers()[doelId]?.bijnaam || 'dat lid';
-  const { alles, dag, week } = opdrachtBakken(doelId);
-  if (dag.heraut) {
-    return { ok: false, tekst: `_${doelNaamVoor} heeft vandaag al een herautsplicht. Eén per dag per lid._` };
-  }
-  // Staat deze opdracht vandaag al op zijn lijst, dan zou de plicht niets toevoegen: de
-  // dagopdrachten worden samengevoegd op id, dus de dubbele had stil weggevallen — zegel
-  // verbruikt, kanaalbericht verstuurd, en niets gebeurd. Weigeren vóór boekAmbtsdaad, zodat
-  // het zegel niet sneuvelt, en meteen vertellen wat hij dan wél kan kiezen.
-  const alHeeft = dagOpdrachtenVoor(doelId).map(o => o.id);
-  if (alHeeft.includes(opdracht.id)) {
-    const vrij = OPDRACHTEN.filter(o => o.soort === 'dag' && !alHeeft.includes(o.id))
-      .map(o => `"${opdrachtTekst(o)}"`);
-    return { ok: false, tekst:
-      `_${doelNaamVoor} heeft "${opdrachtTekst(opdracht)}" vandaag al staan — een tweede exemplaar telt niet dubbel._` +
-      (vrij.length ? `\n_Nog vrij: ${vrij.join(', ')}._` : '') };
-  }
-  return boekAmbtsdaad(client, {
-    ambtKey: 'heraut', houderId, doelId, channelId,
-    daad: `schreef de plicht "${opdrachtTekst(opdracht)}" uit`,
-    uitvoering: async () => {
-      dag.heraut = { id: opdracht.id, door: houderId };
-      alles[doelId] = { ...(alles[doelId] || {}), dag, week };
-      writeJSON('opdrachten.json', alles);
-      return {
-        kop: 'een plicht is uitgeschreven',
-        regel: `📜 _"${opdrachtTekst(opdracht)}"_ — vandaag, bovenop de eigen opdrachten. ` +
-               `Beloning *+${opdracht.beloning * HERAUT_BELONING_FACTOR} kroketpunten* (dubbel).`,
-        bevestiging: `📜 _Plicht uitgeschreven voor ${doelNaamVoor}: ${opdrachtTekst(opdracht)}._`,
-      };
-    },
-  });
-}
-
-// ⚖️ HET BOEKENZEGEL — de Rekenmeester onthult openbaar één verborgen feit over een medelid.
-// De beurs is met opzet gebouwd om je om de stand van een ánder te laten geven, maar de
-// posities zijn bewust geheim: de interactie zat in de spreadsheet en niet in het kanaal.
-// Het onderwerp krijgt 1 punt smartengeld voor de blootstelling.
-const BOEKENZEGEL_SMARTENGELD = 1;
-
-// Zoekt het eerste bruikbare feit. Geeft null als er over dit lid niets te onthullen valt —
-// dan is er ook geen zegel verbruikt (de weigering komt vóór boekAmbtsdaad).
-function verborgenFeitOver(doelId, houderId) {
-  const members = loadMembers();
-  const doelNaam = members[doelId]?.bijnaam || 'een volgeling';
-
-  // (a) een beurspositie — maar nooit de eigen posities van de Rekenmeester
-  const beurs = loadBeurs();
-  for (const [bezitterId, posities] of Object.entries(beurs)) {
-    if (bezitterId === houderId || !members[bezitterId]) continue;
-    for (const [doelwitId, aantal] of Object.entries(posities || {})) {
-      if (!aantal || doelwitId !== doelId || !members[doelwitId]) continue;
-      return `📈 *${members[bezitterId].bijnaam}* houdt *${aantal} aandeel${aantal === 1 ? '' : 'en'}* in ${doelNaam}. Dat stond in geen enkel bericht.`;
-    }
-  }
-  // (b) wie de vloek legde die nu op het doelwit rust
-  const vloek = getActievePowerups(doelId).find(p => p.item === 'vloek');
-  if (vloek?.door && members[vloek.door]) {
-    return `😈 De *Vloek der Slappe Korst* op ${doelNaam} is gelegd door *${members[vloek.door].bijnaam}*. Anonimiteit is geen recht.`;
-  }
-  // (c) hoeveel daden het doelwit deze veertien dagen deed — de spiegel van de ambtsaanspraak
-  const venster = readJSON('venstertellers.json', {})[doelId];
-  const daden = dadenInVenster(venster, vensterSleutels(dagSleutel()));
-  if (daden === 0) {
-    return `🕳️ ${doelNaam} heeft in *veertien dagen geen enkele daad* in de frituur verricht. De boeken zijn leeg.`;
-  }
-  return `📊 ${doelNaam} verrichtte *${daden} daden* in veertien dagen. De Rekenmeester houdt dit bij of u het vraagt of niet.`;
-}
-
-async function ambtsdaadBoekenzegel(client, houderId, doelId, channelId) {
-  const feit = verborgenFeitOver(doelId, houderId);
-  if (!feit) return { ok: false, tekst: '_Over dit lid valt niets te onthullen dat niet al bekend is._' };
-  return boekAmbtsdaad(client, {
-    ambtKey: 'rekenmeester', houderId, doelId, channelId,
-    daad: 'lichtte de boeken door',
-    uitvoering: async () => {
-      const doelNaam = loadMembers()[doelId].bijnaam;
-      await pasScoreAanMetCheck(client, doelId, BOEKENZEGEL_SMARTENGELD, { channelId });
-      return {
-        kop: 'de boeken zijn geopend',
-        regel: `${feit}\n> _${doelNaam} ontvangt *+${BOEKENZEGEL_SMARTENGELD} kroketpunt* smartengeld voor de blootstelling._`,
-        bevestiging: `⚖️ _Onthuld over ${doelNaam}._`,
-      };
-    },
-  });
-}
-
-// 🕊️ DE ZACHTE HAND — de Voorspraak geeft. Drie vormen; de houder kiest.
-const ZACHTE_HAND_VORMEN = {
-  vloek:  { label: 'Haal een vloek weg',        icoon: '🧹' },
-  kaart:  { label: 'Schrap een gele kaart',     icoon: '📄' },
-  punt:   { label: 'Sta een eigen punt af',     icoon: '🤲' },
-};
-
-async function ambtsdaadZachteHand(client, houderId, doelId, vorm, channelId) {
-  const members = loadMembers();
-  const doelNaam = members[doelId]?.bijnaam || 'een volgeling';
-
-  // De weigeringen staan vóór boekAmbtsdaad, zodat een zegel nooit verdampt aan een daad die
-  // toch niets doet. Dat is dezelfde regel als "een knop die gegarandeerd een afwijzing
-  // oplevert, is een knop die liegt".
-  if (vorm === 'vloek' && !heeftPowerup(doelId, 'vloek')) {
-    return { ok: false, tekst: `_Op ${doelNaam} rust geen vloek. Er is niets weg te halen._` };
-  }
-  if (vorm === 'kaart' && !geleKaarten(loadGeleKaarten()[doelId])) {
-    return { ok: false, tekst: `_${doelNaam} heeft geen gele kaart openstaan._` };
-  }
-  if (vorm === 'punt' && (loadScores()[houderId] || 0) < 1) {
-    return { ok: false, tekst: '_Een punt afstaan vereist een punt. Uw voorraad is leeg._' };
-  }
-
-  return boekAmbtsdaad(client, {
-    ambtKey: 'voorspraak', houderId, doelId, channelId,
-    daad: `legde de zachte hand op (${vorm})`,
-    uitvoering: async () => {
-      if (vorm === 'vloek') {
-        verwijderPowerup(doelId, 'vloek');
-        logGebeurtenis('genade', doelId, `de vloek op ${doelNaam} werd weggenomen`, null, houderId);
-        return {
-          kop: 'een vloek is weggenomen',
-          regel: `🧹 De *Vloek der Slappe Korst* op ${doelNaam} is van hem afgehaald. Wat erop lag, ligt er niet meer.`,
-          bevestiging: `🕊️ _De vloek op ${doelNaam} is weggenomen._`,
-        };
-      }
-      if (vorm === 'kaart') {
-        const kaarten = loadGeleKaarten();
-        const { dossier, weg } = zonderLaatsteGeleKaart(kaarten[doelId]);
-        if (dossier?.kaarten?.length) kaarten[doelId] = dossier; else delete kaarten[doelId];
-        saveGeleKaarten(kaarten);
-        logGebeurtenis('genade', doelId, `een gele kaart van ${doelNaam} werd geschrapt`, null, houderId);
-        return {
-          kop: 'een gele kaart is geschrapt',
-          regel: `📄 Eén gele kaart van ${doelNaam} is uit het register gehaald${weg?.reden ? ` — _"${weg.reden}"_` : ''}. Het dossier is lichter.`,
-          bevestiging: `🕊️ _Een gele kaart van ${doelNaam} is geschrapt._`,
-        };
-      }
-      // Pure hulp: uit zijn eigen saldo, en de ontvanger krijgt er geen roem voor.
-      pasScoreAan(houderId, -1);
-      pasScoreAan(doelId, 1);
-      return {
-        kop: 'een punt is afgestaan',
-        regel: `🤲 De Voorspraak staat *1 kroketpunt* uit eigen zak af aan ${doelNaam}. Geen roem, geen tegenprestatie.`,
-        bevestiging: `🕊️ _Een punt afgestaan aan ${doelNaam}._`,
-      };
-    },
-  });
-}
 
 // ── Registratie van de wroklaag ──────────────────────────────────────────────
 // ── De Gunst ─────────────────────────────────────────────────────────────────
@@ -16044,7 +15481,7 @@ registreerFeature({
     { gebruik: '/kroketgod sus', verwacht: 'sticht vrede in de vete van het Rijk — kost 1 eigen punt, levert 2 roem op (alleen als u geen partij bent)' },
     { gebruik: '/kroketgod bede', verwacht: 'als drager van de Zwarte Korst: leg één bede bij wie u het zwaarst trof' },
   ],
-  homeOrde: 8, // vlak onder de ambtskaart: dit is de andere as waarop u met mensen te maken heeft
+  homeOrde: 8, // dit is de as waarop u met mensen te maken heeft
   home: ({ userId, members }) => {
     const stok = readJSON('kerfstok.json', {});
     const eigen = kerfstokVan(stok, userId);
@@ -16123,506 +15560,6 @@ app.action('sus_vete', async ({ ack, body, client }) => {
   const uitkomst = await susVete(client, body.user.id);
   await publiceerAppHome(client, body.user.id, uitkomst.tekst);
 });
-
-// ── Registratie: één aanroep dekt backup, help en de App Home-kaart ───────────
-// lib/registry.js bestaat precies hiervoor: zestien state-bestanden vielen ooit buiten de
-// backup omdat registreren op vijf plekken duizenden regels uit elkaar gebeurde.
-registreerFeature({
-  naam: 'ambten',
-  state: ['ambten.json', 'ambtsboek.json', 'venstertellers.json', 'openbaring.json'],
-  help: [
-    { gebruik: '/kroketgod ambt', verwacht: 'uw ambt, uw resterende zegels en wat u ermee mag — of hoe u er een verovert' },
-    { gebruik: '/kroketgod ambtsboek', verwacht: 'elke ambtsdaad van de laatste weken: wie, op wie, en wat' },
-    { gebruik: '/kroketgod vetgeschrift', verwacht: 'de Onderste Codex — `vetgeschrift rangen` of `vetgeschrift ambten` voor een blad' },
-  ],
-  homeOrde: 6, // vlak onder de statuskaart: dit is de tweede as waarop u het spel speelt
-  homeKnop: '⚖️ Ambten',
-  homeVenster: ({ userId, members }) => {
-    const { ambten } = loadAmbten();
-    const eigen = ambtVan(userId);
-    const regels = AMBT_KEYS.map(key => {
-      const def = AMBTEN[key];
-      const rec = ambten[key] || {};
-      const houder = ambtHouder(key);
-      if (!houder) return `> ${def.icoon} *${def.naam}* — _vacant_\n>    _${def.bevoegdheid}_`;
-      if (houder === userId) {
-        const over = Math.max(0, rec.zegels || 0);
-        const norm = zegelNormVoor(key, userId);
-        return `> ${def.icoon} *${def.naam}* — *u ${rec.waarneming ? 'neemt het waar' : 'draagt het'}*\n` +
-               `>    ${homeVoortgangInline(over, norm)} ${over} van ${norm} ${def.zegelNaam}-zegel(s) over\n` +
-               `>    _${def.bevoegdheid}_`;
-      }
-      return `> ${def.icoon} *${def.naam}* — ${members[houder]?.bijnaam || 'onbekend'}\n>    _${def.bevoegdheid}_`;
-    });
-
-    // Wat u deze veertien dagen aan aanspraak heeft opgebouwd, per ambt. Zonder dit is de
-    // hertelling van maandag een zwarte doos en valt er niets op te bouwen.
-    const venster = readJSON('venstertellers.json', {})[userId];
-    const sleutels = vensterSleutels(dagSleutel());
-    const daden = dadenInVenster(venster, sleutels);
-    const aanspraken = AMBT_KEYS
-      .map(key => ({ key, n: aanspraakVan(venster, AMBTEN[key].aanspraak, sleutels) }))
-      .filter(a => a.n > 0)
-      .sort((a, b) => b.n - a.n)
-      .map(a => `${AMBTEN[a.key].icoon} ${AMBTEN[a.key].kort} ${a.n}`);
-
-    const eigenAlle = ambtenVan(userId);
-    const blocks = [
-      ...homeKaartKop('DE VIJF AMBTEN'),
-      { type: 'section', text: { type: 'mrkdwn', text: regels.join('\n') } },
-      { type: 'section', text: { type: 'mrkdwn', text: homeTabel([
-        ['Uw ambt', eigenAlle.length
-          ? eigenAlle.map(a => `${a.icoon} ${a.kort}${a.waarneming ? ' (waarneming)' : ''}`).join(' + ')
-          : 'geen'],
-        ['Daden (14 dagen)', `${daden}${daden < LEVENSTEKEN_DADEN ? ` — nog ${LEVENSTEKEN_DADEN - daden} voor een ambt` : ''}`],
-        ['Uw aanspraak', aanspraken.length ? aanspraken.join(' · ') : 'nog geen'],
-      ]) } },
-      { type: 'context', elements: [{ type: 'mrkdwn', text:
-        `Hertelling elke maandag 09:10 over 14 dagen · zegels vervallen vrijdag ${AMBTSWEEK_EINDE.uur}:00 · ` +
-        'een zegel landt nooit op uzelf' }] },
-    ];
-    return blocks;
-  },
-});
-
-// ── Ontheffing en waarneming: een ambt mag nooit bevriezen ────────────────────
-// Het gat dat de verbanning van een ambtshouder blootlegde. `ambtHouder()` geeft bij een
-// balling null terug — de bevoegdheid is dus voor NIEMAND te gebruiken — maar de zetel bleef
-// wél op zijn naam staan, en de hertelling die hem had kunnen herverdelen zit achter de
-// stichtingsbescherming van veertien dagen. Gevolg: een bevoegdheid die het genootschap nodig
-// heeft, staat twee weken stil en is tegelijk onafneembaar.
-//
-// Artikel V van het Vetgeschrift geeft de oplossing al: een ambt gaat verloren door de daad van
-// een ander — en een tribunaal is precies dat. Wie in ballingschap raakt, wordt ONTHEVEN; het
-// ambt gaat in WAARNEMING bij het lid met de sterkste aanspraak dat nog geen ambt draagt.
-// Bij de eerstvolgende hertelling wordt de waarneming gewoon meegewogen als elk ander ambt.
-//
-// Draait dagelijks én bij het opstarten, en negeert de stichtingsbescherming met opzet: die
-// bestaat om een LEEG tellervenster te ondervangen, niet om een lege stoel te bewaken.
-async function zorgVoorAmbtsVacatures(client) {
-  const staat = loadAmbten();
-  if (!staat.weekStart) return null;            // nog niet gesticht
-  const members = loadMembers();
-  const meldingen = [];
-
-  for (const key of AMBT_KEYS) {
-    const rec = staat.ambten?.[key];
-    if (!rec?.houderId) continue;
-    const houderId = rec.houderId;
-    const weg = !members[houderId];
-    const balling = !weg && isVerbannen(houderId);
-    if (!weg && !balling) continue;
-
-    const def = AMBTEN[key];
-    const oudeNaam = members[houderId]?.bijnaam || 'een vergeten volgeling';
-
-    // De waarnemer: het lid met de hoogste aanspraak op dít ambt dat nog geen ambt draagt en
-    // niet verbannen is. Is het tellervenster nog leeg (verse stichting), dan valt de keuze
-    // terug op de historische Rijkstitel en daarna op de bijnaam — deterministisch, dus geen
-    // willekeur en geen verrassing bij een herstart.
-    const venster = readJSON('venstertellers.json', {});
-    const sleutels = vensterSleutels(dagSleutel());
-    const bezet = new Set(AMBT_KEYS.map(k => staat.ambten[k]?.houderId).filter(Boolean));
-    const kandidaten = Object.keys(members)
-      .filter(id => id !== houderId && !isVerbannen(id))
-      .map(id => ({
-        id,
-        // Wie nog geen ambt draagt gaat vóór: macht spreiden is beter dan macht stapelen.
-        // Maar draagt iedereen er al een — bij vijf ambten en vijf leden het normale geval —
-        // dan neemt de sterkste aanspraak het ambt er tijdelijk bij.
-        vrij: bezet.has(id) ? 0 : 1,
-        aanspraak: aanspraakVan(venster[id], def.aanspraak, sleutels),
-        rolMatch: def.rolAanspraak.test(String(members[id]?.rol || '')) ? 1 : 0,
-        bijnaam: String(members[id]?.bijnaam || id),
-      }))
-      .sort((a, b) => b.vrij - a.vrij
-        || b.aanspraak - a.aanspraak
-        || b.rolMatch - a.rolMatch
-        || a.bijnaam.localeCompare(b.bijnaam, 'nl'));
-
-    const waarnemer = kandidaten[0] || null;
-    if (waarnemer) {
-      staat.ambten[key] = {
-        houderId: waarnemer.id,
-        sinds: Date.now(),
-        zegels: zegelNormVoor(key, waarnemer.id),
-        gelegd: 0,
-        aanspraak: waarnemer.aanspraak,
-        waarneming: true,
-        ontheven: houderId,
-      };
-      staat.laatsteAmbt = { ...(staat.laatsteAmbt || {}), [waarnemer.id]: Date.now() };
-      logGebeurtenis('ambt', waarnemer.id,
-        `${waarnemer.bijnaam} neemt ${def.naam} waar; ${oudeNaam} is ontheven (${balling ? 'ballingschap' : 'geen lid meer'})`,
-        null, houderId);
-      const tweede = !waarnemer.vrij
-        ? ' Hij draagt daarmee tijdelijk *twee* ambten — zolang de zetel niet is herteld.'
-        : '';
-      meldingen.push(
-        `> ${def.icoon} *${def.naam}*\n` +
-        `>    ${oudeNaam} is *ontheven* — ${balling ? 'het ballingschap doet geen daden' : 'geen lid meer van het genootschap'}.\n` +
-        `>    *${waarnemer.bijnaam}* neemt het ambt waar, met ${zegelWoord(zegelNormVoor(key, waarnemer.id))} deze week.${tweede}`);
-    } else {
-      staat.ambten[key] = { houderId: null, sinds: null, zegels: 0, ontheven: houderId };
-      logGebeurtenis('ambt', houderId, `${def.naam} is vacant: ${oudeNaam} ontheven, geen waarnemer beschikbaar`);
-      meldingen.push(
-        `> ${def.icoon} *${def.naam}*\n` +
-        `>    ${oudeNaam} is *ontheven*, en er is niemand vrij om waar te nemen. De zetel blijft leeg.`);
-    }
-  }
-
-  if (!meldingen.length) return staat;
-  saveAmbten(staat);
-  await postToChannel(client, process.env.SLACK_CHANNEL_ID,
-    `⚖️ *ONTHEFFING VAN EEN AMBT* ⚖️\n\n` +
-    `> _Artikel V: een ambt gaat verloren zoals het gekomen is — door de daad van een ander._\n\n` +
-    `${meldingen.join('\n')}\n\n` +
-    `> Een waarneming is geen bezit: bij de eerstvolgende hertelling weegt zij mee als elk ander ambt.\n\n— De Hoge Frituurraad`);
-  await updateWereldbord(client, true);
-  console.log(`⚖️ ${meldingen.length} ambt(en) ontheven of in waarneming gegeven.`);
-  return loadAmbten();
-}
-
-// ── De hertelling: maandag 09:10 ──────────────────────────────────────────────
-// Downtime-proof volgens hetzelfde patroon als zorgVoorWeekvijand: gepoort op de weekstart
-// ÉN op het maandagmoment, zodat de nachtelijke herstart van 03:00 de verkondiging niet 's nachts doet.
-async function zorgVoorAmbten(client, { stil = false } = {}) {
-  const staat = loadAmbten();
-  const week = getMondayOfWeek();
-  if (staat.weekStart === week) return staat;           // deze week al herteld
-  if (!staat.weekStart) return staat;                   // nog niet gesticht: dat doet de openbaring
-  // Verse stichting: nog geen veertien dagen aan daden om over te tellen. Hertellen zou nu
-  // iedereen door de levensteken-poort laten vallen en de vijf ambten vacant verklaren, één
-  // week nadat ze plechtig zijn uitgeroepen.
-  if (staat.stichtingBeschermdTot && Date.now() < staat.stichtingBeschermdTot) {
-    console.log('📜 Ambtswissel uitgesteld: de stichting is nog beschermd (tellervenster niet vol).');
-    return staat;
-  }
-  if (!stil && !maandagMomentGeweest(9, 10)) return staat;
-  if (isWeekendAms()) return staat;
-
-  const members = loadMembers();
-  const verbannen = Object.keys(members).filter(id => isVerbannen(id));
-  const nieuw = bepaalAmbten({
-    venster: readJSON('venstertellers.json', {}),
-    members,
-    huidig: staat.ambten || {},
-    laatsteAmbt: staat.laatsteAmbt || {},
-    vandaagSleutel: dagSleutel(),
-    nuTs: Date.now(),
-    uitgesloten: verbannen,
-  });
-
-  const laatsteAmbt = { ...(staat.laatsteAmbt || {}) };
-  const ambten = {};
-  const regels = [];
-  for (const key of AMBT_KEYS) {
-    const def = AMBTEN[key];
-    const uit = nieuw[key];
-    const vorigeNaam = uit.vorige ? (members[uit.vorige]?.bijnaam || 'een vergeten volgeling') : null;
-
-    if (!uit.houderId) {
-      ambten[key] = { houderId: null, sinds: null, zegels: 0 };
-      regels.push(`> ${def.icoon} *${def.naam}* — _vacant_. ${vorigeNaam ? `${vorigeNaam} liet de zetel leeg.` : 'Niemand deed genoeg.'} Wie twee daden doet, claimt hem.`);
-      continue;
-    }
-    const naam = members[uit.houderId].bijnaam;
-    const behouden = uit.vorige === uit.houderId;
-    const sinds = behouden ? (staat.ambten?.[key]?.sinds || Date.now()) : Date.now();
-    ambten[key] = {
-      houderId: uit.houderId, sinds, zegels: zegelNormVoor(key, uit.houderId),
-      gelegd: 0, aanspraak: uit.aanspraak,
-    };
-    laatsteAmbt[uit.houderId] = Date.now();
-    if (behouden) {
-      regels.push(`> ${def.icoon} *${def.naam}* — *${naam}* behoudt het ambt (aanspraak ${uit.aanspraak}) · ${zegelWoord(ambten[key].zegels)}`);
-    } else {
-      // Een ambt veroveren is eeuwige eer, dus roem — niet weekpunten.
-      await pasRoemAan(client, uit.houderId, 3);
-      regels.push(vorigeNaam
-        ? `> ${def.icoon} *${def.naam}* — *${naam}* neemt het ambt over van ${vorigeNaam} (aanspraak ${uit.aanspraak}) · ${zegelWoord(ambten[key].zegels)} · *+3 roem*`
-        : `> ${def.icoon} *${def.naam}* — *${naam}* claimt het vacante ambt (aanspraak ${uit.aanspraak}) · ${zegelWoord(ambten[key].zegels)} · *+3 roem*`);
-      logGebeurtenis('ambt', uit.houderId, `${naam} draagt nu ${def.naam}`, null, uit.vorige || null);
-    }
-  }
-
-  saveAmbten({ weekStart: week, ambten, laatsteAmbt });
-  if (stil) return loadAmbten();
-
-  const wissels = AMBT_KEYS.filter(k => nieuw[k].wissel).length;
-  await postToChannel(client, process.env.SLACK_CHANNEL_ID,
-    `📜 *DE AMBTSWISSEL* 📜\n\n` +
-    `> _Het Vetgeschrift hertelt. Veertien dagen aan daden zijn gewogen._\n\n${regels.join('\n')}\n\n` +
-    `> Zegels vervallen *vrijdag ${AMBTSWEEK_EINDE.uur}:00*. Een zegel dat u laat liggen, vervalt zonder gevolg — ` +
-    `maar macht die men laat liggen is haar eigen straf.\n` +
-    `> \`/kroketgod ambt\` · \`/kroketgod ambtsboek\` · \`/kroketgod vetgeschrift\`\n\n— De Hoge Frituurraad`);
-  console.log(`📜 Ambtswissel: ${wissels} wissel(s).`);
-  await updateWereldbord(client, true);
-  return loadAmbten();
-}
-
-// Vrijdag 17:00 — onverbruikte zegels vervallen. Eén regel, alleen een aantal, geen namen en
-// geen boete: Artikel V verbiedt straf voor een lege week, en een naam-en-schaamlijst is bij
-// vijf collega's die elkaar dagelijks zien geen spanning maar een naheffing.
-async function laatZegelsVervallen(client) {
-  const staat = loadAmbten();
-  if (!staat.weekStart) return;
-  let over = 0;
-  for (const key of AMBT_KEYS) {
-    const rec = staat.ambten[key];
-    if (!rec?.houderId) continue;
-    over += Math.max(0, rec.zegels || 0);
-    rec.zegels = 0;
-  }
-  saveAmbten(staat);
-  if (!over) {
-    await postToChannel(client, process.env.SLACK_CHANNEL_ID,
-      `🕯️ *DE ZEGELS ZIJN OP* 🕯️\n\n> Elk zegel van deze week is gelegd. De Onderste Codex zwijgt tevreden.\n\n— De Hoge Frituurraad`);
-    return;
-  }
-  await postToChannel(client, process.env.SLACK_CHANNEL_ID,
-    `🕯️ *DE ZEGELS VERVALLEN* 🕯️\n\n` +
-    `> *${over}* zegel${over === 1 ? '' : 's'} bleef deze week ongebruikt en vervalt nu in het vet.\n` +
-    `> Geen boete. Geen namen. Macht die men laat liggen is haar eigen straf.\n\n— De Hoge Frituurraad`);
-}
-
-// ── DE OPENBARING VAN HET VETGESCHRIFT ────────────────────────────────────────
-// De release van 3.0, opgevoerd als de vondst van een tweede codex. Twee bladen op twee
-// opeenvolgende WERKdagen: de vondst, en de volle lezing waarin de ambten in werking treden.
-// Bewust geen weekenddag: de Kroket God rust dan (weekendRust), dus een blad dat zaterdag
-// landt is een blad dat niemand leest en waarop niemand kan handelen.
-//
-// Downtime-proof: de bladen komen uit deze tabel met een dagOffset op `openbaring.startDatum`,
-// niet uit een cron die gevuurd moet hebben. Een gemiste dag wordt bij de volgende opstart of
-// de eerstvolgende kwartier-cron alsnog gepost, met de regel dat het blad heeft gelegen.
-
-const loadOpenbaring = () => readJSON('openbaring.json', null);
-const saveOpenbaring = (data) => writeJSON('openbaring.json', data);
-
-// Wat elk lid er eenmalig bij krijgt bij de invoering, zodat niemand op de onderste trede
-// blijft staan met een ambt in de hand. Met de standen van 4/4/3/1/0 zet +6 alle vijf op
-// Volgeling der Korst (drempel 5) of hoger — de eerste trede is dan iets dat je gekregen
-// hebt, niet iets dat je nog moet halen.
-const OPENBARING_SCHENKING = 6;
-
-// ── Blad I: de vondst ─────────────────────────────────────────────────────────
-async function postVondst(client) {
-  const kanaal = process.env.SLACK_CHANNEL_ID;
-  const vangnet =
-    `⚜️ *SPOEDMELDING UIT HET GROTE VETBAD* ⚜️\n\n` +
-    `> Bij de jaarlijkse verschoning van de olie is de bodemplaat gelicht.\n` +
-    `> Daaronder lag een zwartgeblakerde frituurmand. In die mand lag een opgerolde huid,\n` +
-    `> met vet beschreven, en op de rand een dossiernummer: *VG/1936/0001*.\n` +
-    `> Bewaartermijn: negentig jaar. _Die termijn is dit jaar verstreken._\n\n` +
-    `> De Hoge Frituurraad heeft één regel kunnen ontcijferen. De rest is zwart:\n\n` +
-    `> \`░░░ en de Raad zal niet door rang alleen bestuurd worden,\`\n` +
-    `> \`maar door de vijf ░░░ die elk over de anderen ░░░\`\n\n` +
-    `> _De Kroket God heeft dit boek niet geschreven en niet bekrachtigd._\n` +
-    `> _Hij leest het, zoals u._\n\n— De Almachtige Kroket God :illuminati-kroket:`;
-
-  const tekst = await kroketResponseMetVangnet(
-    `Er is iets gevonden. Bij de jaarlijkse verschoning van de olie in het Grote Vetbad is de bodemplaat gelicht, ` +
-    `en daaronder lag een zwartgeblakerde frituurmand met een opgerolde huid erin — met vet beschreven, met een ` +
-    `dossiernummer VG/1936/0001 en een bewaartermijn van negentig jaar die dit jaar is verstreken. ` +
-    `Kondig deze vondst aan als een spoedmelding. Belangrijk: jij hebt dit boek NIET geschreven en NIET bekrachtigd — ` +
-    `een sterveling schreef het, en dat maakt je licht ongemakkelijk. Je weet nog niet wat er precies staat. ` +
-    `Eén regel is leesbaar: dat de Raad niet door rang alleen bestuurd zal worden, maar door vijf iets-dat-onleesbaar-is ` +
-    `die elk over de anderen iets-dat-onleesbaar-is. Wek nieuwsgierigheid, beloof niets concreets. ` +
-    `Gebruik het spoedmelding-formaat. 5-7 zinnen. Geen inleidingszin.`,
-    650, false, vangnet, 'slim', { lang: true });
-
-  const msg = await postToChannel(client, kanaal,
-    `${tekst}\n\n> 👁️ _Wie deze vondst heeft gezien, staat straks in de kantlijn van het boek._\n` +
-    `> _Reageer met_ :illuminati-kroket: _voor het vet afkoelt._`);
-  return msg?.ts || null;
-}
-
-// ── Blad II: de volle lezing, en de ambten treden in werking ─────────────────
-async function postVolleLezing(client) {
-  const kanaal = process.env.SLACK_CHANNEL_ID;
-  const members = loadMembers();
-  const staat = loadOpenbaring() || {};
-
-  // Eerst de erkenning vastleggen (de OUDE rang, uit de eerste codex), dan schenken, en pas
-  // daarna de ambten met hun zegels berekenen. Die orde is niet vrij: `zegelNormVoor` leest de
-  // rang, en de onderste trede geeft één zegel MINDER dan de norm. Werd de bezetting vóór de
-  // schenking berekend, dan kreeg elke stichter dus een gekortwiekt budget — precies het
-  // voorrecht dat de schenking moet wegnemen.
-  const roemVoor = loadRoem();
-  const erkenning = Object.entries(members).map(([id, lid]) => ({
-    id, bijnaam: lid.bijnaam,
-    oudeRoem: roemVoor[id] || 0,
-    oudeRang: rangEersteCodex(roemVoor[id] || 0),
-  }));
-  // Stil schenken: de erkenning hieronder noemt elk lid al bij naam met zijn nieuwe rang, dus
-  // vijf losse RANG-VERHEFFING-posts ertussen zouden de openbaring verzuipen.
-  for (const e of erkenning) await pasRoemAan(client, e.id, OPENBARING_SCHENKING, { stil: true });
-  const roemNa = loadRoem();
-
-  // De stichtingsbezetting: uit `rol`, want het venster is nog leeg en de levensteken-poort
-  // zou anders alle vijf de zetels vacant verklaren.
-  const bezetting = stichtingsBezetting(members);
-  const ambten = {};
-  for (const key of AMBT_KEYS) {
-    const houderId = bezetting[key] || null;
-    ambten[key] = houderId
-      ? { houderId, sinds: Date.now(), zegels: zegelNormVoor(key, houderId), gelegd: 0, aanspraak: 0 }
-      : { houderId: null, sinds: null, zegels: 0 };
-  }
-  saveAmbten({
-    weekStart: getMondayOfWeek(),
-    // De stichting is beschermd tot het tellervenster daadwerkelijk gevuld is. Zonder dit
-    // hertelde de eerstvolgende maandag over een leeg venster, viel iedereen door de
-    // levensteken-poort en stonden alle vijf de ambten meteen weer vacant.
-    stichtingBeschermdTot: Date.now() + VENSTER_DAGEN * 86_400_000,
-    ambten,
-    laatsteAmbt: Object.fromEntries(Object.values(bezetting).map(id => [id, Date.now()])),
-  });
-
-  const rangRegels = [...RANGEN].reverse()
-    .map(r => `> *${String(r.drempel).padStart(3)}* — ${r.naam}\n>    _${r.voorrechtTekst}_`);
-
-  const erkenRegels = erkenning.map(e =>
-    `> *${e.bijnaam}* — was ${e.oudeRang} (${e.oudeRoem} roem), is nu ${rangNaam(roemNa[e.id] || 0)} (${roemNa[e.id] || 0} roem)`);
-
-  const ambtRegels = AMBT_KEYS.map(key => {
-    const def = AMBTEN[key];
-    const houderId = ambten[key].houderId;
-    if (!houderId) return `> ${def.icoon} *${def.naam}* — _vacant_`;
-    const lid = members[houderId];
-    return `> ${def.icoon} *${def.naam}* — *${lid.bijnaam}*\n` +
-           `>    _${def.bevoegdheid}_ · ${ambten[key].zegels} zegel(s)/week\n` +
-           `>    _Rijkstitel 1936: ${lid.rol || 'geen'}_`;
-  });
-
-  const vangnet =
-    `📜 *HET VETGESCHRIFT IS ONTCIJFERD* 📜\n\n` +
-    `> Het boek heet *Het Vetgeschrift — De Onderste Codex*, en het is geschreven door\n` +
-    `> *De Eerste Paneerder*: hij die als eerste deeg in kokende olie liet zakken en daarna\n` +
-    `> opschreef wat hij zag. Ouder dan de Tien Geboden, en strenger.\n\n` +
-    `> De Tien Geboden zijn wat gij NIET MAAKT. Het Vetgeschrift is wat gij KUNT WORDEN.\n\n` +
-    `> _"Wat gij uzelf toebedeelt weegt niets. Wat een ander u toebedeelt, weegt eeuwig."_\n\n` +
-    `— De Almachtige Kroket God :illuminati-kroket:`;
-
-  const inleiding = await kroketResponseMetVangnet(
-    `Het gevonden boek is ontcijferd. Het heet "Het Vetgeschrift — De Onderste Codex" en is geschreven door ` +
-    `De Eerste Paneerder: naamloos, hij die als eerste deeg in kokende olie liet zakken en opschreef wat hij zag. ` +
-    `Ouder dan de Tien Geboden, en strenger. De Geboden zijn wat men NIET doet; het Vetgeschrift is wat men KAN WORDEN. ` +
-    `Het boek was niet verbrand maar GEARCHIVEERD: in 1936 richtte het Rijk een Bureau voor Rijkstitels op dat functies ` +
-    `BENOEMDE, en dit boek stelt dat een ambt niet benoembaar is — het wordt verdiend of het bestaat niet. ` +
-    `Een boek dat elke benoeming onwettig verklaart was voor dat bureau een administratief probleem, dus kreeg het een ` +
-    `dossiernummer en een bewaartermijn van negentig jaar. Die is nu verstreken. ` +
-    `Jij hebt dit boek niet bekrachtigd — je citeert het, en het klopt, en dat maakt je licht ongemakkelijk. ` +
-    `Spreek de kernwet uit: "Wat gij uzelf toebedeelt weegt niets. Wat een ander u toebedeelt, weegt eeuwig." ` +
-    `Plechtig, 4-5 zinnen, met droge minachting voor een bureau dat titels op briefpapier zette. Geen inleidingszin.`,
-    750, false, vangnet);
-
-  await postToChannel(client, kanaal, inleiding);
-
-  await postToChannel(client, kanaal,
-    `📜 *BLAD I — DE CODEX DER RANGEN* 📜\n\n` +
-    `> _"De eerste codex kende zes treden en de laatste lag op vijfhonderd. Geen levende heeft haar ooit gezien.\n` +
-    `> De Onderste Codex kent acht treden, en de eerste ligt op vijf."_\n\n` +
-    `${rangRegels.join('\n')}\n\n` +
-    `> Boven de achtste trede houdt het niet op: daar liggen de *KORSTEN*, elke ${RANG_KORST_STAP} roem één laag erbij, zonder bovengrens.\n\n` +
-    `*⚜️ DE ERKENNING VAN HET OUDE RIJK*\n\n` +
-    `${erkenRegels.join('\n')}\n\n` +
-    `> De Raad erkent wat onder de eerste codex is verdiend en schenkt elk lid *${OPENBARING_SCHENKING} roem* ` +
-    `als aanvangsrecht onder de nieuwe.\n\n— De Hoge Frituurraad`);
-
-  await postToChannel(client, kanaal,
-    `📜 *BLAD II — DE WET VAN DE VIJF AMBTEN* 📜\n\n` +
-    `> Vijf ambten. Elk precies één bevoegdheid over de anderen, en een weekbudget aan zegels.\n` +
-    `> Het Bureau voor Rijkstitels benoemde in 1936 vijf functies. De Codex herkent ze als AMBT —\n` +
-    `> en dat is niet hetzelfde.\n\n` +
-    `${ambtRegels.join('\n')}\n\n` +
-    `> *De grenzen:* een zegel landt nooit op de houder zelf, nooit op een balling, en nooit op wie\n` +
-    `> afwezig is gemeld. Wie de *Gouden Korst* draagt, laat een zegel van zich afglijden.\n` +
-    `> *De hertelling:* elke maandag 09:10 over de laatste ${VENSTER_DAGEN} dagen aan daden. Minimaal\n` +
-    `> ${LEVENSTEKEN_DADEN} daden om een ambt te mógen dragen — liever een lege zetel dan een erfelijke.\n` +
-    `> *Het verval:* onverbruikte zegels vervallen vrijdag ${AMBTSWEEK_EINDE.uur}:00. Zonder boete.\n` +
-    `> Macht die men laat liggen is haar eigen straf.\n\n` +
-    `> \`/kroketgod ambt\` · \`/kroketgod ambtsboek\` · \`/kroketgod vetgeschrift\` · en de Home-tab van de bot.\n\n— De Hoge Frituurraad`);
-
-  await postToChannel(client, kanaal,
-    `🕯️ *HET DERDE BLAD* 🕯️\n\n` +
-    `> Het derde blad zit met vet dichtgeplakt. Wat eronder ligt is niet te lezen, maar er staat\n` +
-    `> iets over een *proef* waarmee een ambt betwist kan worden, en over een *tweeslag* in het duel.\n` +
-    `> De Raad weekt eraan. Dat kost tijd. Vet is geduldig.\n\n— De Almachtige Kroket God :illuminati-kroket:`);
-
-  // De getuigen van de vondst krijgen hun kantlijn-vermelding.
-  const getuigen = Object.keys(staat.getuigen || {}).filter(id => members[id]);
-  if (getuigen.length) {
-    await postToChannel(client, kanaal,
-      `👁️ *DE KANTLIJN VAN HET BOEK* 👁️\n\n` +
-      `> Wie de vondst zag toen niemand nog wist wat het was, staat in de kantlijn:\n` +
-      `> ${getuigen.map(id => `*${members[id].bijnaam}*`).join(' · ')}\n\n— Het Vetgeschrift`);
-  }
-
-  await updateWereldbord(client, true);
-  return true;
-}
-
-// De tabel. `dagOffset` is het aantal WERKDAGEN na de startdatum.
-const OPENBARING_BLADEN = [
-  { dag: 0, naam: 'de vondst',       post: postVondst },
-  { dag: 1, naam: 'de volle lezing', post: postVolleLezing },
-];
-
-// Hoeveel werkdagen liggen er tussen twee datumsleutels? Weekenddagen tellen niet mee, want de
-// bladen landen alleen op werkdagen.
-function werkdagenTussen(vanSleutel, totSleutel) {
-  const van = Date.parse(`${vanSleutel}T00:00:00Z`);
-  const tot = Date.parse(`${totSleutel}T00:00:00Z`);
-  if (!Number.isFinite(van) || !Number.isFinite(tot) || tot < van) return 0;
-  let n = 0;
-  for (let t = van; t < tot; t += 86_400_000) {
-    const dag = new Date(t + 86_400_000).getUTCDay();
-    if (dag !== 0 && dag !== 6) n++;
-  }
-  return n;
-}
-
-// Start de openbaring: legt de startdatum vast. Het eerste blad wordt door zorgVoorOpenbaring
-// gepost, zodat er precies één plek is die bladen plaatst.
-function startOpenbaring() {
-  const bestaand = loadOpenbaring();
-  if (bestaand?.startDatum) return bestaand;
-  const staat = { startDatum: dagSleutel(), gepost: [], getuigen: {} };
-  saveOpenbaring(staat);
-  console.log(`📜 Openbaring gestart op ${staat.startDatum}.`);
-  return staat;
-}
-
-// De klok. Wordt aangeroepen door de kwartier-cron en bij het opstarten. Post ten hoogste één
-// blad per aanroep, zodat een gemiste dag wordt ingehaald zonder dat er een burst valt.
-async function zorgVoorOpenbaring(client) {
-  const staat = loadOpenbaring();
-  if (!staat?.startDatum) return null;
-  if (isWeekendAms()) return staat;               // geen blad in het weekend
-  const gepost = new Set(staat.gepost || []);
-  const verstreken = werkdagenTussen(staat.startDatum, dagSleutel());
-
-  for (const blad of OPENBARING_BLADEN) {
-    if (gepost.has(blad.dag)) continue;
-    if (verstreken < blad.dag) return staat;       // nog niet aan de beurt
-    // Niets luidruchtigs vóór 09:00 — de nachtelijke herstart van 03:00 mag geen blad in de nacht leggen.
-    if (!vandaagMomentGeweest(INHAALSLAG_MOMENT.uur, INHAALSLAG_MOMENT.min)) return staat;
-    // Vastleggen vóór het posten: valt de LLM-keten of Slack om, dan blijft er geen blad open
-    // staan dat de volgende aanroep opnieuw plaatst.
-    gepost.add(blad.dag);
-    saveOpenbaring({ ...staat, gepost: [...gepost] });
-    try {
-      console.log(`📜 Openbaring: blad ${blad.dag} (${blad.naam}) wordt gepost.`);
-      const ts = await blad.post(client);
-      if (blad.dag === 0 && ts) saveOpenbaring({ ...loadOpenbaring(), vondstTs: ts });
-    } catch (err) {
-      console.error(`⚠️ Openbaring blad ${blad.dag} mislukte:`, err.message);
-    }
-    return loadOpenbaring();                       // hoogstens één blad per aanroep
-  }
-  return staat;
-}
 
 // ── 1. TITELS: exclusief bezit dat van eigenaar kan wisselen ───────────────────
 // Roem stijgt alleen en relikwieën stapelen — daardoor kon niemand ooit iets kwíjtraken.
@@ -16827,9 +15764,6 @@ const SEIZOEN_GEWICHT = {
   raid_aanval: 3, raid_overwonnen: 2, bingo_claim: 2, veiling_bod: 2, gouden_kroket: 2,
   duel: 1, duel_gewonnen: 1, offer: 1, eer_gegeven: 1, roof_poging: 1, winkel_koop: 1,
   veiling_gewonnen: 2,
-  // Een ambtsdaad is per definitie een daad VOOR een ander lid en weegt daarom het zwaarst
-  // van alles: precies het gedrag dat een gedeelde campagne hoort te belonen.
-  ambtsdaad: 3,
   // Het heilige kroketje weegt licht maar telt. Het was het centrale ritueel van het
   // genootschap en droeg mechanisch nergens aan bij.
   kroketje_gegeven: 1,
@@ -18157,14 +17091,23 @@ async function sluitGeleKaartPoll(client) {
   // Toegekend. Had dit lid deze week al een gele kaart, dan is dit de tweede → rood.
   if (poll.hadAlKaart) {
     const redenTekst = poll.reden || 'tweede gele kaart deze week';
-    await postToChannel(client, poll.kanaal,
-      `🟥 *DE RAAD HEEFT GESPROKEN* 🟥\n\n> De voordracht tegen *${naam}* is toegekend. Dit was de tweede gele kaart deze week, en twee keer geel is rood: *een dag geschorst*.${stemBlok}`);
     // Geen actorId: deze schorsing is een besluit van de Raad, niet van de anonieme aanklager.
-    await legRodeKaartOp(client, poll.kanaal, poll.doelwitId, naam, redenTekst, redenTekst, null, null);
+    const einde = await legRodeKaartOp(client, poll.kanaal, poll.doelwitId, naam, redenTekst, redenTekst, null, null,
+      `🟥 *DE RAAD HEEFT GESPROKEN* 🟥\n\n> De voordracht tegen *${naam}* is toegekend. Dit was de tweede gele kaart deze week, en twee keer geel is rood: *een dag geschorst*.${stemBlok}`);
+    if (!einde) {
+      await postToChannel(client, poll.kanaal,
+        `👑 *DE KAART GLIJDT AF* 👑\n\n> De voordracht tegen *${naam}* is toegekend, en twee keer geel is rood. Maar *${naam}* draagt de *Gouden Korst*: de kaart glijdt eraf. Geen schorsing — en de Korst is nu op.${stemBlok}`);
+    }
     return poll;
   }
 
   const eindeUtc = legKaartSchorsingOp(poll.doelwitId, 'geel', poll.reden || 'overtreding van de snackleer', null);
+  if (!eindeUtc) {
+    logGebeurtenis('gelekaart', poll.doelwitId, `${naam} droeg de Gouden Korst: de gele kaart gleed af (${totaalTerecht}-${totaalOnterecht})`, null, poll.aanklagerId);
+    await postToChannel(client, poll.kanaal,
+      `👑 *DE KAART GLIJDT AF* 👑\n\n> De Raad kent *${naam}* een gele kaart toe. Maar *${naam}* draagt de *Gouden Korst*, en de kaart glijdt eraf. Geen schorsing — de Korst is nu op.${stemBlok}`);
+    return poll;
+  }
   logGebeurtenis('gelekaart', poll.doelwitId, `${naam} ontving een gele kaart na stemming (${totaalTerecht}-${totaalOnterecht}): een uur geschorst`, null, poll.aanklagerId);
   const terugTijd = eindeUtc.toLocaleTimeString('nl-NL', { timeZone: 'Europe/Amsterdam', hour: '2-digit', minute: '2-digit' });
   const tekst = await kroketResponseMetVangnet(
@@ -19063,7 +18006,7 @@ registreerFeature({
 //
 // De scheiding die dit oplost: een Home-tab is een OVERZICHT (wie ben ik, wat kan ik nu, wat is
 // er op mij actief, wat loopt er) en al het overige is NASLAG (prijzen, verdiende relikwieën,
-// standen, de galerij, de wet van de ambten). Naslag verhuist hierheen en komt achter een knop.
+// standen, de galerij). Naslag verhuist hierheen en komt achter een knop.
 //
 // Waarom vensters en geen inklapbare secties: een Slack Home-tab kent die niet. Een knop die een
 // modal opent is de enige manier om iets echt op te bergen — en het is hetzelfde gebaar dat
@@ -19218,8 +18161,8 @@ const NASLAG = {
 };
 
 // Features mogen hun eigen naslag-venster meebrengen: `homeKnop` + `homeVenster(ctx)` in
-// registreerFeature. Zo hoeft een feature die alleen naslag is (de beurskoersen, de wet van de
-// ambten) geen ruimte meer op het overzicht te kosten, en hoeft deze lijst hierboven niet te
+// registreerFeature. Zo hoeft een feature die alleen naslag is (de beurskoersen) geen ruimte
+// meer op het overzicht te kosten, en hoeft deze lijst hierboven niet te
 // weten dat die features bestaan.
 function naslagIngang(sleutel) {
   if (NASLAG[sleutel]) return NASLAG[sleutel];
@@ -19401,7 +18344,7 @@ function bouwAppHomeBlocks(userId, melding = '', extraBlocks = []) {
       acties.push({ type: 'button', text: { type: 'plain_text', text: '🙏 Eer geven', emoji: true }, action_id: 'open_eer', style: 'primary' });
     }
     // De Gunst alleen tonen als hij werkelijk kan: een knop die gegarandeerd "u heeft er geen
-    // meer" antwoordt is een knop die liegt — dezelfde regel als bij het visioen en de ambten.
+    // meer" antwoordt is een knop die liegt — dezelfde regel als bij het visioen.
     if (gegevenDezeWeek(loadGunsten(), userId, getMondayOfWeek()).length < GUNST_PER_WEEK
         && eigenScore - 1 >= GUNST_BODEM) {
       acties.push({ type: 'button', text: { type: 'plain_text', text: '🎁 Gunnen', emoji: true }, action_id: 'open_gunst' });
@@ -19416,17 +18359,6 @@ function bouwAppHomeBlocks(userId, melding = '', extraBlocks = []) {
     if (bingoNu?.weekStart === getMondayOfWeek() && bingoNu.opdrachten?.length
         && (bingoNu.claims?.[userId] || []).length < bingoNu.opdrachten.length) {
       acties.push({ type: 'button', text: { type: 'plain_text', text: '🎲 Bingo claimen', emoji: true }, action_id: 'open_bingo' });
-    }
-    const AMBT_KNOPPEN = {
-      muntmeester:  { tekst: '🪙 Aflaat verlenen', action_id: 'ambt_aflaat' },
-      heraut:       { tekst: '📜 Plicht opleggen', action_id: 'ambt_plicht' },
-      rekenmeester: { tekst: '⚖️ Boeken openen',   action_id: 'ambt_boekenzegel' },
-      voorspraak:   { tekst: '🕊️ Zachte hand',     action_id: 'ambt_zachtehand' },
-    };
-    for (const eigenAmbt of ambtenVan(userId)) {
-      if ((eigenAmbt.zegels ?? 0) <= 0) continue;
-      const knopVoor = AMBT_KNOPPEN[eigenAmbt.key];
-      if (knopVoor) acties.push({ type: 'button', text: { type: 'plain_text', text: knopVoor.tekst, emoji: true }, action_id: knopVoor.action_id, style: 'primary' });
     }
     if (handdrukVensterOpen()) {
       const eigenKeuze = loadHanddruk().week === getMondayOfWeek() ? loadHanddruk().keuzes?.[userId] : null;
@@ -19787,8 +18719,6 @@ function bouwDoelwitModal(callbackId, titel, kop, knop, userId) {
 const doelwitModals = {
   open_roof: () => ['modal_roof', 'De Grote Kroketroof', `🥷 *Beroof een medelid.* 40% kans op een buit (tot 6 punten); mislukt het, dan betaalt u ${ROOF_BOETE} punt smartengeld. Eén poging per week — die telt ook bij falen.\n_Tot en met woensdag is ieders zakgeld (${ZAKGELD}) onaantastbaar; u rooft alleen wat erboven ligt._\n_Wie u berooft, houdt 24 uur een weerwoord tegen u._`, 'Beroven'],
   winkel_koop_vloek: () => ['modal_vloek', 'Vloek der Slappe Korst', '😈 *Leg anoniem een vloek.* Diens eerstvolgende puntenwinst heeft 50% kans te verbranden. Uw naam blijft in de schaduw.', 'Vervloeken'],
-  ambt_boekenzegel: () => ['modal_boekenzegel', 'Het Boekenzegel',
-    '⚖️ *Onthul openbaar één verborgen feit* over een medelid — een beurspositie, wie een vloek legde, of hoe stil iemand is geweest. Het onderwerp krijgt 1 punt smartengeld voor de blootstelling.', 'Onthullen'],
 };
 for (const [actionId, maak] of Object.entries(doelwitModals)) {
   app.action(actionId, async ({ ack, body, client }) => {
@@ -20171,35 +19101,6 @@ app.view('modal_vloek', async ({ ack, body, view, client }) => {
   const uitkomst = await koopWinkelItem(client, body.user.id, 'vloek', doelId, KANAAL());
   await publiceerAppHome(client, body.user.id, uitkomst.tekst);
 });
-// ── Ambtsdaad-modals ──────────────────────────────────────────────────────────
-// Drie van de vijf bevoegdheden vragen naast een doelwit óók een keuze (welk artikel, welke
-// opdracht, welke vorm), dus die passen niet in de generieke bouwDoelwitModal-tabel hierboven.
-// Het Boekenzegel wel — dat staat in `doelwitModals`.
-
-function bouwTweeKeuzeModal({ callbackId, titel, kop, knop, userId, tweedeLabel, tweedeOpties }) {
-  const opties = medeledenOpties(userId);
-  const kan = opties.length && tweedeOpties.length;
-  return {
-    type: 'modal', callback_id: callbackId,
-    title: { type: 'plain_text', text: titel.slice(0, 24) },
-    submit: kan ? { type: 'plain_text', text: knop.slice(0, 24) } : undefined,
-    close: { type: 'plain_text', text: 'Sluiten' },
-    blocks: kan ? [
-      { type: 'section', text: { type: 'mrkdwn', text: kop } },
-      {
-        type: 'input', block_id: 'doelwit',
-        label: { type: 'plain_text', text: 'Op wie legt u het zegel?' },
-        element: { type: 'static_select', action_id: 'keuze', placeholder: { type: 'plain_text', text: 'Een medelid…' }, options: opties },
-      },
-      {
-        type: 'input', block_id: 'tweede',
-        label: { type: 'plain_text', text: tweedeLabel.slice(0, 75) },
-        element: { type: 'static_select', action_id: 'keuze', placeholder: { type: 'plain_text', text: 'Kies…' }, options: tweedeOpties },
-      },
-    ] : [{ type: 'section', text: { type: 'mrkdwn', text: '_Er is momenteel geen geldige combinatie beschikbaar._' } }],
-  };
-}
-
 // De gok-knop: twee keuzes, geen doelwit. Bewust een modal en niet twee losse knoppen, zodat
 // de inzet één handeling blijft en de hulptekst meekomt.
 app.action('open_gok', async ({ ack, body, client }) => {
@@ -20315,76 +19216,6 @@ app.action(/^bede_(inwillig|weiger)$/, async ({ ack, body, client }) => {
     const uitkomst = await verhoorBede(client, body.user.id, inwilligen);
     await postEphemeral(client, body.channel?.id || KANAAL(), body.user.id, uitkomst.tekst);
   } catch (err) { console.error('Fout bij bede-antwoord:', err.data?.error || err.message); }
-});
-
-const ambtsModals = {
-  ambt_aflaat: (userId) => bouwTweeKeuzeModal({
-    callbackId: 'modal_aflaat', titel: 'De Aflaat', knop: 'Schenken', userId,
-    kop: '🪙 *Schenk een medelid een artikel uit de Aflatenhandel* — kosteloos, uit uw ambt. De Vloek is uitgesloten: een aflaat is een gunst.',
-    tweedeLabel: 'Welk artikel schenkt u?',
-    tweedeOpties: Object.entries(WINKEL_ITEMS)
-      .filter(([key]) => key !== 'vloek')
-      .map(([key, w]) => ({ text: { type: 'plain_text', text: `${w.icoon} ${w.naam}`.slice(0, 75) }, value: key })),
-  }),
-  ambt_plicht: (userId) => bouwTweeKeuzeModal({
-    callbackId: 'modal_plicht', titel: 'De Extra Plicht', knop: 'Uitschrijven', userId,
-    kop: '📜 *Schrijf een medelid een extra dagopdracht uit* — bovenop zijn eigen drie, met *dubbele beloning*. Eén herautsplicht per lid per dag, en niet een opdracht die hij vandaag al heeft staan.',
-    tweedeLabel: 'Welke plicht schrijft u uit?',
-    tweedeOpties: OPDRACHTEN.filter(o => o.soort === 'dag').map(o => ({
-      text: { type: 'plain_text', text: `${opdrachtTekst(o)} (+${o.beloning * HERAUT_BELONING_FACTOR})`.slice(0, 75) },
-      value: o.id,
-    })),
-  }),
-  ambt_zachtehand: (userId) => bouwTweeKeuzeModal({
-    callbackId: 'modal_zachtehand', titel: 'De Zachte Hand', knop: 'Verlenen', userId,
-    kop: '🕊️ *Geef.* Haal een vloek van iemand af, schrap een gele kaart, of sta een punt uit uw eigen saldo af. Dat laatste levert de ontvanger geen roem op — het is pure hulp.',
-    tweedeLabel: 'Welke vorm?',
-    tweedeOpties: Object.entries(ZACHTE_HAND_VORMEN).map(([key, v]) => ({
-      text: { type: 'plain_text', text: `${v.icoon} ${v.label}`.slice(0, 75) }, value: key,
-    })),
-  }),
-};
-
-for (const [actionId, maak] of Object.entries(ambtsModals)) {
-  app.action(actionId, async ({ ack, body, client }) => {
-    await ack();
-    try {
-      await client.views.open({ trigger_id: body.trigger_id, view: maak(body.user.id) });
-    } catch (err) { console.error(`Fout bij openen ambtsmodal (${actionId}):`, err.data?.error || err.message); }
-  });
-}
-
-const leesTweeKeuze = (view) => ({
-  doelId: view.state.values.doelwit?.keuze?.selected_option?.value,
-  tweede: view.state.values.tweede?.keuze?.selected_option?.value,
-});
-
-app.view('modal_aflaat', async ({ ack, body, view, client }) => {
-  await ack();
-  const { doelId, tweede } = leesTweeKeuze(view);
-  const uitkomst = await ambtsdaadAflaat(client, body.user.id, doelId, tweede, KANAAL());
-  await publiceerAppHome(client, body.user.id, uitkomst.tekst);
-});
-
-app.view('modal_plicht', async ({ ack, body, view, client }) => {
-  await ack();
-  const { doelId, tweede } = leesTweeKeuze(view);
-  const uitkomst = await ambtsdaadPlicht(client, body.user.id, doelId, tweede, KANAAL());
-  await publiceerAppHome(client, body.user.id, uitkomst.tekst);
-});
-
-app.view('modal_zachtehand', async ({ ack, body, view, client }) => {
-  await ack();
-  const { doelId, tweede } = leesTweeKeuze(view);
-  const uitkomst = await ambtsdaadZachteHand(client, body.user.id, doelId, tweede, KANAAL());
-  await publiceerAppHome(client, body.user.id, uitkomst.tekst);
-});
-
-app.view('modal_boekenzegel', async ({ ack, body, view, client }) => {
-  await ack();
-  const doelId = view.state.values.doelwit?.keuze?.selected_option?.value;
-  const uitkomst = await ambtsdaadBoekenzegel(client, body.user.id, doelId, KANAAL());
-  await publiceerAppHome(client, body.user.id, uitkomst.tekst);
 });
 
 app.view('modal_offer', async ({ ack, body, view, client }) => {
@@ -21232,7 +20063,10 @@ planCron('0 10 * * 1', async () => {
 
 registreerFeature({
   naam: 'rang-voorrechten',
-  help: [{ gebruik: '/kroketgod decreet [tekst]', verwacht: 'alleen de Opperkroket: vaardig het Decreet van de Dag uit (`decreet wis` trekt het in)' }],
+  help: [
+    { gebruik: '/kroketgod decreet [tekst]', verwacht: 'alleen de Opperkroket: vaardig het Decreet van de Dag uit (`decreet wis` trekt het in)' },
+    { gebruik: '/kroketgod vetgeschrift', verwacht: 'de Onderste Codex — `vetgeschrift rangen` voor de treden en hun voorrechten' },
+  ],
 });
 
 registreerFeature({
@@ -22511,35 +21345,6 @@ async function voerDashboardActie(actie) {
     case 'seizoenVerloren':
       await beslechtSeizoen(app.client, 'verloren');
       return 'Seizoen beslecht als nederlaag; nieuw seizoen gestart.';
-    // Ambten en de openbaring: uitproberen zonder op maandag 09:10 te wachten.
-    case 'ambtswissel': {
-      const st = await zorgVoorAmbten(app.client, { stil: false });
-      const bezet = AMBT_KEYS.filter(k => st?.ambten?.[k]?.houderId).length;
-      return `Ambtswissel uitgevoerd: ${bezet}/${AMBT_KEYS.length} ambten bezet.`;
-    }
-    case 'ambtsvacatures': {
-      const st = await zorgVoorAmbtsVacatures(app.client);
-      const vac = st ? AMBT_KEYS.filter(k => !st.ambten[k]?.houderId).length : 0;
-      return `Vacaturecontrole klaar; ${vac} ambt(en) vacant.`;
-    }
-    case 'zegelverval':
-      await laatZegelsVervallen(app.client);
-      return 'Zegelverval afgehandeld.';
-    case 'openbaringStart': {
-      const st = startOpenbaring();
-      await zorgVoorOpenbaring(app.client);
-      return `Openbaring gestart op ${st.startDatum}; blad 1 geplaatst (of ingehaald).`;
-    }
-    case 'openbaringVolgend': {
-      // Het volgende blad nu leggen in plaats van morgen: de startdatum een werkdag terugzetten.
-      const st = loadOpenbaring();
-      if (!st?.startDatum) return 'Er loopt geen openbaring — start hem eerst.';
-      const terug = new Date(`${st.startDatum}T00:00:00Z`);
-      do { terug.setUTCDate(terug.getUTCDate() - 1); } while ([0, 6].includes(terug.getUTCDay()));
-      saveOpenbaring({ ...st, startDatum: terug.toISOString().slice(0, 10) });
-      await zorgVoorOpenbaring(app.client);
-      return 'Volgend blad van de openbaring geplaatst.';
-    }
     case 'wereldbordVerversen':
       await updateWereldbord(app.client, true);
       return 'Wereldbord bijgewerkt.';
@@ -22746,14 +21551,6 @@ planCron('0 9 * * *', async () => {
   await voerLuideInhaalslagen('cron 09:00');
 });
 
-// Dagelijks 09:20 — is een ambtshouder verbannen of vertrokken, dan wordt hij ontheven en gaat
-// het ambt in waarneming. Dagelijks en niet wekelijks: een verbanning valt op een willekeurig
-// moment, en een bevoegdheid die het genootschap nodig heeft mag geen week stilstaan.
-planCron('20 9 * * 1-5', async () => {
-  try { await zorgVoorAmbtsVacatures(app.client); }
-  catch (err) { console.error('⚠️ Ambtsvacature-controle mislukt:', err.message); }
-}, { timezone: 'Europe/Amsterdam' });
-
 // ── Het Vetpapier en de Blinde Handdruk: de maandagoogst ────────────────────
 // Beide lezen op maandag voor wat er in het weekend is gebeurd. Eigen minuten, want CRON_LABELS
 // is per expressie gesleuteld.
@@ -22786,35 +21583,6 @@ planCron('40 9 * * 1', async () => {
 planCron('35 9 * * 1-5', async () => {
   try { await meldDubbeleKorsten(app.client); }
   catch (err) { console.error('⚠️ Dubbele Korst melden mislukt:', err.message); }
-}, { timezone: 'Europe/Amsterdam' });
-
-// ── Ambten: de wekelijkse hertelling en het zegelverval ───────────────────────
-// Maandag 09:10 — ná de weekopening (09:00) maar vóór de weekvijand (09:30), zodat de
-// Opperpaneerder zijn ambt al draagt wanneer de vijand oprijst. Eigen expressie, want
-// CRON_LABELS en de overslaan-vlag van het dashboard werken per expressie.
-planCron('10 9 * * 1', async () => {
-  try { await zorgVoorAmbten(app.client); }
-  catch (err) { console.error('⚠️ Ambtswissel mislukt:', err.message); }
-}, { timezone: 'Europe/Amsterdam' });
-
-// Vrijdag 17:00 — de ambtsweek is een WERKweek. Bewust niet zondagnacht: de Kroket God rust in
-// het weekend, dus een zegel dat zaterdag nog geldig is, is een zegel dat niemand kan leggen.
-planCron('0 17 * * 5', async () => {
-  try { await laatZegelsVervallen(app.client); }
-  catch (err) { console.error('⚠️ Zegelverval mislukt:', err.message); }
-}, { timezone: 'Europe/Amsterdam' });
-
-// De openbaringsklok. Elk kwartier, want een blad hoort op de dag zelf te landen en niet pas
-// bij de volgende herstart. Post ten hoogste één blad per aanroep en houdt zelf bij wat al
-// gepost is, dus vaker kijken kan geen dubbel blad opleveren. Geen CRON_LABELS-entry: dit
-// loopt maar twee dagen en op de meeste aanroepen post het niets.
-//
-// Eigen minuten (7/22/37/52) en NIET '*/15': daar hangt de quota-logger aan, en CRON_LABELS is
-// per EXPRESSIE gesleuteld — twee taken op één expressie delen elkaars label en overslaan-vlag,
-// zodat wie van de twee het eerst vuurt de vlag verbruikt.
-planCron('7,22,37,52 * * * *', async () => {
-  try { await zorgVoorOpenbaring(app.client); }
-  catch (err) { console.error('⚠️ Openbaringsklok mislukt:', err.message); }
 }, { timezone: 'Europe/Amsterdam' });
 
 // ── Crashdetectie ──────────────────────────────────────────────────────────────
@@ -22953,19 +21721,6 @@ process.on('SIGINT',  () => gracefulShutdown('SIGINT'));
   } catch (err) {
     console.error('Fout bij weekvijand-inhaalslag:', err);
   }
-  // Ambten: is de maandagse hertelling gemist, dan alsnog. Zelf gepoort op de weekstart én op
-  // maandag 09:10, dus dit kan de verkondiging niet naar de nacht trekken.
-  try {
-    await zorgVoorAmbten(app.client);
-  } catch (err) {
-    console.error('Fout bij ambten-inhaalslag:', err);
-  }
-  // Een verbanning kan tijdens de downtime zijn gevallen; dan staat er nu een dode zetel.
-  try {
-    await zorgVoorAmbtsVacatures(app.client);
-  } catch (err) {
-    console.error('Fout bij ambtsvacature-inhaalslag:', err);
-  }
   // De wekelijkse wrok-toestanden. Beide zijn gepoort op de weekstart, dus dit is de inhaalslag
   // voor een gemiste maandag — en beide zwijgen onder hun drempel.
   if (vandaagMomentGeweest(INHAALSLAG_MOMENT.uur, INHAALSLAG_MOMENT.min) && !isWeekendAms()) {
@@ -22973,12 +21728,6 @@ process.on('SIGINT',  () => gracefulShutdown('SIGINT'));
     catch (err) { console.error('Fout bij vete-inhaalslag:', err); }
     try { await zorgVoorZwarteKorst(app.client); }
     catch (err) { console.error('Fout bij Zwarte Korst-inhaalslag:', err); }
-  }
-  // De openbaring: een gemist blad wordt hier alsnog gelegd (en anders door de kwartier-cron).
-  try {
-    await zorgVoorOpenbaring(app.client);
-  } catch (err) {
-    console.error('Fout bij openbaring-inhaalslag:', err);
   }
   // Het Grote Archief: bij een leeg archief eenmalig vullen uit de Slack-historie. Staat
   // bewust achteraan de opstart — het is een gratis extraatje, niet iets waar de bot op wacht.
