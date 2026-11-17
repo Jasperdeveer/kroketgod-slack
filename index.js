@@ -179,6 +179,7 @@ const {
   WAPENS, WAPENREK_MAX, KANON_DOEL, KANON_MIN_LEDEN, VETBOM_KETST_BUIT, PEKEL_AANVALLEN,
   zwakTegen, koopWeigering, wapenUithaal, pekelBonus, kanonInleg, kanonTotaal, kanonLeden, kanonVuurt, kanonSchade,
 } = require('./lib/wapens.js');
+const { aanvalFilm, kanonFilm } = require('./lib/vijandbeeld.js');
 const { createHash } = require('crypto');
 const {
   VERBOND_MAX, VERZOEK_GELDIG_MS, groepen: verbondGroepen, naarOpslag: verbondNaarOpslag,
@@ -4926,15 +4927,16 @@ async function zetAvatarOnline(client, bestand, naam) {
 
 // Een plaatje openbaar zetten op imgbb; geeft de directe link terug.
 // `verloopS`: imgbb gooit het plaatje na zoveel seconden weg (het casino); zonder blijft het staan.
-async function zetOpImgbb(buf, naam, { verloopS = null, timeout = 30000 } = {}) {
+async function zetOpImgbb(buf, naam, { verloopS = null, timeout = 30000, map = null } = {}) {
   if (buf.length > GAST_AVATAR_MAX_BYTES) throw new Error('te groot');
   // R2 als dat ingesteld is (imgbb blokkeerde de server in nov 2026). Met verloopS gaat het naar
   // casino/, dat de lifecycle-regel van de bucket na een dag opruimt; de rest (gasten/) blijft staan.
+  // `map` kiest zelf een map (weekvijand/ voor de GIF's van de raid, die in de draad blijven staan).
   if (process.env.R2_BUCKET) {
     const soort = buf.subarray(0, 4).toString('hex') === '89504e47' ? ['png', 'image/png']
       : buf.subarray(0, 3).toString('hex') === 'ffd8ff' ? ['jpg', 'image/jpeg']
       : buf.subarray(0, 3).toString() === 'GIF' ? ['gif', 'image/gif'] : ['webp', 'image/webp'];
-    const sleutel = `${verloopS ? 'casino' : 'gasten'}/${createHash('sha1').update(buf).digest('hex')}.${soort[0]}`;
+    const sleutel = `${map || (verloopS ? 'casino' : 'gasten')}/${createHash('sha1').update(buf).digest('hex')}.${soort[0]}`;
     return zetOpR2(buf, sleutel, soort[1], { fetch, timeout });
   }
   if (!process.env.IMGBB_API_KEY) throw new Error('geen IMGBB_API_KEY');
@@ -12350,6 +12352,29 @@ async function updateRaidBericht(client, raid) {
   }
 }
 
+// De weekvijand in beeld (lib/vijandbeeld.js): onder een bericht dat al geplaatst is, komt een GIF
+// van de klap. Pas ná het posten, zodat niemand op het tekenen wacht. Alleen met R2: imgbb blokkeerde
+// de server om precies zulke GIF's (nov 2026). Ze gaan naar weekvijand/, zonder opruimregel, zodat
+// ze in de draad blijven staan. Lukt het niet, dan blijft de tekst gewoon staan.
+async function voegVijandGifToe(client, kanaal, bericht, tekst, maakFilm, alt) {
+  if (!process.env.R2_BUCKET || !bericht?.ts) return;
+  try {
+    const { buf } = await naarGif(maakFilm(), { breedte: 480 });
+    const url = await zetOpImgbb(buf, 'weekvijand', { map: 'weekvijand', timeout: 20000 });
+    const schoon = schoonOutput(tekst);
+    await slackLimiter.schedule(() => client.chat.update({
+      channel: kanaal, ts: bericht.ts, text: schoon,
+      blocks: [
+        { type: 'divider' },
+        ...splitsVoorBlokken(schoon).map(deel => ({ type: 'section', text: { type: 'mrkdwn', text: deel } })),
+        { type: 'image', image_url: url, alt_text: String(alt).substring(0, 1900) },
+      ],
+    }));
+  } catch (err) {
+    console.warn('⚠️ GIF van de weekvijand mislukt:', err.message);
+  }
+}
+
 // Gedeelde aanval-logica voor het `aanval`-commando én de knoppen op het raid-bord.
 // Retourneert { ok, tekst } — de tekst is ephemeral feedback voor de aanvaller.
 async function voerBamischijfAanval(client, userId, metOffer) {
@@ -12411,6 +12436,7 @@ async function voerBamischijfAanval(client, userId, metOffer) {
   strijder.schade = (strijder.schade || 0) + schade;
   strijder.laatsteAanval = vandaagKey;
   raid.strijders[userId] = strijder;
+  const hpVoor = raid.hp; // voor de GIF: de balk loopt van hier naar beneden
   raid.hp = Math.max(0, raid.hp - schade);
   raid.sindsBeurt = [...new Set([...(raid.sindsBeurt || []), userId])];
   // Hij slaat terug (lib/weekvijand.js): punten naar zijn buit, terug als hij valt. Een Ovenwant
@@ -12427,12 +12453,25 @@ async function voerBamischijfAanval(client, userId, metOffer) {
   const werdRazend = !wasRazend && isRazend(raid, gave);
   raid.log = [...(raid.log || []), { naam: bijnaam, schade, offer: metOffer, terug: genomen, wapen: wapenKey }].slice(-10);
   const kanaal = raid.kanaal || process.env.SLACK_CHANNEL_ID;
+  // De GIF van deze klap (lib/vijandbeeld.js). `gave` en niet `wapen.gave`: ook als het wapen zijn
+  // gave brak, hoort de banier te zeggen welke ("door het pantser").
+  const klapFilm = () => aanvalFilm({
+    vijandKey: raid.vijand?.key, vijandNaam, wapen: wapenKey, schade, hpVoor, maxHp: raid.maxHp,
+    gemist: schade === 0 && !wapen.ketst, ketst: wapen.ketst, terugslag: genomen, offer: metOffer,
+    razend: isRazend(raid, gave), gave, pekelBonus: pekel.bonus,
+  });
+  const klapAlt = `${vijandNaam} ${schade ? `krijgt −${schade} HP` : wapen.ketst ? 'laat een Vetbom terugketsen' : 'ontwijkt de klap'}${wapenKey ? ` (${WAPENS[wapenKey].naam})` : ''}`;
 
   if (raid.hp <= 0) {
     raid.actief = false;
     writeJSON('bamischijf.json', raid);
     await telActie(client, userId, 'raid_aanval'); // ook de genadeslag is een aanval
     await updateRaidBericht(client, raid);
+    if (raid.berichtTs) {
+      const regel = `⚔️ *${bijnaam}* ${uithaal}: de *genadeslag*.`;
+      const bericht = await postToChannel(client, kanaal, regel, { thread_ts: raid.berichtTs });
+      voegVijandGifToe(client, kanaal, bericht, regel, klapFilm, klapAlt);
+    }
     await beslechtBamischijfOverwinning(client, kanaal, raid, userId, { knal: wapen.knal });
     return { ok: true, tekst: `⚔️ _Uw uithaal van −${schade} HP was de GENADESLAG — ${vijandNaam} is verslagen!_` };
   }
@@ -12447,9 +12486,9 @@ async function voerBamischijfAanval(client, userId, metOffer) {
     (wapen.folie ? `\n🎞️ ${vijandNaam} zit in vershoudfolie: bij zijn volgende beurt herstelt hij niet.` : '') +
     (wapen.pekel ? `\n🧂 Gepekeld: de volgende ${PEKEL_AANVALLEN} aanvallen van anderen vandaag doen +1.` : '');
   if (raid.berichtTs) {
-    await postToChannel(client, kanaal,
-      `${metOffer ? '🔥' : '⚔️'} *${bijnaam}* ${metOffer ? 'offert een kroketpunt en ' : ''}${uithaal} (${raid.hp}/${raid.maxHp} over).${terugRegel}`,
-      { thread_ts: raid.berichtTs });
+    const regel = `${metOffer ? '🔥' : '⚔️'} *${bijnaam}* ${metOffer ? 'offert een kroketpunt en ' : ''}${uithaal} (${raid.hp}/${raid.maxHp} over).${terugRegel}`;
+    const bericht = await postToChannel(client, kanaal, regel, { thread_ts: raid.berichtTs });
+    voegVijandGifToe(client, kanaal, bericht, regel, klapFilm, klapAlt);
   } else {
     await postToChannel(client, kanaal,
       `⚔️ *AANVAL OP ${vijandNaam.toUpperCase()}* ⚔️\n\n> *${bijnaam}* ${metOffer ? 'offert een kroketpunt en ' : ''}${uithaal}.\n> ${vijandNaam}: *${raid.hp}/${raid.maxHp} HP*  ${hpBalk(raid.hp, raid.maxHp)}${terugRegel}\n\n— De Hoge Frituurraad`);
@@ -12558,22 +12597,26 @@ async function legInKanon(client, userId, n) {
   const schade = kanonSchade(raid.maxHp);
   raid.kanon.gevuurd = true;
   raid.kanon.schade = schade;
+  const hpVoor = raid.hp;
   raid.hp = Math.max(0, raid.hp - schade);
   raid.log = [...(raid.log || []), { naam: 'Het Frituurkanon', schade, kanon: true }].slice(-10);
   const schutters = Object.keys(raid.kanon.inleg).map(uid => members[uid]?.bijnaam || 'een volgeling').join(', ');
   logGebeurtenis('bamischijf', userId, `Het Frituurkanon vuurde op ${vijandNaam}: −${schade} HP (${schutters})`);
+  const schotFilm = () => kanonFilm({ vijandKey: raid.vijand?.key, vijandNaam, schade, hpVoor, maxHp: raid.maxHp, razend: isRazend(raid, gaveVan(raid.vijand?.key)) });
+  const schotAlt = `Het Frituurkanon raakt ${vijandNaam}: −${Math.min(schade, hpVoor)} HP`;
   if (raid.hp <= 0) {
     raid.actief = false;
     writeJSON('bamischijf.json', raid);
     await updateRaidBericht(client, raid);
-    await postToChannel(client, kanaal, `🛢️💥 *HET FRITUURKANON VUURT* — −${schade} HP. ${vijandNaam} valt! Geladen door ${schutters}.`);
+    const regel = `🛢️💥 *HET FRITUURKANON VUURT* — −${schade} HP. ${vijandNaam} valt! Geladen door ${schutters}.`;
+    voegVijandGifToe(client, kanaal, await postToChannel(client, kanaal, regel), regel, schotFilm, schotAlt);
     await beslechtBamischijfOverwinning(client, kanaal, raid, userId, { knal: false });
     return { ok: true, tekst: `_Uw inleg stak de lont aan: het kanon gaf de GENADESLAG._` };
   }
   writeJSON('bamischijf.json', raid);
   await updateRaidBericht(client, raid);
-  await postToChannel(client, kanaal,
-    `🛢️💥 *HET FRITUURKANON VUURT* op ${vijandNaam}: *−${schade} HP* (${raid.hp}/${raid.maxHp} over). Geladen door ${schutters}.`);
+  const regel = `🛢️💥 *HET FRITUURKANON VUURT* op ${vijandNaam}: *−${schade} HP* (${raid.hp}/${raid.maxHp} over). Geladen door ${schutters}.`;
+  voegVijandGifToe(client, kanaal, await postToChannel(client, kanaal, regel), regel, schotFilm, schotAlt);
   return { ok: true, tekst: `_Uw inleg stak de lont aan: het kanon deed −${schade} HP._` };
 }
 
