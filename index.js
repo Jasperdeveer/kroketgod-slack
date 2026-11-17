@@ -1888,12 +1888,12 @@ function stripSlackOpmaak(tekst, maxLengte = 200) {
 // (postToChannel) en dat van de personas (postAlsPersona). Deze ene naad voedt daarom twee dingen:
 // het rollende kanaalgeheugen (veertig berichten, voor de directe gesprekscontext) én Het Grote
 // Archief (voorgoed, doorzoekbaar — zie lib/archief.js).
-function logBericht(spreker, tekst, { soort = 'lid', sprekerId = null } = {}) {
+function logBericht(spreker, tekst, { soort = 'lid', sprekerId = null, thread = null } = {}) {
   const schoon = stripSlackOpmaak(tekst);
   if (!schoon) return;
   // Archief eerst, en met een eigen (ruimere) afkapping. Faalt nooit hard, dus het kan het
   // kanaalgeheugen hieronder niet in de weg zitten.
-  voegToeAanArchief({ soort, spreker, sprekerId, tekst: stripSlackOpmaak(tekst, 500) });
+  voegToeAanArchief({ soort, spreker, sprekerId, tekst: stripSlackOpmaak(tekst, 500), thread });
   const geschiedenis = loadGeschiedenis();
   geschiedenis.push({ spreker, tekst: schoon, ts: Date.now() });
   if (geschiedenis.length > MAX_GESCHIEDENIS) {
@@ -2104,7 +2104,7 @@ async function backfillArchiefUitSlack(client, { rondes = 25 } = {}) {
     const soort = lid ? 'lid' : (!isBot ? 'lid' : (m.username && m.username !== 'Kroket God' ? 'persona' : 'kroketgod'));
     if (voegToeAanArchief({
       soort, spreker, sprekerId: lid ? m.user : null,
-      tekst, ts: Math.round(parseFloat(m.ts) * 1000),
+      tekst, ts: Math.round(parseFloat(m.ts) * 1000), thread: !!m.thread_ts,
     })) opgetekend++;
   }
   console.log(`📚 Archief-backfill: ${opgetekend} uitspraken uit de Slack-historie opgetekend.`);
@@ -9665,7 +9665,7 @@ app.event('message', async ({ event, client }) => {
     if (event.subtype === 'file_share' && !event.thread_ts) return;
 
     if (!event.text?.trim()) return;
-    if (!isTestKanaalMsg) logBericht(bijnaam, event.text, { soort: 'lid', sprekerId: event.user });
+    if (!isTestKanaalMsg) logBericht(bijnaam, event.text, { soort: 'lid', sprekerId: event.user, thread: !!event.thread_ts });
 
     // Een emoji van de Kroket God (zie overwegEmojiReactie). Niet awaiten: het bericht wacht niet
     // op de slimme laag. Op een verklikking staat de Duitse vlag al; daar komt niets bij.
@@ -14104,6 +14104,11 @@ function werkdagenStil(userId, nu = Date.now(), activiteit = loadActiviteit()) {
   return n;
 }
 
+// Lidberichten van 29 tot 31 dagen geleden die geen draadantwoord zijn (`thread === false`; oude regels hebben het veld niet)
+// en nooit van vóór het jongste lid: wat de bot citeert, leest iedereen.
+const archiefKandidaten = (nu) => entriesTussen({ soort: 'lid', van: Math.max(nu - 31 * DAG_MS, gedeeldSinds()), tot: nu - 29 * DAG_MS, max: 3000 })
+  .filter((e) => e.thread === false && e.sprekerId);
+
 // De stand van het kanaal voor kiesIngreep (zie de kop van lib/regie.js voor de vorm).
 // Niet gevuld: duelGewonnenVandaag, casino.spellen en raid.weekdag (nog door geen enkele voorwaarde gelezen).
 function bouwRegieStand(nu = Date.now()) {
@@ -14132,8 +14137,6 @@ function bouwRegieStand(nu = Date.now()) {
     };
   });
   const raid = readJSON('bamischijf.json', {});
-  const maandGeleden = new Date(`${dag}T12:00:00Z`); maandGeleden.setUTCMonth(maandGeleden.getUTCMonth() - 1);
-  const dagMaandGeleden = maandGeleden.toISOString().slice(0, 10);
   const berichten = ledenStand.map((l) => activiteit[l.id]?.laatsteBericht || 0);
   return {
     leden: ledenStand,
@@ -14147,8 +14150,7 @@ function bouwRegieStand(nu = Date.now()) {
       extraAanvalVandaag: raid.extraAanval === new Intl.DateTimeFormat('nl-NL', { timeZone: 'Europe/Amsterdam' }).format(new Date(nu)), // sleutel zoals de raid hem schrijft
     },
     kanaal: { laatsteLidBerichtMs: Math.max(0, ...berichten) || null },
-    archiefKandidaat: entriesTussen({ soort: 'lid', van: nu - 33 * DAG_MS, tot: nu - 27 * DAG_MS, max: 3000 })
-      .some((e) => regie.amsMoment(e.ts).dag === dagMaandGeleden),
+    archiefKandidaat: archiefKandidaten(nu).length > 0,
   };
 }
 
@@ -14431,6 +14433,7 @@ planCron('*/20 8-17 * * 1-5', async () => {
 const VERRASSING_KOP = {
   hete_kroket: '🔥 *DE HETE KROKET* 🔥', flitsopdracht: '⚡ *FLITSOPDRACHT* ⚡', raadsel: '🧩 *HET RAADSEL VAN DE KROKET GOD* 🧩',
   puntenregen: '🌧️ *PUNTENREGEN* 🌧️', woede_bij_stilte: '😤 *DE WOEDE VAN DE KROKET GOD* 😤',
+  stadhouder: '👑 *DE STADHOUDER* 👑', herverdeling: '⚖️ *DE GROTE HERVERDELING* ⚖️', archief_spreekt: '📜 *HET ARCHIEF SPREEKT* 📜', omgekeerd_uur: '🙃 *HET OMGEKEERDE UUR* 🙃',
 };
 const verrassingStaat = (id) => { const v = regieStaat().verrassing || null; return v && (!id || v.id === id) ? v : null; };
 const wisVerrassing = () => bewaarRegie({ ...regieStaat(), verrassing: null });
@@ -14578,6 +14581,13 @@ async function regieKlok(client, { nu = Date.now() } = {}) {
     }
     logAudit('regie', `woede bij stilte: ${namen.length} leden verloren elk 1 (${totaal} naar de Schatkist)`);
     await verrassingPost(client, `😤 *DE WOEDE VALT NEER* 😤\nDe stilte werd niet doorbroken. ${namen.length ? `${namen.length} lid${namen.length === 1 ? '' : 'en'} dragen elk *1 punt* af aan de Schatkist.` : 'Er viel niets te halen.'}`);
+  } else if (v.id === 'stadhouder') {
+    const naam = loadMembers()[v.data.stadhouder]?.bijnaam || 'een volgeling';
+    const vangnet = `👑 <@${v.data.stadhouder}> kreeg een uur lang de macht van de Kroket God en deed er niets mee. Een stadhouder zonder besluit is een kroket zonder vulling.`;
+    const prompt = `Spot in één tot twee korte zinnen, in je eigen stem, met een lid dat een uur lang je macht kreeg en niets deed.\nHet lid: ${wrapOnvertrouwd('Naam van het lid', naam)}\nVoeg geen feiten toe.`;
+    const tekst = await kroketResponseMetVangnet(prompt, 120, false, vangnet, 'licht');
+    logAudit('regie', `stadhouder ${v.data.stadhouder} deed niets`);
+    await verrassingPost(client, `${VERRASSING_KOP.stadhouder}\n${tekst && tekst.includes(`<@${v.data.stadhouder}>`) ? tekst : `<@${v.data.stadhouder}> ${tekst || vangnet}`}`);
   } // puntenregen: verloopt stil
 }
 
@@ -14613,13 +14623,105 @@ Object.assign(UITVOERDERS, {
   },
 });
 
+// ── Verrassingen deel B: stadhouder, herverdeling, archief spreekt, omgekeerd uur ──
+// De stadhouder kiest één keer (een uur lang): de keuze wist de verrassing meteen, dus een tweede druk is altijd te laat.
+// De uitkomst telt mee voor de plafonds (boekNawerking, P16); de gunst gaat naar het stilste lid dat niet de stadhouder is (P13).
+const stadKnoppen = () => [
+  ...regieKnopTekst('Sluit het casino', 'regie_stad_casino', 'stad'),
+  ...regieKnopTekst('Belast de koploper', 'regie_stad_belasting', 'stad', 'danger'),
+  ...regieKnopTekst('Schenk een gunst', 'regie_stad_gunst', 'stad'),
+];
+const stadKeuzes = {
+  casino: async () => {
+    if (casinoEffect('hogeTafel') || casinoEffect('goudenUur')) return { weiger: '_Er loopt al een casinobesluit van de Kroket God (hoge tafel of gouden uur): wacht tot dat voorbij is._' };
+    const dicht = regieEffect('dicht', 120);
+    return { tekst: `het casino is dicht tot ${hhmmAms(dicht.tot)}. De frituur wordt gereinigd` };
+  },
+  belasting: async (stadhouder, nu) => {
+    const kop = bouwRegieStand(nu).leden.filter((l) => !l.gast && !l.verbannen && !l.afwezig && l.id !== stadhouder).sort((a, b) => b.score - a.score)[0];
+    if (!kop) return { tekst: 'er was niemand om te belasten' };
+    const uit = neemVoorSchatkist({ doel: kop.id, punten: -Math.min(5, Math.max(2, Math.round(kop.score * 0.1))) }, nu);
+    const n = -(uit.punten || 0);
+    if (n > 0) bewaarRegie(regie.boekNawerking(regieStaat(), { nu, id: 'stadhouder', doel: kop.id, punten: -n }));
+    return { tekst: n > 0 ? `<@${kop.id}> draagt als koploper *${n} punt${n === 1 ? '' : 'en'}* belasting af aan de Schatkist` : `de belasting op koploper <@${kop.id}> ketst af` };
+  },
+  gunst: async (stadhouder, nu) => {
+    const stil = bouwRegieStand(nu).leden.filter((l) => !l.gast && !l.verbannen && !l.afwezig && l.id !== stadhouder)
+      .sort((a, b) => b.werkdagenStil - a.werkdagenStil || a.score - b.score)[0];
+    if (!stil) return { tekst: 'er was niemand om een gunst te schenken' };
+    const n = betaalNawerking({ nu, id: 'stadhouder', doel: stil.id, punten: 2 });
+    return { tekst: n > 0 ? `<@${stil.id}>, het stilste lid, krijgt een gunst van *${n} punt${n === 1 ? '' : 'en'}*` : `<@${stil.id}> krijgt niets: de Schatkist is voor vandaag leeg` };
+  },
+};
+for (const soort of Object.keys(stadKeuzes)) {
+  app.action(`regie_stad_${soort}`, async ({ ack, body, client }) => {
+    await ack();
+    const zeg = (text) => client.chat.postEphemeral({ channel: body.channel?.id || KANAAL(), user: body.user.id, text }).catch(() => {});
+    const nu = Date.now();
+    const v = verrassingStaat('stadhouder');
+    if (!v || nu >= v.tot) return zeg('_Het besluit is al genomen of de macht is verlopen._');
+    if (v.data.stadhouder !== body.user.id) return zeg('_Alleen de stadhouder mag kiezen._');
+    wisVerrassing(); // eerst wissen: een dubbelklik kiest nooit twee keer
+    const uit = await stadKeuzes[soort](body.user.id, nu);
+    if (uit.weiger) { // niets gebeurd: de keuze blijft open
+      bewaarRegie({ ...regieStaat(), verrassing: v });
+      return zeg(uit.weiger);
+    }
+    logAudit('regie', `stadhouder ${body.user.id} koos ${soort}: ${uit.tekst}`);
+    return verrassingPost(client, `${VERRASSING_KOP.stadhouder}\nStadhouder <@${body.user.id}> besloot: ${uit.tekst}.`);
+  });
+}
+
+const ARCHIEF_ZEGEN = ['De Kroket God keurt dit goed.', 'Een oordeel van de Kroket God: dit was kroketwaardig.', 'Het Archief vergeet niets, en vergeeft dit.'];
+const ARCHIEF_BERISPING = ['De Kroket God berispt dit: een maand later nog steeds pijnlijk.', 'Het Archief blijft meedogenloos: dit hoort een berisping, geen punten.', 'Een maand later is het oordeel hard: ongehoord.'];
+Object.assign(UITVOERDERS, {
+  stadhouder: async (client, keuze, stand, nu) => {
+    startVerrassing('stadhouder', nu, 60, { stadhouder: keuze.doel });
+    return { kop: VERRASSING_KOP.stadhouder, feiten: 'De Kroket God leent een uur lang zijn macht aan een actief lid, dat kan kiezen uit een besluit. Noem de keuzes niet zelf; die staan eronder.',
+      staart: `<@${keuze.doel}>, u bent een uur lang stadhouder, tot *${hhmmAms(nu + 3_600_000)}*. Kies één besluit: sluit het casino, belast de koploper of schenk een gunst aan het stilste lid. Doet u niets, dan spot de Kroket God met u.`,
+      knoppen: stadKnoppen(), naPost: bewaarVerrassingTs('stadhouder') };
+  },
+  herverdeling: async (client, keuze, stand, nu) => {
+    const r = stand.leden.filter((l) => !l.gast && !l.verbannen && !l.afwezig).sort((a, b) => b.score - a.score);
+    if (r.length < 4 || r[0].score - r.at(-1).score <= 40) return { tekst: null };
+    let pot = 0;
+    for (const l of r.slice(0, 2)) {
+      const uit = neemVoorSchatkist({ doel: l.id, punten: -Math.min(4, Math.round(l.score * 0.1)) }, nu);
+      const n = -(uit.punten || 0);
+      if (n > 0) { bewaarRegie(regie.boekNawerking(regieStaat(), { nu, id: 'herverdeling', doel: l.id, punten: -n })); pot += n; }
+    }
+    if (pot <= 0) return { tekst: null };
+    const [arm1, arm2] = [r.at(-1), r.at(-2)]; // de laagste krijgt het restant
+    const krijgt = [[arm1, Math.ceil(pot / 2)], [arm2, Math.floor(pot / 2)]].filter(([, p]) => p > 0);
+    const gekregen = krijgt.map(([l, p]) => [l, betaalNawerking({ nu, id: 'herverdeling', doel: l.id, punten: p })]);
+    logAudit('regie', `herverdeling: ${pot} van ${r[0].id} en ${r[1].id} naar ${gekregen.map(([l, n]) => `${l.id} +${n}`).join(', ')}`);
+    return { kop: VERRASSING_KOP.herverdeling, feiten: `De Kroket God vindt het verschil tussen eerste en laatste te groot en herverdeelt: de twee hoogsten leveren samen ${pot} punten in, de twee laagsten krijgen ze.`,
+      staart: `Van <@${r[0].id}> en <@${r[1].id}> naar ${gekregen.map(([l, n]) => `<@${l.id}> (+${n})`).join(' en ')}.` };
+  },
+  archief_spreekt: async (client, keuze, stand, nu) => {
+    const kandidaten = archiefKandidaten(nu);
+    if (!kandidaten.length) return { tekst: null };
+    const e = kandidaten[Math.min(kandidaten.length - 1, Math.floor(Math.random() * kandidaten.length))];
+    const zegen = Math.random() < 0.5 && !!loadMembers()[e.sprekerId];
+    const n = zegen ? betaalNawerking({ nu, id: 'archief_spreekt', doel: e.sprekerId, punten: 1 }) : 0;
+    const pick = (l) => l[Math.min(l.length - 1, Math.floor(Math.random() * l.length))];
+    logAudit('regie', `archief spreekt over ${e.sprekerId}: ${zegen ? `zegen +${n}` : 'berisping'}`);
+    return { tekst: `${VERRASSING_KOP.archief_spreekt}\nPrecies een maand geleden zei <@${e.sprekerId}>:\n> ${ontsnapMrkdwn(e.tekst)}\n${zegen ? `${pick(ARCHIEF_ZEGEN)}${n ? ' *1 punt*.' : ''}` : pick(ARCHIEF_BERISPING)}` };
+  },
+  omgekeerd_uur: async (client, keuze) => {
+    const duur = keuze.duurMinuten || 60;
+    const e = regieEffect('omgekeerdUur', duur);
+    return { kop: VERRASSING_KOP.omgekeerd_uur, feiten: `Tot ${hhmmAms(e.tot)} staat de wereld op zijn kop: wie een duel of casinospel verliest, krijgt de inzet van de winnaar (hoogstens 5 per spel).` };
+  },
+});
+
 planCron('* * * * *', async () => {
   try { await regieKlok(app.client); }
   catch (err) { console.error('Fout bij de verrassingsklok:', err); }
 }, { timezone: 'Europe/Amsterdam' });
 
 // De rooktests (scripts/rooktest/) komen zo bij de regisseur.
-if (process.env.KROKET_ROOKTEST) module.exports = { regieKlok, voerOffer, voerBamischijfAanval, bouwDashboardData, voerDashboardActie, saveInstellingen, casinoOpen, regieTik, bouwRegieStand, voerIngreepUit, UITVOERDERS, regieStaat, bewaarRegie, mogAutonoomPosten, werkdagenStil, casinoToegangReden, casinoMax, casinoPlafond, boekCasinoUitslag, casinoOpen, sluitGeleKaartPoll, voerDuel, voerEer, winkelPrijs, prijsRedenen, prijsToelichting, CRON_LABELS, geplandeCronMeta };
+if (process.env.KROKET_ROOKTEST) module.exports = { voegToeAanArchief, regieKlok, voerOffer, voerBamischijfAanval, bouwDashboardData, voerDashboardActie, saveInstellingen, casinoOpen, regieTik, bouwRegieStand, voerIngreepUit, UITVOERDERS, regieStaat, bewaarRegie, mogAutonoomPosten, werkdagenStil, casinoToegangReden, casinoMax, casinoPlafond, boekCasinoUitslag, casinoOpen, sluitGeleKaartPoll, voerDuel, voerEer, winkelPrijs, prijsRedenen, prijsToelichting, CRON_LABELS, geplandeCronMeta };
 
 // Wat het dashboard over het casino laat zien (bouwDashboardData) en kan (/api/casino).
 function casinoDashboardData(naam) {

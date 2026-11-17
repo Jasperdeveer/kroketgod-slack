@@ -77,7 +77,7 @@ harnas(async (h) => {
       h.ok(rij.praatjes <= 1, `${niveau} ${dag}: praatjes ${rij.praatjes} <= 1`);
       h.ok(minGap === null || minGap >= 45, `${niveau} ${dag}: minimale tussentijd ${minGap ?? '-'} min >= 45`);
       h.ok(buiten.length === 0, `${niveau} ${dag}: geen ingreep of praatje buiten 08:30-17:30`);
-      h.ok(rij.verrassingen === 0, `${niveau} ${dag}: geen verrassing (${rij.verrassingen})`);
+      h.ok(rij.verrassingen <= 1, `${niveau} ${dag}: hoogstens een verrassing (${rij.verrassingen})`);
       h.ok(rij.laagsteScore >= 0, `${niveau} ${dag}: laagste score ${rij.laagsteScore} >= 0`);
       vorigeAantal = (staat.log || []).length;
     }

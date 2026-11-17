@@ -42,7 +42,7 @@ harnas(async (h) => {
   h.ok(raid().hp === 32 && raid().actief, `bliksem: hp ${raid().hp} (verwacht 32)`);
   h.ok(JSON.stringify(raid().strijders) === JSON.stringify({ UB: { schade: 3 } }), 'geen schade of credit voor een lid');
   h.ok(JSON.stringify(h.lees('scores.json')) === scoresVoor, 'bliksem verschuift geen punten');
-  h.ok(h.updates.length > 1 && /Kroket God/.test(alles()), 'raidbericht bijgewerkt en aangekondigd');
+  h.ok(h.updates.length > 1 && /bliksemschicht/i.test(alles()), 'raidbericht bijgewerkt en aangekondigd');
   h.ok(uit.feiten && /8 HP/.test(uit.feiten), `feiten noemen de schade: ${uit.feiten}`);
 
   // 3. Genadeslag: een schicht van 8 op een vijand met 5 HP geeft de overwinning.
