@@ -10132,7 +10132,6 @@ const CRON_LABELS = {
   '30 7 * * 1-5':    { label: 'Kroketfeitje' },
   '0 10 * * 2,4':    { label: 'Spontane post' },
   '0 14 * * 2,4':    { label: 'Spontane post' },
-  '0 13 * * 2,4':    { label: 'Profetie (kans)' },
   '30 9 * * 1':      { label: 'Weekvijand (opkomst)' },
   '0 11 * * 3':      { label: 'Premiejacht (kans)' },
   '0 11 * * 4':      { label: 'Het Verhoor' },
@@ -10757,15 +10756,6 @@ async function stuurWeekSamenvatting(client, { reset = true } = {}) {
     .map((r, i) => `${i + 1}. ${r.naam} — ${r.score} punten`)
     .join('\n');
 
-  // Profetieën van deze week: vrijdag wordt geoordeeld of ze zijn "uitgekomen"
-  const profetieen = readJSON('profetie.json', { items: [] });
-  const weekGrens = Date.now() - 7 * 86_400_000;
-  const verseProfetieen = (profetieen.items || []).filter(p => p.ts > weekGrens);
-  const profetieBlok = verseProfetieen.length
-    ? `\n\nPROFETIEËN VAN DEZE WEEK — oordeel per profetie of zij is uitgekomen (wees creatief: de Kroket God heeft ALTIJD gelijk, dus interpreteer de gebeurtenissen desnoods zó dat de profetie klopt):\n` +
-      verseProfetieen.map(p => `- Over ${p.bijnaam}: "${p.tekst.substring(0, 200)}"`).join('\n')
-    : '';
-
   const tekst = await kroketResponse(
     `De Kroket God sluit de week af met een humoristisch weekoverzicht voor de Heren van de Kroket Illuminati. ` +
     `Gebruik de onderstaande gebeurtenissen als basis. Regels:\n` +
@@ -10774,7 +10764,7 @@ async function stuurWeekSamenvatting(client, { reset = true } = {}) {
     `- Toon: dramatisch, grappig, in de stijl van de Kroket God — alsof het een jaarrede is.\n` +
     `- Structuur: plechtige aanhef → 3-5 highlights → kort woord over de huidige hiërarchie → afsluiting met oordeel over de week.\n` +
     `- Geen inleidingszin.\n\n` +
-    `Gebeurtenissen deze week:\n\n${eventLijst}\n\nHUIDIGE RANGLIJST (gebruik exact deze standen):\n${ranglijstRegels}${profetieBlok}`,
+    `Gebeurtenissen deze week:\n\n${eventLijst}\n\nHUIDIGE RANGLIJST (gebruik exact deze standen):\n${ranglijstRegels}`,
     1100, false, 'slim', { lang: true }
   );
 
@@ -21086,34 +21076,6 @@ planCron('0 11 * * 3', async () => {
     await postToChannel(app.client, process.env.SLACK_CHANNEL_ID, tekst);
   } catch (err) {
     console.error('Fout bij premiejacht:', err);
-  }
-}, { timezone: 'Europe/Amsterdam' });
-
-// ── Cron: dinsdag & donderdag 13:00 — kans op een profetie ────────────────────
-// 35% kans: de Kroket God doet een voorspelling over een willekeurig lid. De profetie
-// wordt bewaard en vrijdag in het weekoverzicht "beoordeeld".
-
-planCron('0 13 * * 2,4', async () => {
-  try {
-    if (Math.random() > 0.35) return;
-    if (instelling('stilModus') || instelling('alleenTestkanaal')) return;
-    const lid = randomMember();
-    if (!lid) return;
-    const [lidId, lidData] = lid;
-    const profetieTekst = await kroketResponse(
-      `De Kroket God krijgt een VISIOEN over volgeling ${lidData.bijnaam}. Doe een mysterieuze, specifieke profetie ` +
-      `over iets dat deze week nog zal gebeuren met of door ${lidData.bijnaam} — kroket-gerelateerd, absurd maar net geloofwaardig. ` +
-      `Gebruik het decreet- of orakel-formaat. Gebruik de naam letterlijk. Geen inleidingszin.`,
-      400, false
-    );
-    const profetieen = readJSON('profetie.json', { items: [] });
-    profetieen.items.push({ ts: Date.now(), userId: lidId, bijnaam: lidData.bijnaam, tekst: profetieTekst.substring(0, 500) });
-    profetieen.items = profetieen.items.slice(-10);
-    writeJSON('profetie.json', profetieen);
-    logGebeurtenis('profetie', lidId, `De Kroket God profeteerde over ${lidData.bijnaam}`);
-    await postToChannel(app.client, process.env.SLACK_CHANNEL_ID, `⚜️ *PROFETIE* ⚜️\n\n${profetieTekst}`);
-  } catch (err) {
-    console.error('Fout bij profetie:', err);
   }
 }, { timezone: 'Europe/Amsterdam' });
 
