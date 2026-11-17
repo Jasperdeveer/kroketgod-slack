@@ -91,6 +91,8 @@ const { magAanmelden } = require('./lib/toegang.js');
 const loadDaglimieten = () => readJSON('daglimieten.json', {});
 const saveDaglimieten = (d) => writeJSON('daglimieten.json', d);
 registreerFeature({ naam: 'daglimieten', state: ['daglimieten.json'] });
+registreerFeature({ naam: 'puntenhistorie', state: ['puntenhistorie.json'] });
+const puntenhistorie = require('./lib/puntenhistorie.js');
 const loadGunsten = () => readJSON('gunsten.json', {});
 const saveGunsten = (d) => writeJSON('gunsten.json', d);
 
@@ -9423,6 +9425,7 @@ const CRON_LABELS = {
   '50 14 * * 5':     { label: 'Weekvijand ontsnapping' },
   '40 12 * * 2-5':   { label: 'Weekvijand slaat terug' },
   '45 23 * * 0':     { label: 'Kroniek schrijven' },
+  '55 23 * * *':     { label: 'Dagstand vastleggen' },
   '45 10 1-7 * 1':   { label: 'Weefselrapport' },
   '0 9 * * 1':       { label: 'Weekopening' },
   '5 9 * * 1':       { label: 'Seizoensfase' },
@@ -10234,6 +10237,16 @@ registreerFeature({
 planCron('45 23 * * 0', async () => {
   try { await genereerKroniekAflevering(); }
   catch (err) { console.error('⚠️ Kroniek schrijven mislukt:', err.message); }
+}, { timezone: 'Europe/Amsterdam' });
+
+// Dagstanden: elke dag 23:55 (Amsterdam) de weekscore per lid vastleggen, ook zondag (vóór de reset van 23:59).
+function legDagstandVast() {
+  const staat = puntenhistorie.legDagstandVast(readJSON('puntenhistorie.json', {}), dagSleutel(), loadScores());
+  writeJSON('puntenhistorie.json', puntenhistorie.ruimOp(staat, Date.now()));
+}
+planCron('55 23 * * *', () => {
+  try { legDagstandVast(); }
+  catch (err) { console.error('⚠️ Dagstand vastleggen mislukt:', err.message); }
 }, { timezone: 'Europe/Amsterdam' });
 
 // Maandag 09:20 posten — ná de weekopening (09:00) en de seizoensfase (09:05), vóór de bingo
@@ -14581,7 +14594,7 @@ async function voerRitueelUit(client, { userId, ritueel, rest, channelId, respon
 
 
 // De rooktests (scripts/rooktest/) komen zo bij de regisseur.
-if (process.env.KROKET_ROOKTEST) module.exports = { startStilleMissie, dagSleutel, stadKeuzes, voegToeAanArchief, regieKlok, voerOffer, voerBamischijfAanval, bouwDashboardData, voerDashboardActie, saveInstellingen, casinoOpen, regieTik, bouwRegieStand, voerIngreepUit, UITVOERDERS, regieStaat, bewaarRegie, stemZaak, sluitZaak, mogAutonoomPosten, werkdagenStil, casinoToegangReden, casinoMax, casinoPlafond, boekCasinoUitslag, sluitGeleKaartPoll, startGeleKaartPoll, voerDuel, voerEer, winkelPrijs, prijsRedenen, prijsToelichting, CRON_LABELS, geplandeCronMeta, BINGO_POOL, bouwDossierBlok, voerRitueelUit, raadpleegStaat, bewaarRaadpleeg, bouwAppHomeBlocks, bouwNaslagVenster, kapHomeBlocks, stemTribunaal, vollooiMissie, telActie, getMondayOfWeek, kiesOpdrachten, opdrachtHaalbaar, opdrachtTekst, opdrachtPool, alleOpdrachten, kenAlliantiePuntenBonus, draagBijAanSeizoen, bedelUitkomst };
+if (process.env.KROKET_ROOKTEST) module.exports = { startStilleMissie, dagSleutel, stadKeuzes, voegToeAanArchief, regieKlok, voerOffer, voerBamischijfAanval, bouwDashboardData, voerDashboardActie, saveInstellingen, casinoOpen, regieTik, bouwRegieStand, voerIngreepUit, UITVOERDERS, regieStaat, bewaarRegie, stemZaak, sluitZaak, mogAutonoomPosten, werkdagenStil, casinoToegangReden, casinoMax, casinoPlafond, boekCasinoUitslag, sluitGeleKaartPoll, startGeleKaartPoll, voerDuel, voerEer, winkelPrijs, prijsRedenen, prijsToelichting, CRON_LABELS, geplandeCronMeta, BINGO_POOL, bouwDossierBlok, voerRitueelUit, raadpleegStaat, bewaarRaadpleeg, bouwAppHomeBlocks, bouwNaslagVenster, kapHomeBlocks, stemTribunaal, vollooiMissie, telActie, getMondayOfWeek, kiesOpdrachten, opdrachtHaalbaar, opdrachtTekst, opdrachtPool, alleOpdrachten, kenAlliantiePuntenBonus, draagBijAanSeizoen, bedelUitkomst, legDagstandVast };
 
 // Wat het dashboard over het casino laat zien (bouwDashboardData) en kan (/api/casino).
 function casinoDashboardData(naam) {
@@ -22104,6 +22117,7 @@ process.on('SIGINT',  () => gracefulShutdown('SIGINT'));
   // De luidruchtige inhaalslagen (weekkampioen, seizoensfinale) niet vóór 09:00. Is het nog
   // te vroeg, dan haalt de cron van 09:00 ze diezelfde ochtend alsnog in.
   await voerLuideInhaalslagen('opstart');
+  try { legDagstandVast(); } catch (err) { console.error('⚠️ Dagstand bij opstart mislukt:', err.message); }
   // Het wereldbord plaatsen of bijwerken zodat het gepinde bericht direct na een deploy klopt.
   try {
     await updateWereldbord(app.client, true);
