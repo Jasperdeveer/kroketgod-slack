@@ -38,8 +38,8 @@ harnas(async (h) => {
   let bl = home('UA');
   const [iKop, iVandaag, iBeurt, iVijand] = ['top_kop', 'top_vandaag', 'top_beurt', 'top_weekvijand'].map((p) => idx(bl, p));
   h.ok(iKop === 0 && iKop < iVandaag && iVandaag < iBeurt && iBeurt < iVijand, `volgorde kop < VANDAAG < UW BEURT < WEEKVIJAND (${iKop},${iVandaag},${iBeurt},${iVijand})`);
-  const iNaslag = bl.findIndex((b) => (b.elements || []).some((e) => String(e.action_id || '').startsWith('naslag_')));
-  h.ok(iNaslag > iVijand, 'de naslagknoppen staan onder de vaste bovenkant');
+  const iMenus = idx(bl, 'home_menus');
+  h.ok(iMenus > iVijand, 'de menu\'s staan onder de vaste bovenkant');
   const ids = bl.map((b) => b.block_id).filter(Boolean);
   h.ok(ids.length === new Set(ids).size, 'block_id\'s zijn uniek');
   h.ok(bl.slice(0, iVijand + 1).every((b) => String(b.block_id || '').startsWith('top_')), 'elk blok van de bovenkant draagt een top_-block_id');
@@ -146,7 +146,7 @@ harnas(async (h) => {
   bl = bouwAppHomeBlocks('UA', 'een melding', [{ type: 'section', text: { type: 'mrkdwn', text: 'extra' } }]);
   h.ok(idx(bl, 'top_melding') > idx(bl, 'top_kop') && idx(bl, 'top_melding') < idx(bl, 'top_vandaag') && tekst(bl).includes('een melding'), 'melding staat tussen kop en VANDAAG');
   h.ok(bl.slice(0, idx(bl, 'top_vandaag')).filter((b) => b.text?.text === 'extra').length === 1, 'extraBlocks staan boven VANDAAG');
-  h.ok(bl.length < 100, `blokken: ${bl.length}`);
+  h.ok(bl.length < 60, `blokken: ${bl.length}`);
   // 10. Een volle dag: alles tegelijk. De vaste bovenkant blijft compact en de view onder de Slack-grens.
   schoon();
   const poll = { actief: true, doelwitId: 'UE', aanklagerId: 'UF', reden: 'x', hadAlKaart: false, godStem: 'onterecht', bondgenootIds: [], gestart: nu, sluitTs: nu + 5 * MIN, kanaal: 'CKANAAL', berichtTs: '1' };
@@ -161,6 +161,110 @@ harnas(async (h) => {
     effecten: [{ id: 'dicht', soort: 'dicht', tot: nu + 60 * MIN, data: {} }, { id: `uitdaging_${nu}`, soort: 'uitdaging', tot: nu + 60 * MIN, data: { koploper: 'UA', hekkensluiter: 'UB', gebruikt: false } }] });
   bl = bouwAppHomeBlocks('UA', 'melding', [{ type: 'section', text: { type: 'mrkdwn', text: 'a' } }, { type: 'section', text: { type: 'mrkdwn', text: 'b' } }]);
   const topN = bl.filter((b) => String(b.block_id || '').startsWith('top_')).length;
-  h.ok(topN <= 40 && bl.length < 100, `volle dag: ${topN} bovenste blokken, ${bl.length} in totaal`);
+  h.ok(topN <= 40 && bl.length < 60, `volle dag: ${topN} bovenste blokken, ${bl.length} in totaal`);
   h.schrijf('personas.json', {});
+
+  // 11. De vijf menu's: elke optie opent een venster; de inventaris van de oude kaarten en knoppen.
+  schoon();
+  h.schrijf('verbanning.json', {});
+  bl = home('UA');
+  const menuBlok = bl.find((b) => b.block_id === 'home_menus');
+  const menuIds = (menuBlok?.elements || []).map((e) => e.action_id);
+  h.ok(JSON.stringify(menuIds) === JSON.stringify(['home_menu_spel', 'home_menu_recht', 'home_menu_status', 'home_menu_rijk', 'home_menu_commandos']), `vijf menu's in één actions-blok (${menuIds})`);
+  h.ok(menuBlok.elements.every((e) => e.type === 'static_select' && e.options.length <= 100 && e.options.every((o) => o.text.text.length <= 75)), 'menu\'s: static_select, opties binnen de limieten');
+  const na = alleIds(bl);
+  h.ok(!na.some((i) => /^naslag_|^home_cmd_kies_/.test(i)), 'geen naslagknoppen of losse commandoselects meer op de Home');
+  const t11 = tekst(bl);
+  for (const r of ['ACTIEF OP U', 'DE GASTEN VAN VANDAAG', 'DE ZEGEZAAL', 'DE BLADZIJDE', 'WAT ER TUSSEN U EN DE ANDEREN', 'SINDS UW LAATSTE BEZOEK', 'TRIBUNAAL DER VERGETELHEID']) if (t11.includes(r)) console.log('  nog aanwezig:', r);
+  h.ok(!/ACTIEF OP U|DE GASTEN VAN VANDAAG|DE ZEGEZAAL|DE BLADZIJDE|WAT ER TUSSEN U EN DE ANDEREN|SINDS UW LAATSTE BEZOEK|TRIBUNAAL DER VERGETELHEID/.test(t11), 'de oude kaarten staan niet meer op de Home');
+  const opties = (menu) => (menuBlok.elements.find((e) => e.action_id === `home_menu_${menu}`)?.options || []).map((o) => o.value);
+
+  const open = () => h.views.filter((v) => v.fn === 'open').at(-1)?.args;
+  const kies = async (menu, sleutel, user = 'UA') => {
+    h.views.length = 0;
+    await h.klik(`home_menu_${menu}`, user, {}, { trigger_id: 'TR', actions: [{ action_id: `home_menu_${menu}`, selected_option: { value: sleutel } }] });
+    return open();
+  };
+
+  // Inventaris: [oude kaart of knop, menu, sleutel, verwachte tekst in het venster]
+  const INVENTARIS = [
+    ['casino-stand/bonus/loterij (nieuw)', 'spel', 'casino', /Frituurloterij/],
+    ['veiling-kaart', 'spel', 'veiling', /Gouden Spatel/],
+    ['naslag Bingokaart', 'spel', 'bingokaart', /bingokaart/],
+    ['kroket van de dag (nieuw)', 'spel', 'kvdd', /Kroket van de Dag/],
+    ['gasten-kaart', 'spel', 'gasten', /Gast Een/],
+    ['naslag Aflatenhandel', 'spel', 'winkel', /Uw saldo/],
+    ['feature paarboek (bladzijde)', 'recht', 'bladzijde', /bladzijde/],
+    ['feature wrok', 'recht', 'wrok', /2× door/],
+    ['feature tribunaal', 'recht', 'tribunaal', /Beschuldigde/],
+    ['premie-kaart', 'recht', 'premie', /Premiejacht/],
+    ['verbonden (uit de kop)', 'recht', 'verbonden', /bondgenoten/i],
+    ['ACTIEF OP U', 'status', 'actief', /Horoscoop/],
+    ['feature statusmeldingen', 'status', 'sinds', /./],
+    ['naslag Voorrechten', 'status', 'voorrechten', /roem/],
+    ['naslag Relikwieën', 'status', 'relikwieen', /verworven/],
+    ['naslag/feature Titels', 'status', 'titels', /./],
+    ['naslag Ranglijst', 'rijk', 'ranglijst', /kroketpunten resetten/],
+    ['feature seizoenen', 'rijk', 'seizoen', /./],
+    ['Zegezaal-kaart en -naslag', 'rijk', 'zegezaal', /Voorgoed gevallen/],
+    ['naslag Galerij', 'rijk', 'galerij', /galerij/i],
+    ['naslag/feature Weefsel', 'rijk', 'weefsel', /./],
+    ['losse commando-selects', 'commandos', 'commandos', /home_cmd_kies_0/],
+  ];
+  schoon();
+  h.schrijf('veiling.json', { status: 'open', weekStart: getMondayOfWeek(), artefact: { naam: 'Gouden Spatel', uitleg: 'glanst' }, biedingen: [] });
+  h.schrijf('personas.json', { g1: { naam: 'Gast Een', actief: true, vertrekOp: nu + 3_600_000 } });
+  h.schrijf('kerfstok.json', { 'UB>UA': { kerven: 2 } });
+  h.schrijf('tribunaal.json', { fase: 'stemming', doelwitId: 'UE', stemmen: {}, dossier: { dagenStil: 9 }, sluitTs: nu + 3_600_000 });
+  h.schrijf('premie.json', { weekStart: getMondayOfWeek(), doelwitId: 'UB', bonus: 3 });
+  h.schrijf('raadpleeg.json', { datum: vandaagIso, leden: { UA: { horoscoop: { teken: 'Kroket', verbruikt: false } } }, heilige: null });
+  bl = home('UA');
+  const gedekt = new Set();
+  for (const [oud, menu, sleutel, verwacht] of INVENTARIS) {
+    h.ok(opties(menu).includes(sleutel), `inventaris: ${oud} -> menu ${menu}, optie ${sleutel}`);
+    const args = await kies(menu, sleutel);
+    const view = args?.view;
+    const inhoud = JSON.stringify(view?.blocks || []);
+    h.ok(args?.trigger_id === 'TR' && view?.type === 'modal' && view.callback_id === `naslag_${sleutel}` && view.title.text.length <= 24 && view.blocks.length >= 1 && view.blocks.length <= 100
+      && !inhoud.includes('kan dit blad even niet lichten') && verwacht.test(inhoud), `  venster ${sleutel} opent zonder fout met de verwachte inhoud`);
+    gedekt.add(sleutel);
+  }
+  // Elke menu-optie staat in de inventaris (er is geen optie zonder test).
+  const alleOpties = Object.keys({ spel: 1, recht: 1, status: 1, rijk: 1, commandos: 1 }).flatMap(opties);
+  h.ok(alleOpties.every((o) => gedekt.has(o)), `elke menu-optie is getest (${alleOpties.filter((o) => !gedekt.has(o))})`);
+  // De oude naslag_-knoppen van een verouderde Home werken nog.
+  h.views.length = 0;
+  await h.klik('naslag_winkel', 'UA', {}, { trigger_id: 'TR', actions: [{ action_id: 'naslag_winkel' }] });
+  h.ok(open()?.view?.callback_id === 'naslag_winkel', 'oude naslag_*-knop opent nog');
+  // Een ongeldige optie opent niets.
+  h.views.length = 0;
+  await h.klik('home_menu_spel', 'UA', {}, { trigger_id: 'TR', actions: [{ action_id: 'home_menu_spel', selected_option: { value: 'bestaatniet' } }] });
+  h.ok(!open(), 'onbekende menu-optie opent niets');
+  // De veiling is ook voor een verbannen lid bereikbaar, alleen-lezen (geen biedknoppen).
+  h.schrijf('verbanning.json', { UA: { tot: new Date(nu + 3_600_000).toISOString() } });
+  h.ok(opties('spel').includes('veiling') && home('UA').some((b) => b.block_id === 'home_menus'), 'verbannen: menu\'s blijven staan');
+  let vv = (await kies('spel', 'veiling'))?.view;
+  h.ok(/Gouden Spatel/.test(JSON.stringify(vv?.blocks)) && !/veiling_bied/.test(JSON.stringify(vv?.blocks)), 'verbannen: veilingvenster zonder biedknoppen');
+  h.schrijf('verbanning.json', {});
+  vv = (await kies('spel', 'veiling'))?.view;
+  h.ok(/veiling_bied_1/.test(JSON.stringify(vv?.blocks)), 'niet verbannen: veilingvenster heeft biedknoppen');
+
+  // 12. Het commandovenster: een keuze met velden schuift het formulier erbovenop, een zonder velden werkt zoals nu.
+  const cmdMenus = (await kies('commandos', 'commandos')).view.blocks.find((b) => b.block_id === 'home_cmd_menus').elements;
+  const metVeld = cmdMenus.flatMap((e) => e.options).find((o) => /\[/.test(o.value));
+  h.views.length = 0;
+  const kiesIdx = cmdMenus.findIndex((e) => e.options.includes(metVeld));
+  await h.klik(`home_cmd_kies_${kiesIdx}`, 'UA', {}, { trigger_id: 'TR', view: { type: 'modal', id: 'VCMD' }, actions: [{ action_id: `home_cmd_kies_${kiesIdx}`, selected_option: { value: metVeld.value } }] });
+  const push = h.views.find((v) => v.fn === 'push');
+  h.ok(push && push.args.view.callback_id === 'home_cmd_modal', 'commandovenster: formulier schuift erbovenop (views.push)');
+  h.views.length = 0;
+  await h.klik(`home_cmd_kies_${kiesIdx}`, 'UA', {}, { trigger_id: 'TR', actions: [{ action_id: `home_cmd_kies_${kiesIdx}`, selected_option: { value: metVeld.value } }] });
+  h.ok(h.views.some((v) => v.fn === 'open' && v.args.view.callback_id === 'home_cmd_modal'), 'vanuit de Home opent het formulier nog gewoon (views.open)');
+
+  // 13. kapHomeBlocks: eerst de menu's opofferen, nooit de bovenkant.
+  const { kapHomeBlocks } = h.index;
+  const top = Array.from({ length: 30 }, (_, i) => ({ type: 'divider', block_id: `top_x_${i}` }));
+  const rest = Array.from({ length: 90 }, (_, i) => ({ type: 'divider', block_id: `rest_${i}` }));
+  const kap = kapHomeBlocks([...top, ...rest, { type: 'actions', elements: [], block_id: 'v1' }, { type: 'context', elements: [], block_id: 'v2' }]);
+  h.ok(kap.length <= 100 && top.every((b) => kap.some((k) => k.block_id === b.block_id)) && kap.at(-1).block_id === 'v2' && kap.at(-2).block_id === 'v1', 'kapHomeBlocks: bovenkant en voet blijven, het midden gaat');
 });

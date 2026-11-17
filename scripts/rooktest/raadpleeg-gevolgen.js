@@ -77,5 +77,6 @@ harnas(async (h) => {
   // Home
   zetStaat({ UC: { biecht: { uitkomst: 'boete', boete: { actie: 'offer', tekst: 'breng een offer' }, voldaan: false } }, UA: { horoscoop: { teken: 'gunstig', verbruikt: false } } });
   h.ok(JSON.stringify(bouwAppHomeBlocks('UC')).includes('Boetedoening'), 'Home UC bevat Boetedoening');
-  h.ok(JSON.stringify(bouwAppHomeBlocks('UA')).includes('Horoscoop'), 'Home UA bevat Horoscoop');
+  // ACTIEF OP U is sinds de herindeling een venster achter het menu Mijn status.
+  h.ok(JSON.stringify(h.index.bouwNaslagVenster('actief', 'UA')).includes('Horoscoop'), 'Venster Actief op u (UA) bevat Horoscoop');
 });

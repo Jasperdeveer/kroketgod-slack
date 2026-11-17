@@ -14581,7 +14581,7 @@ async function voerRitueelUit(client, { userId, ritueel, rest, channelId, respon
 
 
 // De rooktests (scripts/rooktest/) komen zo bij de regisseur.
-if (process.env.KROKET_ROOKTEST) module.exports = { startStilleMissie, dagSleutel, stadKeuzes, voegToeAanArchief, regieKlok, voerOffer, voerBamischijfAanval, bouwDashboardData, voerDashboardActie, saveInstellingen, casinoOpen, regieTik, bouwRegieStand, voerIngreepUit, UITVOERDERS, regieStaat, bewaarRegie, stemZaak, sluitZaak, mogAutonoomPosten, werkdagenStil, casinoToegangReden, casinoMax, casinoPlafond, boekCasinoUitslag, sluitGeleKaartPoll, startGeleKaartPoll, voerDuel, voerEer, winkelPrijs, prijsRedenen, prijsToelichting, CRON_LABELS, geplandeCronMeta, BINGO_POOL, bouwDossierBlok, voerRitueelUit, raadpleegStaat, bewaarRaadpleeg, bouwAppHomeBlocks, stemTribunaal, vollooiMissie, telActie, getMondayOfWeek, kiesOpdrachten, opdrachtHaalbaar, opdrachtTekst, opdrachtPool, alleOpdrachten, kenAlliantiePuntenBonus, draagBijAanSeizoen, bedelUitkomst };
+if (process.env.KROKET_ROOKTEST) module.exports = { startStilleMissie, dagSleutel, stadKeuzes, voegToeAanArchief, regieKlok, voerOffer, voerBamischijfAanval, bouwDashboardData, voerDashboardActie, saveInstellingen, casinoOpen, regieTik, bouwRegieStand, voerIngreepUit, UITVOERDERS, regieStaat, bewaarRegie, stemZaak, sluitZaak, mogAutonoomPosten, werkdagenStil, casinoToegangReden, casinoMax, casinoPlafond, boekCasinoUitslag, sluitGeleKaartPoll, startGeleKaartPoll, voerDuel, voerEer, winkelPrijs, prijsRedenen, prijsToelichting, CRON_LABELS, geplandeCronMeta, BINGO_POOL, bouwDossierBlok, voerRitueelUit, raadpleegStaat, bewaarRaadpleeg, bouwAppHomeBlocks, bouwNaslagVenster, kapHomeBlocks, stemTribunaal, vollooiMissie, telActie, getMondayOfWeek, kiesOpdrachten, opdrachtHaalbaar, opdrachtTekst, opdrachtPool, alleOpdrachten, kenAlliantiePuntenBonus, draagBijAanSeizoen, bedelUitkomst };
 
 // Wat het dashboard over het casino laat zien (bouwDashboardData) en kan (/api/casino).
 function casinoDashboardData(naam) {
@@ -15477,7 +15477,6 @@ registreerFeature({
   naam: 'opdrachten',
   state: ['opdrachten.json', 'tellers.json'],
   help: [{ gebruik: '/kroketgod opdrachten', verwacht: 'uw dagelijkse en wekelijkse opdrachten met voortgang en beloning' }],
-  homeOrde: 20, // de opdrachten staan sinds de herindeling in UW BEURT (uwBeurtBlokken)
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -15567,7 +15566,6 @@ registreerFeature({
   naam: 'gunst',
   state: ['gunsten.json'],
   help: [{ gebruik: '/kroketgod gun [naam]', verwacht: 'geef een medelid één kroketpunt uit uw eigen beurs (max 2 per week)' }],
-  homeOrde: 9,
 });
 
 // Modal: aan wie gunt u iets. Eén klik is niet genoeg — je moet kiezen wie, en dat is precies
@@ -15767,7 +15765,7 @@ app.action(/^handdruk_/, async ({ ack, body, client }) => {
 app.action('sus_vete', async ({ ack, body, client }) => {
   await ack();
   const uitkomst = await susVete(client, body.user.id);
-  await publiceerAppHome(client, body.user.id, uitkomst.tekst);
+  await meldKnopUitkomst(client, body, uitkomst.tekst);
 });
 
 // ── 1. TITELS: exclusief bezit dat van eigenaar kan wisselen ───────────────────
@@ -18202,6 +18200,32 @@ registreerFeature({
 
 
 
+// Wat er op een lid actief is (titels, power-ups, horoscoop, voorspelling): het venster "Actief op u".
+function actiefOpURegels(userId) {
+  const troonKoning = readJSON('troon.json', { koningId: null }).koningId;
+  const profeet = readJSON('profeet.json', {});
+  const isProfeet = profeet.userId === userId && profeet.weekStart === getMondayOfWeek();
+  const eretitels = [];
+  if (troonKoning === userId) eretitels.push('👑 Frituurkoning — u ontvangt dagelijks kroontribuut');
+  if (isProfeet) eretitels.push(`🕊️ Profeet van de Frituur${profeet.zegenGebruikt ? ' (zegen vergeven)' : ' — u heeft nog één zegen'}`);
+  for (const p of getActievePowerups(userId)) {
+    if (p.item === 'vloek') continue; // een vloek op uzelf blijft een verrassing
+    const winkel = WINKEL_ITEMS[p.item];
+    const veiling = VEILING_POOL.find(a => a.key === p.item);
+    const rest = resterendeTijd(Math.max(0, p.tot - Date.now()));
+    if (winkel) eretitels.push(`${winkel.icoon} ${winkel.naam} — nog ${rest}`);
+    else if (veiling) eretitels.push(`🏺 ${veiling.naam} — nog ${rest}`);
+  }
+  const raadpleegLid = raadpleegStaat().leden[userId] || {};
+  if (raadpleegLid.horoscoop && !raadpleegLid.horoscoop.verbruikt) eretitels.push(`🔭 Horoscoop: ${raadpleegLid.horoscoop.teken} voor uw volgende duel vandaag`);
+  if (raadpleegLid.orakel?.tekst && !raadpleegLid.orakel.uitgekomen) eretitels.push(`🔮 Uw voorspelling: ${raadpleegLid.orakel.tekst.replace('{naam}', loadMembers()[raadpleegLid.orakel.doel]?.bijnaam || 'een lid')}`);
+  if (raadpleeg.heiligeVandaag(raadpleegStaat()) === userId) eretitels.push('😇 Heilige van de Dag — tot middernacht');
+  for (const t of titelsVan(userId)) {
+    eretitels.push(`${t.icoon} ${t.naam}${t.verdedigingen ? ` — ${t.verdedigingen}× verdedigd` : ''}`);
+  }
+  return eretitels;
+}
+
 // ══════════════════════════════════════════════════════════════════════════════
 // NASLAG — wat je opzóekt, niet wat je bekijkt
 // ══════════════════════════════════════════════════════════════════════════════
@@ -18364,7 +18388,155 @@ const NASLAG = {
         `${bingo.opdrachten.map((o, i) => `> ${i + 1}. ${o}${eigen.includes(i) ? ' ✅' : ''}`).join('\n')}\n\n_Claimen doet u met de knop op de Home-tab, of met_ \`/kroketgod bingo [nummer] [bewijs]\`` } }];
     },
   },
+
+  // ── Vensters achter de vijf menu's van de Home (zie MENU_VENSTERS) ──
+  casino: {
+    knop: '🎰 Casino', titel: 'Casino',
+    blocks: (userId) => {
+      const bonus = casinoBonusVandaag();
+      const lot = loterijStand(loadLoterij(), userId, dagSleutel());
+      return [
+        { type: 'section', text: { type: 'mrkdwn', text: `${casinoStand(userId)}${casinoOpen() ? '' : '\n_Het casino is nu dicht._'}${casinoWeekRegel()}` } },
+        { type: 'divider' },
+        { type: 'section', text: { type: 'mrkdwn', text:
+          `${bonus ? `🎁 *Bonus vandaag:* ${bonus} extra ${bonus === 1 ? 'spel' : 'spellen'} voor iedereen (max ${casinoLimiet()} per dag).\n` : ''}` +
+          `🎟️ *Frituurloterij:* de pot staat op *${lot.pot}* (${lot.loten} ${lot.loten === 1 ? 'lot' : 'loten'})` +
+          `${lot.mijnLoten ? `, u heeft er ${lot.mijnLoten}` : ''}. Trekking vrijdag 16:00; een lot kost ${LOT_PRIJS} punt in de lobby.` } },
+        { type: 'context', elements: [{ type: 'mrkdwn', text: 'Spelen doet u met de Casino-knop onder UW BEURT of met `/kroketgod casino`.' }] },
+      ];
+    },
+  },
+
+  veiling: {
+    knop: '🔨 Veiling', titel: 'De Grote Veiling',
+    blocks: (userId) => {
+      const v = readJSON('veiling.json', {});
+      const open = v.status === 'open' && v.weekStart === getMondayOfWeek() && (!v.sluitTs || Date.now() < v.sluitTs);
+      if (!open) return [{ type: 'section', text: { type: 'mrkdwn', text: '_Er loopt nu geen veiling._' } }];
+      const members = loadMembers();
+      const hoogste = [...(v.biedingen || [])].sort((a, b) => b.bod - a.bod)[0];
+      return [
+        { type: 'section', text: { type: 'mrkdwn', text:
+          `*${v.artefact?.naam || 'artefact'}* — _${v.artefact?.uitleg || ''}_\n` +
+          (hoogste ? `Hoogste bod: *${hoogste.bod}* door ${members[hoogste.userId]?.bijnaam || 'een volgeling'}${hoogste.userId === userId ? ' (u!)' : ''}` : 'Nog geen biedingen.') } },
+        ...(isVerbannen(userId) ? [] : [{ type: 'actions', elements: [
+          { type: 'button', text: { type: 'plain_text', text: '💰 Bied +1', emoji: true }, action_id: 'veiling_bied_1', style: 'primary' },
+          { type: 'button', text: { type: 'plain_text', text: '💎 Bied +3', emoji: true }, action_id: 'veiling_bied_3' },
+        ] }]),
+      ];
+    },
+  },
+
+  kvdd: {
+    knop: '🥖 Kroket van de Dag', titel: 'Kroket van de Dag',
+    blocks: (userId) => {
+      const k = loadKroketVanDeDag();
+      const gok = readJSON('kroketgok.json', {});
+      const vandaag = k?.ts && k.datum === new Date().toISOString().slice(0, 10);
+      if (!vandaag) return [{ type: 'section', text: { type: 'mrkdwn', text: '_Er is nog geen Kroket van de Dag. Hij wordt rond de middag gekozen._' } }];
+      const eigen = gok.ts === k.ts ? gok.gokken?.[userId] : null;
+      return [{ type: 'section', text: { type: 'mrkdwn', text:
+        `🥖 *${ontsnapMrkdwn(k.naam)}*\n${eigen ? `_U voorspelde: ${eigen === 'krokant' ? '🥖 krokant' : '💀 slap korstje'}._` : '_Voorspel het oordeel met de Gokken-knop onder UW BEURT; goed geraden levert +2 kroketpunten op._'}` } }];
+    },
+  },
+
+  gasten: {
+    knop: '🚪 Gasten', titel: 'Gasten van vandaag',
+    blocks: (userId) => {
+      const gasten = gastenVandaag();
+      const personas = loadPersonas();
+      const wensbaar = Object.entries(personas).filter(([, p]) => p?.naam && p.actief === false && !p.alleenVoorLid)
+        .sort(([, a], [, b]) => a.naam.localeCompare(b.naam, 'nl')).slice(0, 100);
+      const blocks = [{ type: 'section', text: { type: 'mrkdwn', text: gastenVandaagTekst(gasten) } }];
+      if (isVerbannen(userId) || !wensbaar.length) return blocks;
+      const wensen = readJSON('gastwensen.json', {}).wensen || {};
+      const optie = ([id, p]) => ({ text: { type: 'plain_text', text: p.naam.slice(0, 75) }, value: id });
+      const eigen = wensbaar.find(([id]) => id === wensen[userId]);
+      const [topId, topAantal] = Object.entries(telWensen(wensen)).sort(([, a], [, b]) => b - a)[0] || [];
+      blocks.push({ type: 'actions', elements: [{ type: 'static_select', action_id: 'gast_wens',
+        placeholder: { type: 'plain_text', text: '🎲 Wens een gast voor het lot' },
+        options: wensbaar.map(optie), ...(eigen ? { initial_option: optie(eigen) } : {}) }] });
+      blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text:
+        'Elke wens vergroot de kans dat het lot die gast bij de volgende werkdag meebrengt.' +
+        (eigen ? ` U wenst *${ontsnapMrkdwn(eigen[1].naam)}*.` : '') +
+        (personas[topId] ? ` Meest gewenst: ${ontsnapMrkdwn(personas[topId].naam)} (${topAantal}).` : '') }] });
+      return blocks;
+    },
+  },
+
+  // De kaarten van de features paarboek, wrok, tribunaal en seizoenen: de venster-variant van hun `home`.
+  bladzijde: { knop: '📖 De bladzijde', titel: 'De bladzijde', blocks: (u, ctx) => featureKaart('paarboek', ctx, 'Er staat niets op uw bladzijde. Wie niets doet, schrijft niets.') },
+  wrok: { knop: '🪵 Wrok', titel: 'Tussen u en de anderen', blocks: (u, ctx) => featureKaart('wrok', ctx) },
+  tribunaal: { knop: '⚖️ Tribunaal', titel: 'Tribunaal', blocks: (u, ctx) => featureKaart('tribunaal', ctx, '_Er loopt geen tribunaal en niets wijst erop dat er een komt._') },
+  seizoen: { knop: '🌍 Seizoen', titel: 'Het seizoen', blocks: (u, ctx) => featureKaart('seizoenen', ctx, '_Er loopt nu geen seizoen._') },
+
+  premie: {
+    knop: '🎯 Premie', titel: 'Premiejacht',
+    blocks: (userId) => {
+      const premie = readJSON('premie.json', {});
+      const members = loadMembers();
+      const tekst = premie.weekStart === getMondayOfWeek() && !premie.geind && members[premie.doelwitId]
+        ? (premie.doelwitId === userId
+          ? `🎯 *Er staat een premie van ${premie.bonus || 3} punten op ÚW hoofd.* Wie u verslaat in een duel, int hem.`
+          : `🎯 *Premiejacht:* op *${members[premie.doelwitId].bijnaam}* staat ${premie.bonus || 3} kroketpunten.`)
+        : '_Er staat deze week geen premie op iemands hoofd._';
+      return [{ type: 'section', text: { type: 'mrkdwn', text: tekst } }];
+    },
+  },
+
+  verbonden: {
+    knop: '🤝 Verbonden', titel: 'Verbonden',
+    blocks: (userId, ctx) => {
+      const ids = getBondgenotenRuw(userId).filter(id => ctx.members[id]);
+      return [{ type: 'section', text: { type: 'mrkdwn', text: ids.length
+        ? `🤝 ${ids.length > 1 ? 'Bondgenoten' : 'Bondgenoot'}: *${bijnamenVan(ids, ctx.members)}*${alliantiesActief() ? '' : ' — _verbonden zijn gepauzeerd_'}`
+        : '_U heeft geen bondgenoten._' } }];
+    },
+  },
+
+  actief: {
+    knop: '✨ Actief op u', titel: 'Actief op u',
+    blocks: (userId) => {
+      const regels = actiefOpURegels(userId);
+      return [{ type: 'section', text: { type: 'mrkdwn', text: regels.length ? regels.map(t => `> ${t}`).join('\n') : '_Er is niets actief op u._' } }];
+    },
+  },
+
+  sinds: { knop: '📬 Sinds uw laatste bezoek', titel: 'Sinds uw laatste bezoek', blocks: (u, ctx) => featureKaart('statusmeldingen', ctx, '_Sinds uw laatste bezoek is er niets veranderd._') },
+
+  commandos: {
+    knop: '📜 Alle commando\'s', titel: 'Alle commando\'s',
+    blocks: (userId) => [
+      { type: 'context', elements: [{ type: 'mrkdwn', text: 'Kies een commando; de Kroket God antwoordt in het kanaal of in een venster.' }] },
+      ...bouwMenuBlocks(homeCommandoMenus(userId)),
+    ],
+  },
 };
+
+// De vijf menu's op de Home. Elke optie is een sleutel in NASLAG (of een feature met homeVenster) en
+// opent dat venster; zo blijft er niets onbereikbaar. Optietekst max 75 tekens.
+const MENU_VENSTERS = {
+  spel: { plek: '🎮 Spellen', opties: ['casino', 'veiling', 'bingokaart', 'kvdd', 'gasten', 'winkel'] },
+  recht: { plek: '⚖️ Recht & Raad', opties: ['bladzijde', 'wrok', 'tribunaal', 'premie', 'verbonden'] },
+  status: { plek: '👤 Mijn status', opties: ['actief', 'sinds', 'voorrechten', 'relikwieen', 'titels'] },
+  rijk: { plek: '🏛️ Het Rijk', opties: ['ranglijst', 'seizoen', 'zegezaal', 'galerij', 'weefsel'] },
+  commandos: { plek: '📜 Alle commando\'s', opties: ['commandos'] },
+};
+
+function homeMenuBlok() {
+  return { type: 'actions', block_id: 'home_menus', elements: Object.entries(MENU_VENSTERS).map(([menu, m]) => ({
+    type: 'static_select', action_id: `home_menu_${menu}`,
+    placeholder: { type: 'plain_text', text: m.plek, emoji: true },
+    options: m.opties.map(sleutel => ({ text: { type: 'plain_text', text: String(naslagIngang(sleutel)?.knop || sleutel).slice(0, 75), emoji: true }, value: sleutel })),
+  })) };
+}
+
+// De kaart die een feature vroeger op de Home zette, nu als venster; `leeg` als hij niets levert.
+function featureKaart(naam, ctx, leeg = null) {
+  const f = FEATURES.find(x => x.naam === naam && typeof x.home === 'function');
+  const blocks = (f && f.home(ctx)) || [];
+  return blocks.length || !leeg ? blocks : [{ type: 'section', text: { type: 'mrkdwn', text: leeg } }];
+}
 
 // Features mogen hun eigen naslag-venster meebrengen: `homeKnop` + `homeVenster(ctx)` in
 // registreerFeature. Zo hoeft een feature die alleen naslag is (het wereldbord) geen ruimte
@@ -18375,16 +18547,6 @@ function naslagIngang(sleutel) {
   const f = FEATURES.find(f => f.naam === sleutel && typeof f.homeVenster === 'function');
   if (!f) return null;
   return { knop: f.homeKnop || f.naam, titel: f.homeKnopTitel || f.homeKnop || f.naam, blocks: (userId, ctx) => f.homeVenster(ctx) };
-}
-
-// Alle naslag-knoppen: de vaste ingangen plus wat features aandragen, in homeOrde.
-function naslagKnoppen() {
-  const vast = Object.keys(NASLAG);
-  const uitFeatures = [...FEATURES]
-    .filter(f => typeof f.homeVenster === 'function' && f.homeKnop)
-    .sort((a, b) => (a.homeOrde ?? 50) - (b.homeOrde ?? 50))
-    .map(f => f.naam);
-  return [...vast, ...uitFeatures];
 }
 
 function bouwNaslagVenster(sleutel, userId, melding = '') {
@@ -18672,27 +18834,6 @@ function bouwAppHomeBlocks(userId, melding = '', extraBlocks = []) {
   const positie = gesorteerd.findIndex(([id]) => id === userId) + 1;
   const vandaagKey = new Intl.DateTimeFormat('nl-NL', { timeZone: 'Europe/Amsterdam' }).format(new Date());
 
-  const troonKoning = readJSON('troon.json', { koningId: null }).koningId;
-  const profeet = readJSON('profeet.json', {});
-  const isProfeet = profeet.userId === userId && profeet.weekStart === getMondayOfWeek();
-  const eretitels = [];
-  if (troonKoning === userId) eretitels.push('👑 Frituurkoning — u ontvangt dagelijks kroontribuut');
-  if (isProfeet) eretitels.push(`🕊️ Profeet van de Frituur${profeet.zegenGebruikt ? ' (zegen vergeven)' : ' — u heeft nog één zegen'}`);
-  for (const p of getActievePowerups(userId)) {
-    if (p.item === 'vloek') continue; // een vloek op uzelf blijft een verrassing
-    const winkel = WINKEL_ITEMS[p.item];
-    const veiling = VEILING_POOL.find(a => a.key === p.item);
-    const rest = resterendeTijd(Math.max(0, p.tot - Date.now()));
-    if (winkel) eretitels.push(`${winkel.icoon} ${winkel.naam} — nog ${rest}`);
-    else if (veiling) eretitels.push(`🏺 ${veiling.naam} — nog ${rest}`);
-  }
-  const raadpleegLid = raadpleegStaat().leden[userId] || {};
-  if (raadpleegLid.horoscoop && !raadpleegLid.horoscoop.verbruikt) eretitels.push(`🔭 Horoscoop: ${raadpleegLid.horoscoop.teken} voor uw volgende duel vandaag`);
-  if (raadpleegLid.orakel?.tekst && !raadpleegLid.orakel.uitgekomen) eretitels.push(`🔮 Uw voorspelling: ${raadpleegLid.orakel.tekst.replace('{naam}', loadMembers()[raadpleegLid.orakel.doel]?.bijnaam || 'een lid')}`);
-  if (raadpleeg.heiligeVandaag(raadpleegStaat()) === userId) eretitels.push('😇 Heilige van de Dag — tot middernacht');
-  for (const t of titelsVan(userId)) {
-    eretitels.push(`${t.icoon} ${t.naam}${t.verdedigingen ? ` — ${t.verdedigingen}× verdedigd` : ''}`);
-  }
   const bondgenoten = getBondgenotenRuw(userId).filter(id => members[id]);
   const verbannen = isVerbannen(userId);
   const eigenRoem = roem[userId] || 0;
@@ -18742,84 +18883,8 @@ function bouwAppHomeBlocks(userId, melding = '', extraBlocks = []) {
   topGroep('beurt', uwBeurtBlokken(userId, Date.now()));
   topGroep('weekvijand', weekvijandBlokken(userId, verbannen));
 
-  // ── Wat er op u actief is ──
-  if (eretitels.length) {
-    blocks.push({ type: 'divider' });
-    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: `*ACTIEF OP U*\n${eretitels.map(t => `> ${t}`).join('\n')}` } });
-  }
-
-  // ── De gasten van vandaag: wie er is, wie vertrekt (vasthouden) en een wens voor het lot ──
-  const gastenNu = gastenVandaag();
-  const personasNu = loadPersonas();
-  const wensbaar = Object.entries(personasNu).filter(([, p]) => p?.naam && p.actief === false && !p.alleenVoorLid)
-    .sort(([, a], [, b]) => a.naam.localeCompare(b.naam, 'nl')).slice(0, 100);
-  if (gastenNu.length || wensbaar.length) {
-    blocks.push(...homeKaartKop('🚪 DE GASTEN VAN VANDAAG'));
-    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: gastenVandaagTekst(gastenNu) } });
-    if (!verbannen) {
-      const elementen = []; // de vasthoudknoppen staan in UW BEURT
-      const wensen = readJSON('gastwensen.json', {}).wensen || {};
-      const optie = ([id, p]) => ({ text: { type: 'plain_text', text: p.naam.slice(0, 75) }, value: id });
-      const eigen = wensbaar.find(([id]) => id === wensen[userId]);
-      if (wensbaar.length) elementen.push({ type: 'static_select', action_id: 'gast_wens',
-        placeholder: { type: 'plain_text', text: '🎲 Wens een gast voor het lot' },
-        options: wensbaar.map(optie), ...(eigen ? { initial_option: optie(eigen) } : {}) });
-      if (elementen.length) blocks.push({ type: 'actions', elements: elementen });
-      const [topId, topAantal] = Object.entries(telWensen(wensen)).sort(([, a], [, b]) => b - a)[0] || [];
-      blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text:
-        'Elke wens vergroot de kans dat het lot die gast bij de volgende werkdag meebrengt.' +
-        (eigen ? ` U wenst *${ontsnapMrkdwn(eigen[1].naam)}*.` : '') +
-        (personasNu[topId] ? ` Meest gewenst: ${ontsnapMrkdwn(personasNu[topId].naam)} (${topAantal}).` : '') }] });
-    }
-  }
-
-  const premie = readJSON('premie.json', {});
-  if (premie.weekStart === getMondayOfWeek() && !premie.geind && members[premie.doelwitId]) {
-    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: premie.doelwitId === userId
-      ? `🎯 *Er staat een premie van ${premie.bonus || 3} punten op ÚW hoofd.* Wie u verslaat in een duel, int hem.`
-      : `🎯 *Premiejacht:* op *${members[premie.doelwitId].bijnaam}* staat ${premie.bonus || 3} kroketpunten.` } });
-  }
-
-  // ── De Zegezaal ───────────────────────────────────────────────────────────
-  // Een erelijst van gevelde snacks. Staat bewust OP de tab en niet alleen achter een knop: dit
-  // is het enige blijvende bewijs dat het genootschap samen iets heeft afgemaakt, en een trofee
-  // die je moet opzoeken is geen trofee. Afgekapt op de vijf recentste; de rest achter de knop.
-  if (Object.keys(loadVerslagen()).length) {
-    blocks.push(...homeKaartKop('🏛️ DE ZEGEZAAL'));
-    blocks.push(...zegezaalBlocks({ limiet: 5 }));
-  }
-
-  // ── Secties die features zelf aanleveren ──
-  // Alleen nog features die iets LOPENDS of iets ACTIONABELS melden. Wie naslag is, levert
-  // `homeVenster` + `homeKnop` en verschijnt hieronder als knop in plaats van als kaart.
-  const featureCtx = { userId, members, lid, verbannen, scores, eigenScore, vandaagKey };
-  for (const f of [...FEATURES].sort((a, b) => (a.homeOrde ?? 50) - (b.homeOrde ?? 50))) {
-    if (typeof f.home !== 'function') continue;
-    try {
-      const eigen = f.home(featureCtx);
-      if (Array.isArray(eigen) && eigen.length) blocks.push(...eigen);
-    } catch (err) {
-      console.error(`⚠️ App Home-sectie van feature "${f.naam}" faalde:`, err.message);
-    }
-  }
-
-  // ── Naslag ────────────────────────────────────────────────────────────────
-  // Eén rij knoppen in plaats van vijf uitgeklapte kaarten. Slack staat 25 elementen per
-  // actions-blok toe; we zitten daar ruim onder, maar knippen voor de zekerheid in rijen van
-  // vijf zodat de rij op een telefoon niet in één streep verdwijnt.
-  const knopSleutels = naslagKnoppen();
-  for (let i = 0; i < knopSleutels.length; i += 5) {
-    blocks.push({ type: 'actions', elements: knopSleutels.slice(i, i + 5).map(sleutel => ({
-      type: 'button',
-      text: { type: 'plain_text', text: String(naslagIngang(sleutel)?.knop || sleutel).slice(0, 75), emoji: true },
-      action_id: `naslag_${sleutel}`,
-    })) });
-  }
-
-  // ── Alle commando's (uit het centrale register, zie lib/commandoregister.js) ──
-  // Eén rij keuzemenu's, één per categorie. Een nieuw commando in het register staat hier vanzelf.
-  blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: '*📜 Alle commando\'s* — kies er een; de Kroket God antwoordt in het kanaal of hier bovenaan.' }] });
-  blocks.push(...bouwMenuBlocks(homeCommandoMenus(userId)));
+  // ── De vijf menu's: elke keuze opent een venster (naslag), zie MENU_VENSTERS ──
+  blocks.push(homeMenuBlok());
 
   blocks.push({ type: 'actions', elements: [
     { type: 'button', text: { type: 'plain_text', text: '🔄 Verversen', emoji: true }, action_id: 'home_verversen' },
@@ -18829,13 +18894,17 @@ function bouwAppHomeBlocks(userId, melding = '', extraBlocks = []) {
   return blocks;
 }
 
-// Slack weigert een Home-view met meer dan 100 blokken in zijn geheel. Liever het staartje
-// kwijt dan een lege Home-tab.
+// Slack weigert een Home-view met meer dan 100 blokken in zijn geheel. Liever het menu kwijt dan
+// een lege Home-tab; de vaste bovenkant (block_id `top_...`) gaat altijd voor.
 function kapHomeBlocks(blocks) {
   if (blocks.length <= 100) return blocks;
   console.warn(`⚠️ App Home had ${blocks.length} blokken — afgekapt op 100`);
-  // De laatste twee blokken (verversknop + voetnoot) blijven altijd staan.
-  return [...blocks.slice(0, 97), { type: 'context', elements: [{ type: 'mrkdwn', text: '_(De Home-tab is te vol; een deel is weggelaten.)_' }] }, ...blocks.slice(-2)];
+  const top = blocks.reduce((m, b, i) => (String(b.block_id || '').startsWith('top_') ? i : m), -1);
+  // Kop t/m laatste top-blok blijft, de laatste twee blokken (verversknop + voetnoot) ook; de rest ertussen (menu) is opoffer.
+  const kop = blocks.slice(0, Math.min(top + 1, 97));
+  const staart = blocks.slice(-2);
+  const midden = blocks.slice(top + 1, -2).slice(0, Math.max(0, 97 - kop.length));
+  return [...kop, ...midden, { type: 'context', elements: [{ type: 'mrkdwn', text: '_(De Home-tab is te vol; een deel is weggelaten.)_' }] }, ...staart];
 }
 
 // Noodschakelaar voor het beeld in de galerij-kaart. Een image-block met een slack_file-id is geldig
@@ -18945,14 +19014,14 @@ async function meldKnopUitkomst(client, body, tekst) {
 
 // Eén handler voor élk naslag-venster: de sleutel zit in de action_id. Zo hoeft een nieuwe
 // naslag-ingang (of een feature met homeVenster) geen eigen handler te registreren.
-app.action(/^naslag_/, async ({ ack, body, client }) => {
-  await ack();
+async function openNaslag(client, body, sleutel) {
   try {
-    const sleutel = String(body.actions?.[0]?.action_id || '').replace(/^naslag_/, '');
     const naam = loadMembers()[body.user?.id]?.bijnaam || body.user?.id;
     console.log(`📖 Naslag "${sleutel}" geopend door ${naam}`);
+    // Vanuit een venster (een knop in de ene naslag die een ander opent) schuift het nieuwe erbovenop.
+    const open = (view) => client.views[body.view?.type === 'modal' ? 'push' : 'open']({ trigger_id: body.trigger_id, view });
     try {
-      await client.views.open({ trigger_id: body.trigger_id, view: bouwNaslagVenster(sleutel, body.user.id) });
+      await open(bouwNaslagVenster(sleutel, body.user.id));
     } catch (err) {
       // Zelfde noodrem als bij de Home-tab: één verdwenen afbeelding (een Zegezaal-portret, het
       // galerijbeeld) laat Slack de héle view weigeren. Zonder deze tak gaat het venster dan
@@ -18960,9 +19029,28 @@ app.action(/^naslag_/, async ({ ack, body, client }) => {
       if (GALERIJ_BEELD_UIT.aan) throw err;
       GALERIJ_BEELD_UIT.aan = true;
       console.warn(`   → venster "${sleutel}" geweigerd (${err.data?.error || err.message}); opnieuw zonder afbeeldingen.`);
-      await client.views.open({ trigger_id: body.trigger_id, view: bouwNaslagVenster(sleutel, body.user.id) });
+      await open(bouwNaslagVenster(sleutel, body.user.id));
     }
   } catch (err) { console.error('Fout bij openen naslag-venster:', err.data?.error || err.message); }
+}
+
+// Eén handler voor élk naslag-venster: de sleutel zit in de action_id. Zo hoeft een nieuwe
+// naslag-ingang (of een feature met homeVenster) geen eigen handler te registreren.
+// (Oude Home-weergaven hebben deze knoppen nog; de nieuwe Home gebruikt de menu's hieronder.)
+app.action(/^naslag_/, async ({ ack, body, client }) => {
+  await ack();
+  await openNaslag(client, body, String(body.actions?.[0]?.action_id || '').replace(/^naslag_/, ''));
+});
+
+// De vijf menu's van de Home: de gekozen optie is de sleutel van het venster.
+app.action(/^home_menu_(spel|recht|status|rijk|commandos)$/, async ({ ack, body, client }) => {
+  await ack();
+  const menu = String(body.actions?.[0]?.action_id || '').replace(/^home_menu_/, '');
+  const sleutel = body.actions?.[0]?.selected_option?.value;
+  if (!MENU_VENSTERS[menu]?.opties.includes(sleutel)) return;
+  await openNaslag(client, body, sleutel);
+  // Menu's terugzetten: een menu dat op "casino" blijft staan, vuurt geen actie meer af bij dezelfde keuze.
+  await publiceerAppHome(client, body.user.id);
 });
 
 const raidKnop = (metOffer) => async ({ ack, body, client }) => {
@@ -19503,7 +19591,7 @@ app.action('open_bede', async ({ ack, body, client }) => {
   try {
     const z = loadZwart();
     const doelNaam = loadMembers()[z.tegenId]?.bijnaam || 'degene die u dit aandeed';
-    await client.views.open({
+    await client.views[body.view?.type === 'modal' ? 'push' : 'open']({
       trigger_id: body.trigger_id,
       view: {
         type: 'modal', callback_id: 'modal_bede',
@@ -19615,7 +19703,7 @@ function homeCommandoMenus(userId) {
 // `sjabloon` is het commando zoals het in het menu staat (bv. `eer [namen] (voor [reden])`). Alleen
 // dát gaat de log in, nooit de ingevulde tekst: die kan van alles bevatten, tot en met een tikfout
 // in de geheime fortuin-code, en de console op de server is geen plek voor vrije invoer.
-async function voerHomeCommandoUit(client, userId, tekst, triggerId, sjabloon = null) {
+async function voerHomeCommandoUit(client, userId, tekst, triggerId, sjabloon = null, viewId = null) {
   const antwoorden = [];
   const blokken = [];
   // Opvang voor respond(): een ephemeral in het kanaal ziet wie in de Home-tab kijkt niet, dus
@@ -19639,6 +19727,15 @@ async function voerHomeCommandoUit(client, userId, tekst, triggerId, sjabloon = 
     ? antwoorden.join('\n\n')
     : (blokken.length ? '' : `_\`${tekst}\` is uitgevoerd. Het antwoord van de Kroket God staat in het kanaal._`);
   await publiceerAppHome(client, userId, melding, blokken);
+  // Vanuit het commandovenster: het venster zelf wordt het antwoord, want de Home eronder ziet de gebruiker niet.
+  if (viewId) {
+    try {
+      await client.views.update({ view_id: viewId, view: {
+        type: 'modal', title: { type: 'plain_text', text: 'De Kroket God antwoordt' }, close: { type: 'plain_text', text: 'Sluiten' },
+        blocks: [...(melding ? [{ type: 'section', text: { type: 'mrkdwn', text: kapTekst(melding, 3000) } }] : []), ...blokken.slice(0, 20)]
+          .concat([{ type: 'context', elements: [{ type: 'mrkdwn', text: 'Dit antwoord staat ook bovenaan de Home-tab.' }] }]) } });
+    } catch (err) { console.log(`↩️ Commandovenster niet bijgewerkt (${err.data?.error || err.message}).`); }
+  }
 }
 
 // Keuze in een categoriemenu: zonder velden meteen uitvoeren, anders het formulier openen.
@@ -19653,11 +19750,12 @@ app.action(/^home_cmd_kies_\d+$/, async ({ ack, body, client }) => {
       return;
     }
     if (!heeftVelden(sjabloon)) {
-      await voerHomeCommandoUit(client, userId, sjabloon, body.trigger_id, sjabloon);
+      await voerHomeCommandoUit(client, userId, sjabloon, body.trigger_id, sjabloon, body.view?.type === 'modal' ? body.view.id : null);
       return;
     }
     const maxLeden = /^eer\b/.test(sjabloon) ? Math.max(1, eerLimiet(userId) - telEerVandaag(userId)) : 10;
-    await client.views.open({
+    // Vanuit het commandovenster schuift het formulier erbovenop (views.push); vanuit de Home opent het.
+    await client.views[body.view?.type === 'modal' ? 'push' : 'open']({
       trigger_id: body.trigger_id,
       view: bouwCommandoModal(sjabloon, optie.uitleg, medeledenOpties(userId), maxLeden),
     });
@@ -19668,7 +19766,7 @@ app.action(/^home_cmd_kies_\d+$/, async ({ ack, body, client }) => {
 });
 
 app.view('home_cmd_modal', async ({ ack, body, view, client }) => {
-  await ack();
+  await ack({ response_action: 'clear' }); // sluit ook het commandovenster eronder
   try {
     const members = loadMembers();
     const waarden = leesModalWaarden(view.private_metadata, view.state.values, id => members[id]?.bijnaam || id);
@@ -19929,7 +20027,6 @@ registreerFeature({
   help: [
     { gebruik: '/kroketgod zegezaal', verwacht: 'de voorgoed gevallen weekvijanden — wie is geveld, wanneer, en door wie' },
   ],
-  homeOrde: 18,
   // Bewust GEEN home-kaart: die toonde de levenspunten van de lopende raid uit bamischijf.json,
   // precies wat de raidkaart in bouwAppHomeBlocks al toont — twee kaarten met dezelfde HP onder
   // elkaar op één scherm. De wrok-regel en de Zegezaal-teller zijn naar die ene kaart verhuisd.
