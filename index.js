@@ -14093,7 +14093,7 @@ function bouwRegieStand(nu = Date.now()) {
     raid: {
       actief: !!raid.actief && raid.hp > 0, hp: raid.hp || 0, maxHp: raid.maxHp || 0,
       strijders: Object.keys(raid.strijders || {}).length, leden: vechtbareLeden().length,
-      extraAanvalVandaag: raid.extraAanval === dag, // vorm van raid.extraAanval legt de taak "extra aanvalsdag" vast
+      extraAanvalVandaag: raid.extraAanval === new Intl.DateTimeFormat('nl-NL', { timeZone: 'Europe/Amsterdam' }).format(new Date(nu)), // sleutel zoals de raid hem schrijft
     },
     kanaal: { laatsteLidBerichtMs: Math.max(0, ...berichten) || null },
     archiefKandidaat: entriesTussen({ soort: 'lid', van: nu - 33 * DAG_MS, tot: nu - 27 * DAG_MS, max: 3000 })
@@ -14129,7 +14129,9 @@ async function voerIngreepUit(client, keuze, stand, nu = Date.now()) {
     (straf ? 'Dit is een straf: noem de reden uitdrukkelijk.\n' : '') +
     'Voeg geen punten, namen of feiten toe die hierboven niet staan.';
   const tekst = await kroketResponseMetVangnet(prompt, 200, false, vangnet, 'licht');
-  await postToChannel(client, KANAAL(), tekst, uit.knoppen ? { knoppen: uit.knoppen } : {});
+  // Het effect is al gebeurd: boeken gaat altijd door, ook als de post faalt (anders komt dezelfde ingreep terug).
+  try { await postToChannel(client, KANAAL(), tekst, uit.knoppen ? { knoppen: uit.knoppen } : {}); }
+  catch (err) { console.error(`Fout bij het aankondigen van ${ingreep.id}:`, err?.message || err); }
   bewaarRegie(regie.boek(regieStaat(), keuze, { nu }));
   logAudit('regie', `${ingreep.id}${keuze.doel ? ` -> ${doelNaam}` : ''}${keuze.punten ? ` (${keuze.punten > 0 ? '+' : ''}${keuze.punten})` : ''}: ${reden || ''}`);
   return uit;

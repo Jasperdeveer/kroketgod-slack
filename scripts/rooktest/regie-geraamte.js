@@ -33,4 +33,12 @@ harnas(async (h) => {
   // 4. Een tweede geforceerde tik telt de bonus erbij op (3 + 3), na de afkoeltijd van een dag.
   await regieTik(h.client, { forceer: true, nu: MAANDAG_13 + 25 * 3_600_000 });
   h.ok(bonus() === 6, 'een latere tik leest de bonus van vandaag en telt erbij op');
+
+  // 5. Faalt de post, dan is het effect toch geboekt: een tweede tik stapelt de bonus niet.
+  h.schrijf('casinobonus.json', {}); h.schrijf('regie.json', { schatkist: 0, effecten: [], log: [], verrassing: null });
+  h.schakel.faalPost = true;
+  await regieTik(h.client, { forceer: true, nu: MAANDAG_13 });
+  await regieTik(h.client, { forceer: true, nu: MAANDAG_13 + 60_000 });
+  h.schakel.faalPost = false;
+  h.ok(bonus() === 3 && log().length === 1, `mislukte post: bonus blijft +3 (${bonus()}) en regie.json heeft een logregel (${log().length})`);
 });
