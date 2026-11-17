@@ -92,6 +92,7 @@ const saveDaglimieten = (d) => writeJSON('daglimieten.json', d);
 registreerFeature({ naam: 'daglimieten', state: ['daglimieten.json'] });
 registreerFeature({ naam: 'puntenhistorie', state: ['puntenhistorie.json'] });
 const puntenhistorie = require('./lib/puntenhistorie.js');
+const { bouwReeksen } = require('./lib/dashboardreeksen.js');
 const loadGunsten = () => readJSON('gunsten.json', {});
 const saveGunsten = (d) => writeJSON('gunsten.json', d);
 
@@ -10241,7 +10242,9 @@ planCron('45 23 * * 0', async () => {
 
 // Dagstanden: elke dag 23:55 (Amsterdam) de weekscore per lid vastleggen, ook zondag (vóór de reset van 23:59).
 function legDagstandVast() {
-  const staat = puntenhistorie.legDagstandVast(readJSON('puntenhistorie.json', {}), dagSleutel(), loadScores());
+  const raid = readJSON('bamischijf.json', {});
+  const raidStand = raid.actief && Number.isFinite(raid.hp) ? { key: raid.weekStart || raid.vijand?.key, hp: raid.hp, maxHp: raid.maxHp } : null;
+  const staat = puntenhistorie.legDagstandVast(readJSON('puntenhistorie.json', {}), dagSleutel(), loadScores(), { schatkist: regieStaat().schatkist, raid: raidStand });
   writeJSON('puntenhistorie.json', puntenhistorie.ruimOp(staat, Date.now()));
 }
 planCron('55 23 * * *', () => {
@@ -11276,6 +11279,7 @@ async function voerBamischijfAanval(client, userId, metOffer) {
   const puntenTekst = `${genomen} kroketpunt${genomen === 1 ? '' : 'en'}`;
   const werdRazend = !wasRazend && isRazend(raid, gave);
   raid.log = [...(raid.log || []), { naam: bijnaam, schade, offer: metOffer, terug: genomen, wapen: wapenKey }].slice(-10);
+  if (wapenKey) raid.wapenTelling = { ...raid.wapenTelling, [wapenKey]: (raid.wapenTelling?.[wapenKey] || 0) + 1 }; // voor de dashboardgrafiek (log houdt er maar tien)
   const kanaal = raid.kanaal || process.env.SLACK_CHANNEL_ID;
   // De GIF van deze klap (lib/vijandbeeld.js). `gave` en niet `wapen.gave`: ook als het wapen zijn
   // gave brak, hoort de banier te zeggen welke ("door het pantser").
@@ -21504,6 +21508,23 @@ function bouwRegieDashboard(nu) {
   };
 }
 
+// De strook "Nu bezig" boven de dashboardtabs: alleen een samenvatting van bestaande state.
+function bouwNuBezig(nu, regieData, gokpauzes) {
+  const raid = readJSON('bamischijf.json', {});
+  const veiling = readJSON('veiling.json', {});
+  const trib = readJSON('tribunaal.json', null);
+  const kaart = loadGeleKaartPoll();
+  const raidActief = !!(raid.actief && raid.hp > 0);
+  return {
+    regie: { niveau: regieData.niveau, schatkist: regieData.schatkist, ingrepenVandaag: regieData.vandaag.length, effecten: regieData.effecten, verrassing: regieData.verrassing, zaak: regieData.zaak },
+    raid: { actief: raidActief, naam: raidActief ? (raid.vijand?.naam || 'de weekvijand') : null, hp: raidActief ? raid.hp : 0, maxHp: raidActief ? raid.maxHp : 0 },
+    veiling: { open: veiling.status === 'open' && (!veiling.sluitTs || veiling.sluitTs > nu) },
+    tribunaal: { fase: trib && trib.fase !== 'afgerond' ? trib.fase : null },
+    gelekaart: { actief: !!kaart?.actief, sluitTs: kaart?.actief ? kaart.sluitTs : null },
+    gokpauzes,
+  };
+}
+
 async function bouwDashboardData() {
   // Verse Groq-meting als de snapshot ouder is dan 5 min (anders cache gebruiken).
   if (!laatsteGroqQuota || Date.now() - laatsteGroqQuota.ts > 5 * 60_000) {
@@ -21704,12 +21725,14 @@ async function bouwDashboardData() {
   };
 
   const stemming = getDagelijkseStemming();
+  const regieDash = bouwRegieDashboard(nu);
   return {
     ingepland,
     winkel,
     spel,
     instellingen: loadInstellingen(),
-    regie: bouwRegieDashboard(nu),
+    regie: regieDash,
+    nuBezig: bouwNuBezig(nu, regieDash, spel.casino.gokpauze.filter((g) => g.rustdag).length),
     // Geen scheveKansen-veld meer: de eigenaar wil de kansmechaniek nergens vermeld hebben, dus hij
     // staat ook niet in deze API. Zie de noot bij getGeluk — dat is een bewuste keuze, geen omissie.
     stemmingOpties: STEMMINGEN.map(s => s.naam),
@@ -21741,6 +21764,23 @@ async function bouwDashboardData() {
       voorraad: voorraadStand(),
     },
     grafieken,
+    reeksen: (() => {
+      const leesVeilig = (f, leeg) => { try { return readJSON(f, leeg); } catch (_) { return leeg; } }; // kapot bestand = lege reeks
+      return bouwReeksen({
+      nu, naam,
+      itemNaam: (k) => WINKEL_ITEMS[k]?.naam,
+      wapenNaam: (k) => WAPENS[k]?.naam,
+      schatkistNu: regieDash.schatkist,
+      puntenhistorie: leesVeilig('puntenhistorie.json', {}),
+      regie: regieStaat(),
+      geleKaarten: leesVeilig('geleKaarten.json', {}),
+      berichten: (() => { try { return entriesTussen({ soort: 'lid', van: nu - 28 * DAG_MS, max: 50000 }); } catch (_) { return []; } })(),
+      winkel: { items: winkelHistItems },
+      casinostats: leesVeilig('casinostats.json', {}),
+      raid: leesVeilig('bamischijf.json', {}),
+      llmstats: leesVeilig('llmstats.json', { dagen: {} }),
+      });
+    })(),
     activiteit: (week.events || []).slice(-30).reverse()
       .map(e => ({ ts: e.ts, type: e.type, naam: e.userId ? naam(e.userId) : null, actorNaam: e.actorId ? naam(e.actorId) : null, beschrijving: e.beschrijving })),
     llmstats: readJSON('llmstats.json', { dagen: {} }),
