@@ -66,4 +66,29 @@ harnas(async (h) => {
   h.ok(/geen/.test(await voerDashboardActie('regieZaakStop')), 'zonder zaak: melding');
   const html = require('fs').readFileSync(require('path').join(__dirname, '../../dashboard.html'), 'utf8');
   h.ok(/regieZaakStop\(\)/.test(html) && /rg\.zaak/.test(html), 'dashboard.html toont de zaak met een beëindig-knop');
+
+  // D1: de strook "Nu bezig" (samenvatting van bestaande state) en zijn knoppen.
+  const t0 = Date.now();
+  d = await bouwDashboardData();
+  h.ok(d.nuBezig && d.nuBezig.regie && d.nuBezig.raid.actief === false && d.nuBezig.veiling.open === false && d.nuBezig.tribunaal.fase === null && d.nuBezig.gelekaart.actief === false && d.nuBezig.gokpauzes === 0, `nuBezig leeg: ${JSON.stringify(d.nuBezig)}`);
+  bewaarRegie({ ...regieStaat(), schatkist: 4, effecten: [{ id: 'dicht', soort: 'dicht', tot: t0 + 3_600_000, data: {} }],
+    verrassing: { id: 'puntenregen', start: t0, tot: t0 + 3_600_000, kanaal: 'CKANAAL', ts: '1.1', data: { gehad: [] } },
+    zaak: { id: 'zaak-2', doel: 'UB', grond: 'ketterij', citaat: null, titel: 'Ketter', stemmen: {}, sluitTs: t0 + 600_000, kanaal: 'CKANAAL' } });
+  h.schrijf('bamischijf.json', { actief: true, hp: 40, maxHp: 85, vijand: { key: 'x', naam: 'Testvijand' } });
+  h.schrijf('veiling.json', { status: 'open', weekStart: h.index.getMondayOfWeek(), biedingen: [] });
+  h.schrijf('tribunaal.json', { doelwitId: 'UB', fase: 'stemming' });
+  h.schrijf('gelekaartpoll.json', { actief: true, doelwitId: 'UB', sluitTs: t0 + 900_000 });
+  d = await bouwDashboardData();
+  const nb = d.nuBezig;
+  h.ok(nb.regie.schatkist === 4 && nb.regie.niveau && nb.regie.effecten.length === 1 && nb.regie.verrassing?.id === 'puntenregen' && nb.regie.zaak?.grond === 'ketterij' && Array.isArray(nb.regie.ingrepenVandaag) === false && typeof nb.regie.ingrepenVandaag === 'number', `nuBezig.regie: ${JSON.stringify(nb.regie)}`);
+  h.ok(nb.raid.actief && nb.raid.naam === 'Testvijand' && nb.raid.hp === 40 && nb.raid.maxHp === 85, 'nuBezig.raid');
+  h.ok(nb.veiling.open === true && nb.tribunaal.fase === 'stemming' && nb.gelekaart.actief && nb.gelekaart.sluitTs === t0 + 900_000, 'nuBezig: veiling, tribunaal, gelekaart');
+  h.ok(/id="nubezig"/.test(html) && /nuBezig/.test(html), 'dashboard.html bevat de strook');
+  h.ok(!/Wat de Kroket God vandaag deed/.test(html), 'de oude regisseurkaart is weg');
+  // Alleen bestaande acties in de strook.
+  const strook = html.slice(html.indexOf('function renderNuBezig'), html.indexOf('function renderNuBezig') + 6000);
+  const gebruikt = [...strook.matchAll(/nbActie\(\\'(\w+)\\'\)|regieNu\(\)|regieStop\(|regieVerrassingStop\(\)|regieZaakStop\(\)|nbNiveau\(/g)].length;
+  h.ok(gebruikt >= 7, `strook roept bestaande acties aan (${gebruikt})`);
+  const indexSrc = require('fs').readFileSync(require('path').join(__dirname, '../../index.js'), 'utf8');
+  for (const a of [...strook.matchAll(/nbActie\(\\'(\w+)\\'\)/g)].map((m) => m[1])) h.ok(new RegExp(`case '${a}'`).test(indexSrc), `actie ${a} bestaat in voerDashboardActie`);
 });

@@ -121,6 +121,11 @@
   .sched .skip:hover{border-color:var(--red);color:var(--red)}
   .feed .t{color:var(--dim);font-size:11px}.muted{color:var(--dim)}.big{font-size:26px;color:var(--gold);font-weight:700}
   /* tab-navigatie (2.0): sticky balk onder de hero */
+  .nubezig{margin-bottom:10px}
+  .nb_kop{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center}
+  .nb_kop select{width:auto;padding:3px 6px}
+  .nb_items{display:flex;flex-wrap:wrap;gap:6px 14px;margin-top:8px}
+  #nb_items .row{display:flex;flex-wrap:wrap;gap:4px 8px;align-items:center;font-size:12px}
   .tabs{position:sticky;top:0;z-index:30;display:flex;gap:6px;flex-wrap:wrap;justify-content:center;padding:9px 4px;margin:-11px -13px 10px;
     background:linear-gradient(180deg,rgba(18,12,6,.97),rgba(18,12,6,.9));backdrop-filter:blur(6px);border-bottom:1px solid var(--line)}
   .tab{background:#221809;border:1px solid var(--line);color:var(--dim);border-radius:99px;padding:6px 14px;font:inherit;font-size:12.5px;cursor:pointer;letter-spacing:.4px}
@@ -158,6 +163,13 @@
   <div class="muted" id="updated" style="margin-top:9px;font-size:11px"></div>
 </div>
 <main>
+<div class="card nubezig" id="nubezig">
+  <div class="nb_kop"><b>🔱 Nu bezig</b>
+    <label>niveau <select id="i_regieNiveau" onchange="nbNiveau(this.value)"><option>uit</option><option>laag</option><option>normaal</option><option>wild</option></select></label>
+    <span id="nb_info" class="muted"></span>
+    <button class="btn" onclick="regieNu()">🔱 Laat hem nu iets doen</button> <span id="rg_status" class="muted"></span></div>
+  <div id="nb_items"></div>
+</div>
 <nav class="tabs" id="tabs">
   <button class="tab act" data-tab="overzicht">📊 Overzicht</button>
   <button class="tab" data-tab="spel">🎮 Spel</button>
@@ -256,6 +268,7 @@ function ranglijstChart(data,leeg){
   return leg+rows;
 }
 function render(d){
+  renderNuBezig(d);
   document.getElementById('status').className='pill '+(d.bot.status==='online'?'on':'off');
   document.getElementById('status').textContent=d.bot.status;
   document.getElementById('uptime').textContent='uptime '+dur(d.bot.uptimeSec)+' · '+d.bot.memMb+'MB';
@@ -357,20 +370,6 @@ function render(d){
     +'<tr><td>Actieve verbanningen</td><td class="num">'+k.bans.length+'</td></tr>'
     +'</table>'+(k.kroketVanDeDag?'<div style="margin-top:8px" class="muted">Kroket v/d dag: <b style="color:var(--txt)">'+esc(k.kroketVanDeDag.naam)+'</b></div>':'');
   ohtml+=card('Cijfers',cijfers);
-  // De regisseur: wat de Kroket God vandaag zelf deed
-  var rg=d.regie||{};
-  var uur=function(ts){return new Date(ts).toLocaleTimeString('nl-NL',{hour:'2-digit',minute:'2-digit'});};
-  var rIng=(rg.vandaag||[]).map(function(r){return '<div class="row"><span class="t">'+uur(r.ts)+'</span> · <b>'+esc(r.id)+'</b>'+(r.doel?' → '+esc(r.doel):'')+(r.punten?' <span class="muted">('+(r.punten>0?'+':'')+r.punten+')</span>':'')+(r.laag!=='ingreep'?' <span class="muted">'+esc(r.laag)+'</span>':'')+'</div>';}).join('')||'<span class="muted">nog niets vandaag</span>';
-  var rEff=(rg.effecten||[]).map(function(e){return '<div class="row"><b>'+esc(e.id)+'</b> <span class="muted">tot '+uur(e.tot)+'</span> <button class="skip" onclick="regieStop(\''+esc(e.id)+'\')">beëindig</button></div>';}).join('')||'<span class="muted">geen lopende effecten</span>';
-  var rVer=rg.verrassing?'<div class="row"><b>'+esc(rg.verrassing.id)+'</b> <span class="muted">tot '+uur(rg.verrassing.id==='hete_kroket'&&rg.verrassing.data?rg.verrassing.data.deadline:rg.verrassing.tot)+'</span> <button class="skip" onclick="regieVerrassingStop()">beëindig</button></div>':'<span class="muted">geen lopende verrassing</span>';
-  var rZaak=rg.zaak?'<div class="row"><b>'+esc(rg.zaak.doel)+'</b> ('+esc(rg.zaak.grond)+') <span class="muted">sluit '+uur(rg.zaak.sluitTs)+' · '+rg.zaak.stemmen+' stemmen</span> <button class="skip" onclick="regieZaakStop()">beëindig</button></div>':'<span class="muted">geen lopende zaak</span>';
-  ohtml+=card('🔱 Wat de Kroket God vandaag deed'+tip('De ingrepen die de Kroket God vandaag zelf deed, wat er nog loopt (met "beëindig" haal je een effect meteen weg) en wat er in de Schatkist zit. "Laat hem nu iets doen" negeert kans, tijdvenster, weekend, tempo en dagbudget, maar niet de plafonds. Het niveau stel je in bij Instellingen.'),
-    '<div class="lbl">Ingrepen vandaag · niveau '+esc(rg.niveau||'')+'</div>'+rIng
-    +'<div class="lbl" style="margin-top:10px">Lopende effecten</div>'+rEff
-    +'<div class="lbl" style="margin-top:10px">Lopende verrassing</div>'+rVer
-    +'<div class="lbl" style="margin-top:10px">Lopende zaak (licht tribunaal)</div>'+rZaak
-    +'<div class="lbl" style="margin-top:10px">Schatkist: <b>'+(rg.schatkist||0)+'</b> punten</div>'
-    +'<button class="btn" onclick="regieNu()">🔱 Laat hem nu iets doen</button> <span id="rg_status" class="muted"></span>');
   // Geplande posts (de eerstvolgende vijf, met tijdstip)
   var ing=(d.ingepland||[]).map(function(p){
     var terug=p.soort==='terugkerend';
@@ -712,8 +711,7 @@ function renderInstellingen(d){
   var provs=d.providerOpties.map(function(p){return '<label class="tog"><input type="checkbox" data-prov="'+p+'"'+(s.providerUit.indexOf(p)>=0?' checked':'')+'> '+p+'</label>';}).join('');
   var html='<div class="card"><h2>⚙️ Instellingen <span id="i_status" class="muted" style="font-weight:400;text-transform:none;margin-left:8px"></span></h2><div class="setgrid">'
     +'<div><div class="lbl">Dagstemming'+tip('De dagelijkse bui die alle reacties kleurt. Automatisch kiest elke dag een vaste stemming op basis van de datum; of kies er zelf een. Werkt direct na opslaan.')+'</div><select id="i_stemming">'+moods+'</select></div>'
-    +'<div><div class="lbl">Regisseur-niveau'+tip('Hoe vaak de Kroket God zelf ingrijpt: uit, laag, normaal of wild.')+'</div><select id="i_regieNiveau">'+['uit','laag','normaal','wild'].map(function(n){return '<option value="'+n+'"'+((s.regieNiveau||'normaal')===n?' selected':'')+'>'+n+'</option>';}).join('')+'</select></div>'
-    +'<div><div class="lbl">Modi</div>'
+        +'<div><div class="lbl">Modi</div>'
       +chk('i_stil',s.stilModus,'Stil-modus (mute)','De Kroket God reageert nergens meer op, behalve in het testkanaal. Handig bij onderhoud.')
       +chk('i_weekend',s.weekendRust,'Weekend-rust','Aan = rust in het weekend (geen reacties). Uit = reageert ook in het weekend.')
       +chk('i_menties',s.menties,'@-vermelding onder spelberichten','Uit = niemand wordt getagd; de namen staan toch al vet in het bericht en in een kanaal van vijf leest iedereen alles. Aan = wie een spelactie passief overkomt (de uitgedaagde, de bestolene, de bondgenoot) krijgt een @-vermelding onderaan. Wie de actie zelf uitvoerde wordt nooit getagd. Voor dingen die je anders mist bestaat de verborgen statusmelding hieronder al.')
@@ -810,6 +808,24 @@ function renderInstellingen(d){
 function bewaar(){
   var uit=[];document.querySelectorAll('[data-prov]').forEach(function(c){if(c.checked)uit.push(c.getAttribute('data-prov'));});
   post('/api/instellingen',{stemmingOverride:document.getElementById('i_stemming').value,stilModus:document.getElementById('i_stil').checked,weekendRust:document.getElementById('i_weekend').checked,statusMeldingen:document.getElementById('i_dm').checked,menties:document.getElementById('i_menties').checked,alleenTestkanaal:document.getElementById('i_test').checked,spaarstand:document.getElementById('i_spaar').checked,alliantiesActief:document.getElementById('i_allianties').checked,straattaal:document.getElementById('i_straattaal').checked,emojiRegels:document.getElementById('i_emojiRegels').checked,emojiSlim:document.getElementById('i_emojiSlim').checked,emojiFrequentie:document.getElementById('i_emojiFreq').value,providerUit:uit,kortafKans:(+document.getElementById('i_kortaf').value||0)/100,warrigKans:(+document.getElementById('i_warrig').value||0)/100,vrijdagAppendKans:(+document.getElementById('i_vrijdag').value||0)/100,decreetVanDeDag:document.getElementById('i_decreet').value,decreetIntensiteit:(+document.getElementById('i_decreetInt').value||0)/100,eerHuisonderwerpen:document.getElementById('i_huis').value,casinoAan:document.getElementById('i_casinoAan').checked,casinoMaxInzet:+document.getElementById('i_casinoMax').value||5,casinoPerDag:+document.getElementById('i_casinoPerDag').value||10,regieNiveau:document.getElementById('i_regieNiveau').value},'Opgeslagen');
+}
+function nbNiveau(v){post('/api/instellingen',{regieNiveau:v},'Opgeslagen','rg_status');}
+function nbActie(a){post('/api/actie',{actie:a},'Gedaan','rg_status').then(function(){setTimeout(tick,800);});}
+function renderNuBezig(d){
+  var nb=d.nuBezig;if(!nb)return;var rg=nb.regie;
+  var uur=function(ts){return new Date(ts).toLocaleTimeString('nl-NL',{hour:'2-digit',minute:'2-digit'});};
+  var sel=document.getElementById('i_regieNiveau');if(sel&&document.activeElement!==sel)sel.value=rg.niveau||'normaal';
+  document.getElementById('nb_info').textContent='Schatkist '+(rg.schatkist||0)+' · '+(rg.ingrepenVandaag||0)+' ingrepen vandaag';
+  var r=[];
+  (rg.effecten||[]).forEach(function(e){r.push('<div class="row">⏳ <b>'+esc(e.id)+'</b> <span class="muted">tot '+uur(e.tot)+'</span> <button class="skip" onclick="regieStop(\''+esc(e.id)+'\')">beëindig</button></div>');});
+  if(rg.verrassing)r.push('<div class="row">🎁 <b>'+esc(rg.verrassing.id)+'</b> <span class="muted">tot '+uur(rg.verrassing.id==='hete_kroket'&&rg.verrassing.data?rg.verrassing.data.deadline:rg.verrassing.tot)+'</span> <button class="skip" onclick="regieVerrassingStop()">beëindig</button></div>');
+  if(rg.zaak)r.push('<div class="row">⚖️ <b>'+esc(rg.zaak.doel)+'</b> ('+esc(rg.zaak.grond)+') <span class="muted">sluit '+uur(rg.zaak.sluitTs)+' · '+rg.zaak.stemmen+' stemmen</span> <button class="skip" onclick="regieZaakStop()">beëindig</button></div>');
+  if(nb.raid.actief)r.push('<div class="row">👹 <b>'+esc(nb.raid.naam)+'</b> '+nb.raid.hp+'/'+nb.raid.maxHp+' HP <button class="skip" onclick="nbActie(\'weekvijandBeurt\')">beurt</button> <button class="skip" onclick="nbActie(\'bamischijfOntsnap\')">afsluiten</button></div>');
+  if(nb.veiling.open)r.push('<div class="row">🔨 veiling open <button class="skip" onclick="nbActie(\'veilingHamer\')">hamer</button></div>');
+  if(nb.tribunaal.fase)r.push('<div class="row">⚖️ tribunaal: <b>'+esc(nb.tribunaal.fase)+'</b></div>');
+  if(nb.gelekaart.actief)r.push('<div class="row">🟨 gele-kaart-stemming <span class="muted">sluit '+uur(nb.gelekaart.sluitTs)+'</span> <button class="skip" onclick="nbActie(\'gelekaartSluiten\')">sluiten</button></div>');
+  if(nb.gokpauzes)r.push('<div class="row">🎰 '+nb.gokpauzes+' op gokpauze</div>');
+  document.getElementById('nb_items').innerHTML=r.join('')||'<span class="muted">niets loopt</span>';
 }
 function regieNu(){post('/api/actie',{actie:'regisseurNu'},'Gedaan','rg_status').then(function(){setTimeout(tick,800);});}
 function regieVerrassingStop(){if(!confirm('Verrassing stil beëindigen, zonder uitbetaling?'))return;post('/api/actie',{actie:'regieVerrassingStop'},'Beëindigd','rg_status').then(function(){setTimeout(tick,800);});}
