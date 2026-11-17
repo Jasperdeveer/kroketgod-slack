@@ -44,13 +44,15 @@ module.exports = async function harnas(test, { opstartMs = 2500 } = {}) {
   const views = []; // client.views.* aanroepen: { fn, args }
   const handlers = { action: [], command: {} };
   let tsTeller = 1000;
-  const schakel = { faalPost: false }; // true: chat.postMessage gooit (een mislukte Slack-post)
+  const schakel = { faalPost: false, reacties: [] }; // reacties: [{ name, users }] voor reactions.get
+  // true: chat.postMessage gooit (een mislukte Slack-post)
   const client = new Proxy({}, { get: (_, ns) => new Proxy({}, { get: (_, fn) => async (args = {}) => {
     if (ns === 'chat' && fn === 'postMessage' && schakel.faalPost) throw new Error('nep-429: post mislukt');
     if (ns === 'chat' && fn === 'postMessage') posts.push({ text: args.text, blocks: args.blocks, thread: args.thread_ts || null, ts: String(++tsTeller) });
     if (ns === 'chat' && fn === 'update') updates.push(args);
     if (ns === 'chat' && fn === 'postEphemeral') ephemeral.push({ user: args.user, text: args.text });
     if (ns === 'views') views.push({ fn, args });
+    if (ns === 'reactions' && fn === 'get') return { ok: true, message: { reactions: schakel.reacties || [] } };
     return { ok: true, ts: String(tsTeller), channel: 'CKANAAL', user_id: 'UBOT', view: { id: 'V1' }, members: ['UA', 'UB', 'UC', 'UD', 'UE', 'UF'], channels: [], user: { profile: {} }, response_metadata: {} };
   } }) });
   class App {

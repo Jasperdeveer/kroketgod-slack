@@ -1059,6 +1059,7 @@ async function vollooiMissie(client, channelId, missie) {
     await pasScoreAanMetCheck(client, uid, 3, { uitgesteldeZegens });
   }
 
+  for (const uid of deelnemers) await telActie(client, uid, 'missie_voltooid');
   const namen = deelnemers.map(id => allMembers[id]?.bijnaam || id).join(' & ');
   const teamZin = deelnemers.length > 1 ? `Het alliantie-koppel ${namen} heeft samen` : `${missie.bijnaam} heeft`;
 
@@ -2952,6 +2953,7 @@ app.action(/^verbond_(accepteer|weiger)$/, async ({ ack, body, client }) => {
     const nieuweGroep = verbondGroepVan(loadAllianties(), v.vanId) || [];
     const vorigeGroepNamen = bijnamenVan(toets.groep, members);
     logGebeurtenis('alliantie', v.vanId, `${vanNaam} sloot zich aan bij het verbond van ${vorigeGroepNamen}`);
+    await telActie(client, v.vanId, 'verbond_gesloten');
     await haalDubbelKnopWeg(client, body, `✅ _Geaccepteerd door ${klikNaam}._`);
     const oudeZin = oudeBondgenoten.length ? `${vanNaam} verlaat daarmee het verbond met ${bijnamenVan(oudeBondgenoten, members)}. ` : '';
     const tekst = await kroketResponseMetVangnet(
@@ -7183,6 +7185,7 @@ async function voerKroketCommandoUit({ command, respond, client }) {
       const voorZegen = loadScores()[doelId] || 0;
       await pasScoreAanMetCheck(client, doelId, 1, { channelId: command.channel_id, geverId: command.user_id, uitgesteldeZegens });
       const zegenVerbrand = (loadScores()[doelId] || 0) <= voorZegen; // vloek kan de zegen verzwelgen
+      await telActie(client, doelId, 'gezegend');
       logGebeurtenis('zegen', doelId, `Profeet ${members[command.user_id].bijnaam} zegende ${doelLid.bijnaam} (${zegenVerbrand ? 'verbrand in vloek' : '+1'})`, null, command.user_id);
       await postToChannel(client, command.channel_id, zegenVerbrand
         ? `🕊️ *DE PROFETENZEGEN* 🕊️\n\n> De Profeet van de Week, *${members[command.user_id].bijnaam}*, legde de handen op *${doelLid.bijnaam}* — maar een Vloek der Slappe Korst verzwolg de zegen. Het lot is wreed; de zegen is niettemin vergeven.\n\n— De Hoge Frituurraad`
@@ -7593,6 +7596,7 @@ async function voerKroketCommandoUit({ command, respond, client }) {
       resetVergrijpen(doelwitId);
       const genadeNaam = members[command.user_id]?.bijnaam || 'een volgeling';
       logGebeurtenis('genade', doelwitId, `${lid.bijnaam} werd begenadigd door ${genadeNaam} (−${GENADE_KOSTEN})`, null, command.user_id);
+      await telActie(client, command.user_id, 'begenade');
       // Consistent met `uitbreken` en `beroep`: het verbond deelt de bevrijding. Dat ontbrak hier,
       // waardoor een begenadigd lid vrijkwam en zijn meegesleepte bondgenoot bleef zitten.
       const genadePartner = bevrijdAlliantiePartnerMee(doelwitId, lid.bijnaam, true);
@@ -7629,6 +7633,7 @@ async function voerKroketCommandoUit({ command, respond, client }) {
 
       // 15% kans: masker valt — aanklager wordt onthuld
       const maskValt = Math.random() < 0.15;
+      await telActie(client, command.user_id, 'klacht'); // de klacht is ingediend, in beide takken
       if (maskValt) {
         const tekst = await kroketResponse(
           `[BESCHULDIGDE: ${lid.bijnaam}] [AANKLAGER: ${aanvrager}] ` +
@@ -7741,6 +7746,7 @@ async function voerKroketCommandoUit({ command, respond, client }) {
       const oudeBondgenoten = getBondgenoten(command.user_id);
       sluitAlliantie(command.user_id, partnerId);
       logGebeurtenis('alliantie', command.user_id, `${aanvrager} sloot een alliantie met ${partnerLid.bijnaam}`);
+      await telActie(client, command.user_id, 'verbond_gesloten');
 
       const oudeZin = oudeBondgenoten.length
         ? `${aanvrager} verlaat hiermee het verbond met ${bijnamenVan(oudeBondgenoten)}. `
@@ -12239,6 +12245,7 @@ async function voerDuel(client, userId, doelId, channelId, wapenId = null) {
     await pasScoreAanMetCheck(client, winId, premie.bonus || 3, { channelId, naspel });
     logGebeurtenis('premie', winId, `${winNaam} inde de premie op ${verliesNaam} (+${premie.bonus || 3})`);
     if (boekVerlies(verliesId, premie.bonus || 3, winId, 'premie_geind')?.claimGeopend) claimVoor = verliesId;
+    await telActie(client, winId, 'premie_geind', 1, naspel);
     premieBlok = `\n\n🎯 *PREMIE GEÏND* — op het hoofd van ${verliesNaam} stond een premie van de Kroket God. ${winNaam} int *+${premie.bonus || 3} kroketpunten* extra.`;
   }
   logGebeurtenis('duel', userId, `${uitdager.bijnaam} daagde ${doelLid.bijnaam} uit voor een duel — ${winNaam} won`);
@@ -14379,7 +14386,7 @@ planCron('*/20 8-17 * * 1-5', async () => {
 }, { timezone: 'Europe/Amsterdam' });
 
 // De rooktests (scripts/rooktest/) komen zo bij de regisseur.
-if (process.env.KROKET_ROOKTEST) module.exports = { bouwDashboardData, voerDashboardActie, saveInstellingen, casinoOpen, regieTik, bouwRegieStand, voerIngreepUit, UITVOERDERS, regieStaat, bewaarRegie, mogAutonoomPosten, werkdagenStil, casinoToegangReden, casinoMax, casinoPlafond, boekCasinoUitslag, casinoOpen, sluitGeleKaartPoll, voerDuel, voerEer, winkelPrijs, prijsRedenen, prijsToelichting, CRON_LABELS, geplandeCronMeta, kiesOpdrachten, opdrachtHaalbaar, opdrachtTekst, opdrachtPool, alleOpdrachten };
+if (process.env.KROKET_ROOKTEST) module.exports = { bouwDashboardData, voerDashboardActie, saveInstellingen, casinoOpen, regieTik, bouwRegieStand, voerIngreepUit, UITVOERDERS, regieStaat, bewaarRegie, mogAutonoomPosten, werkdagenStil, casinoToegangReden, casinoMax, casinoPlafond, boekCasinoUitslag, casinoOpen, sluitGeleKaartPoll, stemTribunaal, vollooiMissie, telActie, getMondayOfWeek, voerDuel, voerEer, winkelPrijs, prijsRedenen, prijsToelichting, CRON_LABELS, geplandeCronMeta, kiesOpdrachten, opdrachtHaalbaar, opdrachtTekst, opdrachtPool, alleOpdrachten };
 
 // Wat het dashboard over het casino laat zien (bouwDashboardData) en kan (/api/casino).
 function casinoDashboardData(naam) {
@@ -15149,6 +15156,7 @@ async function telActie(client, userId, actie, aantal = 1, naspel = null) {
     // precies de juiste plek — zo hoeft er geen nieuw commando te bestaan en telt gewoon
     // spelen automatisch mee. Bij 0 HP is de dreiging geveld en volgt de finale meteen.
     const seizoenNa = draagBijAanSeizoen(userId, actie, aantal);
+    if (seizoenNa) bumpTeller(userId, 'seizoen_daad', aantal);
     if (seizoenNa?.status === 'geveld') {
       await beslechtSeizoen(client, 'gewonnen');
     } else if (seizoenNa) {
@@ -17064,6 +17072,7 @@ async function sluitGeleKaartPoll(client, { rng = Math.random } = {}) {
     ...(regisseur ? { regisseur: true } : {}),
   };
   saveGeleKaartPoll(poll); // vóór de trage acties: idempotent, een tweede aanroep valt op !actief
+  for (const uid of [...(stemmen?.terecht || []), ...(stemmen?.onterecht || [])]) await telActie(client, uid, 'raad_stem');
   await updateGeleKaartPollBericht(client, poll);
 
   const naam = lid.bijnaam;
@@ -17646,6 +17655,7 @@ async function stemTribunaal(client, userId, keuze) {
   const oud = t.stemmen?.[userId];
   t.stemmen = { ...(t.stemmen || {}), [userId]: keuze };
   writeJSON('tribunaal.json', t);
+  if (!oud) await telActie(client, userId, 'tribunaal_stem');
   await updateTribunaalBericht(client, t);
   const naamDoel = members[t.doelwitId]?.bijnaam || 'de beschuldigde';
   // Bewust GEEN logGebeurtenis met de keuze erin: de stemming is geheim, ook in de logs.
