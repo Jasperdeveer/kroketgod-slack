@@ -20,6 +20,9 @@ harnas(async (h) => {
   h.schrijf('profeet.json', {});
   h.schrijf('verbanning.json', {});
   h.schrijf('allianties.json', {});
+  // Vanaf 18 nov kan "Laat u zegenen" (+2) een dagopdracht zijn: al beloond, zodat de scores alleen de zegen meten.
+  const dagKey = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Amsterdam' }).format(new Date());
+  h.schrijf('opdrachten.json', Object.fromEntries(['UA', 'UB', 'UC', 'UD', 'UE'].map((id) => [id, { dag: { datum: dagKey, voortgang: {}, beloond: ['d-zegen'] } }])));
 
   // 1. Zegendag: een niet-profeet zegent één keer.
   schoon({ effecten: [dagEffect('zegendag', { gezegend: [], ts: '555' })] });
