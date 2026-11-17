@@ -13567,7 +13567,13 @@ const CASINO_SPELLEN = {
 const ROULETTE_KNOPPEN = { rood: '🔴 Rood', zwart: '⚫ Zwart', even: 'Even', oneven: 'Oneven', laag: '1–18', hoog: '19–36', dozijn1: '1e 12', dozijn2: '2e 12', dozijn3: '3e 12' };
 const GOKKAST_RUST = Array(3).fill(GOKKAST.at(-1).emoji); // de kast in rust toont de jackpot
 
-const casinoMax = () => Number(instelling('casinoMaxInzet')) || CASINO_MAX_INZET;
+// Regie-effecten (lib/regie.js) worden live uit regie.json gelezen, zonder timers: een herstart midden in
+// een effect laat het lopen tot dezelfde `tot`, en een verlopen effect telt gewoon niet meer mee.
+const casinoEffect = (soort) => regie.effectActief(regieStaat(), soort, Date.now());
+const hhmmAms = (ms) => new Intl.DateTimeFormat('nl-NL', { timeZone: 'Europe/Amsterdam', hour: '2-digit', minute: '2-digit' }).format(ms);
+// Open voor het casino-venster, de Home-knop en de roddel: niet uitgezet in de instellingen en niet dicht door de regisseur.
+const casinoOpen = () => instelling('casinoAan') !== false && !casinoEffect('dicht');
+const casinoMax = () => (Number(instelling('casinoMaxInzet')) || CASINO_MAX_INZET) * (casinoEffect('hogeTafel') ? 2 : 1);
 const casinoPerDag = () => Number(instelling('casinoPerDag')) || DAGLIMIETEN.casino;
 const casinoPlafond = (userId) => Math.min(casinoMax(), offerPlafond(userId));
 
@@ -13579,6 +13585,8 @@ const casinoResterend = (userId) => Math.max(0, casinoLimiet() - tellingVandaag(
 function casinoToegangReden(userId) {
   if (!loadMembers()[userId]) return 'Alleen volgelingen komen het casino in. Meld u eerst aan met `/kroketgod aanmelden`.';
   if (instelling('casinoAan') === false) return 'Het casino is gesloten op last van de Hoge Frituurraad.';
+  const dicht = casinoEffect('dicht');
+  if (dicht) return `Het casino is dicht tot ${hhmmAms(dicht.tot)}: de frituur wordt gereinigd.`;
   if (isVerbannen(userId)) return 'Ballingen komen het casino niet in.';
   return null;
 }
@@ -13602,7 +13610,31 @@ function boekCasinoSpel(userId, inzet) {
 }
 
 // `extra`: { bijzonder, reeks } voor de roddels (lib/casinostats.js).
+// Gouden uur en omgekeerd uur: het verschil met de normale uitslag is de bijdrage van de regisseur (regel P19).
+// Winst uit de Schatkist (eerst) en nemen naar de Schatkist, begrensd tegen regie.ruimte() van dat moment,
+// geboekt als nawerking. Zonder ruimte staat de normale uitslag (of wat er van het verschil past).
+function regieCasinoUitslag(userId, inzet, uitbetaling) {
+  const nu = Date.now(), netto = uitbetaling - inzet;
+  const goud = !!casinoEffect('goudenUur');
+  let verschil = 0;
+  if (goud && netto > 0) verschil = Math.min(5, Math.ceil(netto * 0.5));
+  else if (!goud && casinoEffect('omgekeerdUur') && netto !== 0) {
+    const nieuw = netto > 0 ? -Math.min(5, netto, inzet) : Math.min(5, -netto);
+    verschil = nieuw - netto;
+  }
+  if (!verschil) return uitbetaling;
+  const ruimte = regie.ruimte(regieStaat(), nu);
+  if (verschil > 0) verschil = Math.min(verschil, ruimte.geven);
+  else verschil = -Math.min(-verschil, ruimte.nemen, ruimte.nemenVan(userId), uitbetaling);
+  if (!verschil) return uitbetaling;
+  let staat = regieStaat();
+  staat = verschil > 0 ? regie.betaal(staat, verschil).staat : regie.stort(staat, -verschil);
+  bewaarRegie(regie.boekNawerking(staat, { nu, id: goud ? 'gouden_uur' : 'omgekeerd_uur', doel: userId, punten: verschil }));
+  return uitbetaling + verschil;
+}
+
 function boekCasinoUitslag(userId, spel, inzet, uitbetaling, wat, extra) {
+  uitbetaling = regieCasinoUitslag(userId, inzet, uitbetaling);
   if (uitbetaling > 0) pasScoreAan(userId, uitbetaling);
   writeJSON('casinostats.json', boekCasinoStat(readJSON('casinostats.json', {}), dagSleutel(), userId, spel, inzet, uitbetaling, extra));
   const netto = uitbetaling - inzet;
@@ -13710,6 +13742,10 @@ function spelKnoppen(userId, hand) {
 
 // `bezig`: de film speelt. Dan alleen het plaatje en één regel, zonder knoppen: er valt even niets te kiezen.
 function casinoVenster(userId, { spel = 'lobby', inzet = 1, beeld = null, melding = null, bezig = null } = {}) {
+  // Omgekeerd uur blijft bewust ongenoemd: dat is een verrassing.
+  const effectMelding = casinoEffect('goudenUur') ? '✨ _Gouden uur: een gewonnen spel betaalt anderhalf keer uit, met hoogstens 5 extra._'
+    : casinoEffect('hogeTafel') ? '🎩 _Hoge tafel: de maximale inzet is nu twee keer zo hoog._' : null;
+  melding = [melding, effectMelding].filter(Boolean).join('\n') || null;
   const hand = openCasinoSpel(userId);
   const max = casinoPlafond(userId);
   const gekozen = Math.max(1, Math.min(inzet, max || 1));
@@ -13989,7 +14025,7 @@ function casinoRoddel(rnd = Math.random) {
 
 planCron('30 16 * * 2', async () => {
   try {
-    if (instelling('casinoAan') === false || instelling('stilModus') || instelling('alleenTestkanaal')) return;
+    if (!casinoOpen() || instelling('stilModus') || instelling('alleenTestkanaal')) return;
     const tekst = casinoRoddel();
     if (tekst) await postToChannel(app.client, KANAAL(), tekst);
   } catch (err) { console.error('Fout bij de casinoroddel:', err); }
@@ -14088,7 +14124,7 @@ function bouwRegieStand(nu = Date.now()) {
     leden: ledenStand,
     casino: {
       spellenVandaag: ledenStand.reduce((a, l) => a + Object.values(cijfers.leden?.[l.id] || {}).reduce((b, s) => b + (s.spellen || 0), 0), 0),
-      open: instelling('casinoAan') !== false,
+      open: casinoOpen(),
     },
     raid: {
       actief: !!raid.actief && raid.hp > 0, hp: raid.hp || 0, maxHp: raid.maxHp || 0,
@@ -14107,10 +14143,27 @@ function bouwRegieStand(nu = Date.now()) {
 //   knoppen Slack-knoppen onder de aankondiging (hoogstens 5)
 // Uitbetalingen achteraf (knop, verrassing) boeken met regie.boekNawerking en begrenzen zichzelf tegen
 // regie.ruimte() op het moment van uitbetalen.
+function regieEffect(soort, duurMinuten, data = {}) {
+  const effect = { id: soort, soort, tot: Date.now() + duurMinuten * 60_000, data };
+  bewaarRegie(regie.voegEffectToe(regieStaat(), effect));
+  return effect;
+}
 const UITVOERDERS = {
   huis_geeft: async () => {
     voerCasinoBeheerUit({ soort: 'bonus', aantal: casinoBonusVandaag() + 3 });
     return { feiten: 'Het Huis geeft iedereen vandaag 3 extra casinospellen.' };
+  },
+  hoge_tafel: async (client, keuze) => {
+    regieEffect('hogeTafel', keuze.duurMinuten || 60);
+    return { feiten: 'Een uur lang is de maximale inzet in het casino twee keer zo hoog.' };
+  },
+  casino_dicht: async (client, keuze) => {
+    const dicht = regieEffect('dicht', keuze.duurMinuten || 120);
+    return { feiten: `Het casino is dicht tot ${hhmmAms(dicht.tot)}: de frituur wordt gereinigd. Een open spel wacht tot het casino weer opengaat.` };
+  },
+  gouden_uur: async (client, keuze) => {
+    regieEffect('goudenUur', keuze.duurMinuten || 60);
+    return { feiten: 'Een uur lang betaalt een gewonnen spel in het casino anderhalf keer uit, met hoogstens 5 extra punten per spel.' };
   },
 };
 
@@ -14157,7 +14210,7 @@ planCron('*/20 8-17 * * 1-5', async () => {
 }, { timezone: 'Europe/Amsterdam' });
 
 // De rooktests (scripts/rooktest/) komen zo bij de regisseur.
-if (process.env.KROKET_ROOKTEST) module.exports = { regieTik, bouwRegieStand, voerIngreepUit, UITVOERDERS, regieStaat, bewaarRegie, mogAutonoomPosten, werkdagenStil };
+if (process.env.KROKET_ROOKTEST) module.exports = { regieTik, bouwRegieStand, voerIngreepUit, UITVOERDERS, regieStaat, bewaarRegie, mogAutonoomPosten, werkdagenStil, casinoToegangReden, casinoMax, casinoPlafond, boekCasinoUitslag, casinoOpen };
 
 // Wat het dashboard over het casino laat zien (bouwDashboardData) en kan (/api/casino).
 function casinoDashboardData(naam) {
@@ -14170,7 +14223,7 @@ function casinoDashboardData(naam) {
   });
   const pauze = loadGokpauze();
   return {
-    dag, aan: instelling('casinoAan') !== false, maxInzet: casinoMax(), perDag: casinoPerDag(), bonusVandaag: casinoBonusVandaag(),
+    dag, aan: casinoOpen(), maxInzet: casinoMax(), perDag: casinoPerDag(), bonusVandaag: casinoBonusVandaag(),
     schuifkast: laadSchuifkast().munten.length,
     spelNamen: Object.fromEntries(Object.entries(CASINO_SPELLEN).map(([id, s]) => [id, s.naam])),
     vandaag: metNamen(vatCasinoSamen(stats, dag, dag)),
@@ -14204,7 +14257,9 @@ function voerCasinoBeheerUit({ soort, aantal, userId }) {
 app.action(/^casino_(naar|inzet|zet)_/, async ({ ack, body, action, client }) => {
   await ack();
   const userId = body.user.id;
-  if (casinoToegangReden(userId) || !body.view?.id) return;
+  const toegangReden = casinoToegangReden(userId);
+  if (toegangReden && body.view?.id) await toonCasino(client, body.view.id, userId, { spel: 'lobby', melding: `_${toegangReden}_` });
+  if (toegangReden || !body.view?.id) return;
   const [, soort, zet] = action.action_id.match(/^casino_(naar|inzet|zet)_(.+)$/);
   // Elk scherm draagt één zet. Een tweede klik erop (dubbelklik, of klikken voor het venster bij is)
   // deed eerder een tweede zet: hoger/lager raadde blind op een kaart die nog niemand zag, blackjack
@@ -16323,7 +16378,7 @@ function persoonlijkeStatus(userId) {
   });
 
   // Het casino. Op een rustdag staat het bij "Op" (het lid is gewaarschuwd, dit verraadt niets).
-  if (instelling('casinoAan') !== false) {
+  if (casinoOpen()) {
     const rustdag = opGokpauze(userId);
     const casinoGebruikt = rustdag ? casinoLimiet() : casinoLimiet() - casinoResterend(userId);
     cooldowns.push({
@@ -18058,7 +18113,7 @@ function bouwAppHomeBlocks(userId, melding = '', extraBlocks = []) {
     if (duelKan) acties.push({ type: 'button', text: { type: 'plain_text', text: '⚔️ Duelleren', emoji: true }, action_id: 'open_duel' });
     if (roofKan) acties.push({ type: 'button', text: { type: 'plain_text', text: '🥷 Beroven', emoji: true }, action_id: 'open_roof' });
     if (offerKan) acties.push({ type: 'button', text: { type: 'plain_text', text: '🎲 Offeren', emoji: true }, action_id: 'open_offer' });
-    if (instelling('casinoAan') !== false && casinoResterend(userId) > 0) acties.push({ type: 'button', text: { type: 'plain_text', text: '🎰 Casino', emoji: true }, action_id: 'open_casino' });
+    if (casinoOpen() && casinoResterend(userId) > 0) acties.push({ type: 'button', text: { type: 'plain_text', text: '🎰 Casino', emoji: true }, action_id: 'open_casino' });
     if (telEerVandaag(userId) < eerLimiet(userId)) {
       acties.push({ type: 'button', text: { type: 'plain_text', text: '🙏 Eer geven', emoji: true }, action_id: 'open_eer', style: 'primary' });
     }
