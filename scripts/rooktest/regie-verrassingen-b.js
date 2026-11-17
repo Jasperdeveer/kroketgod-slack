@@ -133,7 +133,7 @@ harnas(async (h) => {
   h.ok(!bouwRegieStand(Date.now()).archiefKandidaat, 'archief: een regel van vóór het jongste lid wordt nooit geciteerd');
 
   // logBericht legt het draadveld vast.
-  const fs = require('fs'), pad = require('path').join(h.state, 'archief.ndjson');
+  const fs = require('fs'), pad = require('path').join(h.state, 'grootarchief.ndjson');
   await h.gebeurtenis('message', { user: 'UA', text: 'los bericht voor het archiefveld', channel: 'CKANAAL', ts: '1700000001.000100' });
   await h.gebeurtenis('message', { user: 'UA', text: 'draadantwoord voor het archiefveld', channel: 'CKANAAL', ts: '1700000002.000100', thread_ts: '1700000001.000100' });
   const regels = fs.readFileSync(pad, 'utf8').split('\n').filter(Boolean).map((r) => JSON.parse(r));

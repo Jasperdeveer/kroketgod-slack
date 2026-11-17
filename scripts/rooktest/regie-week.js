@@ -3,6 +3,7 @@
 'use strict';
 const harnas = require('./harnas.js');
 const regieLib = require('../../lib/regie.js');
+const { voegToeAanArchief } = require('../../lib/archief.js');
 
 const DAGEN = ['2026-11-23', '2026-11-24', '2026-11-25', '2026-11-26', '2026-11-27'];
 const LEDEN = ['UA', 'UB', 'UC', 'UD', 'UE', 'UF'];
@@ -26,6 +27,9 @@ harnas(async (h) => {
     h.schrijf('scores.json', Object.fromEntries(LEDEN.map((id, i) => [id, SCORES[i]])));
     const maxIngrepen = niveau === 'wild' ? 7 : 4;
     const rijen = [];
+    const telling = {}; // ingreep-id -> aantal keer gekozen in deze run
+    const snap = (f) => { try { return JSON.stringify(h.lees(f)); } catch { return 'ontbreekt'; } };
+    const ledenVoor = snap('members.json'), tribVoor = snap('tribunaal.json');
     let vorigeAantal = 0;
     console.log(`\n== Niveau ${niveau} ==`);
     for (const dag of DAGEN) {
@@ -35,6 +39,11 @@ harnas(async (h) => {
       stats[dag] = { leden: { UD: { gokkast: { spellen: 16, ingezet: 4, uitbetaald: 16 } } }, uitslagen: { UD: 'WWW' } };
       h.schrijf('casinostats.json', stats);
       h.schrijf('vergrijpen.json', { UB: [{ ts: start + 8 * 3_600_000 }] });
+      // Deel B: ketterij in het archief (UB elke dag, UE alleen woensdag), een balling met berouw (UC), een verbond (UA en UB), een lopend seizoen (uit seed-state).
+      voegToeAanArchief({ soort: 'lid', spreker: 'Bravo', sprekerId: 'UB', tekst: 'ketchup op mijn kroket, heerlijk', ts: start + 7 * 3_600_000, thread: false });
+      if (dag === DAGEN[2]) voegToeAanArchief({ soort: 'lid', spreker: 'Echo', sprekerId: 'UE', tekst: 'mijn kroket komt voortaan uit de airfryer', ts: start + 7 * 3_600_000, thread: false });
+      h.schrijf('verbanning.json', { UC: { tot: '2026-12-31T00:00:00.000Z', beroepGeprobeerd: true } });
+      h.schrijf('allianties.json', { UA: ['UB'], UB: ['UA'] });
       for (let min = 8 * 60; min <= 17 * 60 + 40; min += 20) {
         const nu = start + min * 60_000;
         Date.now = () => nu;
@@ -52,7 +61,7 @@ harnas(async (h) => {
       const staat = h.lees('regie.json');
       const vandaag = (staat.log || []).filter((r) => regieLib.amsMoment(r.ts).dag === dag);
       const ingr = vandaag.filter((r) => r.laag === 'ingreep');
-      ingr.forEach((r) => gekozen.add(r.id));
+      ingr.forEach((r) => { gekozen.add(r.id); telling[r.id] = (telling[r.id] || 0) + 1; });
       vandaag.filter((r) => r.laag === 'verrassing').forEach((r) => gekozen.add(r.id));
       const gegeven = vandaag.reduce((a, r) => a + Math.max(0, r.punten || 0), 0);
       const genomen = vandaag.reduce((a, r) => a + Math.max(0, -(r.punten || 0)), 0);
@@ -79,8 +88,16 @@ harnas(async (h) => {
       h.ok(buiten.length === 0, `${niveau} ${dag}: geen ingreep of praatje buiten 08:30-17:30`);
       h.ok(rij.verrassingen <= 1, `${niveau} ${dag}: hoogstens een verrassing (${rij.verrassingen})`);
       h.ok(rij.laagsteScore >= 0, `${niveau} ${dag}: laagste score ${rij.laagsteScore} >= 0`);
+      // geen ingreep tegen de balling (UC) voordat genade hem vrijmaakt
+      const genadeTs = Math.min(Infinity, ...vandaag.filter((r) => r.id === 'genade').map((r) => r.ts));
+      h.ok(!vandaag.some((r) => r.laag === 'ingreep' && r.id !== 'genade' && r.doel === 'UC' && r.ts < genadeTs), `${niveau} ${dag}: geen ingreep tegen de balling vóór genade`);
       vorigeAantal = (staat.log || []).length;
     }
+    h.ok(snap('members.json') === ledenVoor, `${niveau}: members.json ongewijzigd (geen kick)`);
+    h.ok(snap('tribunaal.json') === tribVoor, `${niveau}: tribunaal.json ongewijzigd (geen kick)`);
+    const alle = regieLib.REGIEBOEK.filter((i) => i.laag === 'ingreep').map((i) => i.id);
+    console.log(`\n${niveau} gekozen: ${Object.entries(telling).map(([id, n]) => `${id}x${n}`).join(', ') || '(geen)'}`);
+    console.log(`${niveau} nooit gekozen: ${alle.filter((id) => !telling[id]).join(', ') || '(geen)'}`);
     console.log(`\n${niveau}: datum | ingrepen | praatjes | gegeven | genomen | schorsingen | max lid | min gap`);
     for (const r of rijen) console.log(`${r.dag} | ${r.ingrepen.join(', ') || '-'} | ${r.praatjes} | ${r.gegeven} | ${r.genomen} | ${r.schorsingen} | ${r.maxLid} | ${r.minGap ?? '-'}`);
     return vorigeAantal;
