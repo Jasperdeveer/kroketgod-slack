@@ -12165,9 +12165,12 @@ async function voerDuel(client, userId, doelId, channelId, wapenId = null) {
   const metWeerwoord = !!weerwoord && weerwoord.tegenId === doelId;
   if (metWeerwoord) verbruikWeerwoord(userId);
   const basisKansDuel = metWeerwoord ? WEERWOORD_KANS : 0.5;
+  // De sterren (raadpleeg, horoscoop): een beslist duel verbruikt de horoscoop van beide duellisten, ook bij fortuin.
+  const sterren = raadpleeg.pakSterren(raadpleegStaat(), userId, doelId);
+  if (sterren.tekens.length) bewaarRaadpleeg(sterren.staat);
   let winnaarIsUitdager = fortuinUitdager ? true
     : fortuinDoelwit ? false
-    : Math.random() < basisKansDuel + (getGeluk(userId) - getGeluk(doelId));
+    : Math.random() < basisKansDuel + (getGeluk(userId) - getGeluk(doelId)) + sterren.delta;
 
   // DE INZET komt uit lib/paar.js en nergens anders. Drie mechanieken willen hem verhogen —
   // openstaande kerven, een verklaarde eeuwige twist, en de vete van het Rijk — en los
@@ -12328,6 +12331,10 @@ async function voerDuel(client, userId, doelId, channelId, wapenId = null) {
     claimVoor && `📖 ${verliesNaam} heeft 72 uur om te kiezen: vergeven, vergelden of laten liggen. De knoppen staan op de Home-tab.`,
   ].filter(Boolean);
   for (const regel of voetnoten) naspelRegel(naspel, regel);
+  if (sterren.tekens.length) {
+    const wie = sterren.tekens.map((t) => `${members[t.id]?.bijnaam || 'Een lid'} (${t.teken}, ${t.teken === 'gunstig' ? '+10%' : '−10%'})`).join(', ');
+    naspelRegel(naspel, `🔭 De sterren wogen mee: ${wie}.`);
+  }
   const hoofd = await postToChannel(client, channelId,
     duelTekst + premieBlok + vergeefBlok + standBlok
     + wekroep(nieuwWeerwoord ? verliesId : null, claimVoor) + naspelMenties(naspel));
@@ -14473,7 +14480,7 @@ async function voerRitueelUit(client, { userId, ritueel, rest, channelId, respon
 }
 
 // De rooktests (scripts/rooktest/) komen zo bij de regisseur.
-if (process.env.KROKET_ROOKTEST) module.exports = { voerRitueelUit, raadpleegStaat, bewaarRaadpleeg, bouwDashboardData, voerDashboardActie, saveInstellingen, casinoOpen, regieTik, bouwRegieStand, voerIngreepUit, UITVOERDERS, regieStaat, bewaarRegie, mogAutonoomPosten, werkdagenStil, casinoToegangReden, casinoMax, casinoPlafond, boekCasinoUitslag, casinoOpen, sluitGeleKaartPoll, voerDuel, voerEer, winkelPrijs, prijsRedenen, prijsToelichting, CRON_LABELS, geplandeCronMeta };
+if (process.env.KROKET_ROOKTEST) module.exports = { voerRitueelUit, raadpleegStaat, bewaarRaadpleeg, bouwDashboardData, voerDashboardActie, saveInstellingen, casinoOpen, regieTik, bouwRegieStand, voerIngreepUit, UITVOERDERS, regieStaat, bewaarRegie, mogAutonoomPosten, werkdagenStil, casinoToegangReden, casinoMax, casinoPlafond, boekCasinoUitslag, casinoOpen, sluitGeleKaartPoll, voerDuel, bouwAppHomeBlocks, voerEer, winkelPrijs, prijsRedenen, prijsToelichting, CRON_LABELS, geplandeCronMeta };
 
 // Wat het dashboard over het casino laat zien (bouwDashboardData) en kan (/api/casino).
 function casinoDashboardData(naam) {
@@ -15188,6 +15195,25 @@ async function meldDubbeleKorsten(client) {
     `> hetzelfde dacht — ook, en vooral, als dat toeval was.\n\n— De Hoge Frituurraad`);
 }
 
+// Een uitgekomen voorspelling of voldane boete: lezen, verwerken en schrijven zonder await ertussen, dan pas betalen en melden.
+async function raadpleegNaActie(client, userId, actie, naspel) {
+  const r = raadpleeg.verwerkActie(raadpleegStaat(), userId, actie);
+  if (!r.uitbetalingen.length) return;
+  bewaarRaadpleeg(r.staat);
+  const members = loadMembers();
+  const actorNaam = members[userId]?.bijnaam || 'Een lid';
+  for (const u of r.uitbetalingen) {
+    const orakel = u.soort === 'orakel';
+    const n = betaalNawerking({ id: orakel ? 'orakel' : 'biecht', doel: u.aan, punten: 1 });
+    const tekst = String(u.tekst || '').replace('{naam}', actorNaam);
+    const slot = n ? '+1 kroketpunt.' : REGIE_GEEN_RUIMTE;
+    const regel = orakel
+      ? `🔮 Het orakel van *${members[u.aan]?.bijnaam || 'een lid'}* kwam uit: _${tekst}_. ${slot}`
+      : `🕯️ *${actorNaam}* deed boete: _${tekst}_. De zonde is vergeven${n ? ': +1.' : '. ' + REGIE_GEEN_RUIMTE}`;
+    if (!naspelRegel(naspel, regel, u.aan)) await postToChannel(client, KANAAL(), regel);
+  }
+}
+
 async function telActie(client, userId, actie, aantal = 1, naspel = null) {
   try {
     if (!userId || !loadMembers()[userId]) return;
@@ -15203,6 +15229,9 @@ async function telActie(client, userId, actie, aantal = 1, naspel = null) {
     // In een eigen try — een exception hier mag nooit de puntenboeking hierboven ongedaan maken.
     try { await weegDubbeleKorst(client, userId, actie, naspel); }
     catch (err) { console.error('⚠️ Dubbele Korst wegen mislukt:', err.message); }
+    // Orakel en boetedoening (raadpleeg): ook in een eigen try.
+    try { await raadpleegNaActie(client, userId, actie, naspel); }
+    catch (err) { console.error('⚠️ Raadpleeg-gevolgen mislukt:', err.message); }
     await controleerPrestaties(client, userId, actie, stand, naspel);
 
     // Seizoenscampagne: élke daad drukt de dreiging van dit seizoen terug. Deze funnel is
@@ -15309,10 +15338,14 @@ registreerFeature({
     const regel = ({ o, klaar, nu }) =>
       (klaar ? `> ✅ ~${opdrachtTekst(o)}~ — *+${o.beloning}* geïnd`
              : `> ${homeVoortgangInline(nu, o.doel)} ${opdrachtTekst(o)} — *+${o.beloning}*`) + opdrachtNoot(o);
+    const b = raadpleegStaat().leden[userId]?.biecht;
+    const boeteRegel = b?.boete
+      ? '\n' + (b.voldaan ? `> ✅ ~Boetedoening: ${b.boete.tekst}~ — *+1* geïnd` : `> 🕯️ Boetedoening: ${b.boete.tekst} — *+1*`)
+      : '';
     return [
       { type: 'divider' },
       { type: 'section', text: { type: 'mrkdwn', text:
-        `*📜 OPDRACHTEN VAN VANDAAG*\n${dag.map(regel).join('\n')}` } },
+        `*📜 OPDRACHTEN VAN VANDAAG*\n${dag.map(regel).join('\n')}${boeteRegel}` } },
       { type: 'section', text: { type: 'mrkdwn', text:
         `*📜 DEZE WEEK*\n${week.map(regel).join('\n')}` } },
     ];
@@ -18310,6 +18343,9 @@ function bouwAppHomeBlocks(userId, melding = '', extraBlocks = []) {
     if (winkel) eretitels.push(`${winkel.icoon} ${winkel.naam} — nog ${rest}`);
     else if (veiling) eretitels.push(`🏺 ${veiling.naam} — nog ${rest}`);
   }
+  const raadpleegLid = raadpleegStaat().leden[userId] || {};
+  if (raadpleegLid.horoscoop && !raadpleegLid.horoscoop.verbruikt) eretitels.push(`🔭 Horoscoop: ${raadpleegLid.horoscoop.teken} voor uw volgende duel vandaag`);
+  if (raadpleegLid.orakel?.tekst && !raadpleegLid.orakel.uitgekomen) eretitels.push(`🔮 Uw voorspelling: ${raadpleegLid.orakel.tekst.replace('{naam}', loadMembers()[raadpleegLid.orakel.doel]?.bijnaam || 'een lid')}`);
   for (const t of titelsVan(userId)) {
     eretitels.push(`${t.icoon} ${t.naam}${t.verdedigingen ? ` — ${t.verdedigingen}× verdedigd` : ''}`);
   }
