@@ -83,9 +83,7 @@ const {
   SOORTEN, randSleutel, warmte: weefselWarmte, wrijving: weefselWrijving,
   graadPerLid, sterksteBand, grootsteVete, meestScheef, spil, eenlingen, relatiesVan,
 } = require('./lib/weefsel.js');
-const { MAX_HORIZON_DAGEN, parseerWanneer } = require('./lib/tijdcapsule.js');
 const { geleKaarten, kleurVoorNieuweKaart, schorsingUren, voegKaartToe, zonderLaatsteGeleKaart } = require('./lib/kaarten.js');
-const { zaakNummer, volgendeTeller, parseerZaak } = require('./lib/jurisprudentie.js');
 // Het Paarboek: één bladzijde per paar plus de claim-ladder. Vervangt op termijn de hele
 // wroklaag; draait voorlopig NAAST de kerfstok zodat beide dezelfde feiten zien en de
 // overgang te vergelijken is. De rekenkunde staat in de module, hier staat de bedrading.
@@ -109,21 +107,6 @@ const { magAanmelden } = require('./lib/toegang.js');
 const loadDaglimieten = () => readJSON('daglimieten.json', {});
 const saveDaglimieten = (d) => writeJSON('daglimieten.json', d);
 registreerFeature({ naam: 'daglimieten', state: ['daglimieten.json'] });
-const loadVoorstellen = () => readJSON('huisonderwerpen.json', { voorstellen: [] });
-const saveVoorstellen = (d) => writeJSON('huisonderwerpen.json', d);
-
-// De werkende lijst huisonderwerpen: die van de eigenaar uit de instellingen, plus wat leden
-// hebben voorgedragen én goedgekeurd gekregen. Eén functie, zodat voerEer niet hoeft te weten
-// dat er twee bronnen zijn.
-function actieveHuisonderwerpen() {
-  const eigen = huisonderwerpenUit(instelling('eerHuisonderwerpen'));
-  const goedgekeurd = (loadVoorstellen().voorstellen || [])
-    .filter(v => v && v.status === 'goedgekeurd')
-    .map(v => schoonOnderwerp(v.woord))
-    .filter(o => o.length >= 3);
-  return [...new Set([...eigen, ...goedgekeurd])];
-}
-
 const loadGunsten = () => readJSON('gunsten.json', {});
 const saveGunsten = (d) => writeJSON('gunsten.json', d);
 
@@ -138,8 +121,6 @@ const {
   EER_KLASSEN, EER_KLASSE_LABEL, EER_REDEN_MIN, EER_REDEN_MAX, ALLIANTIE_TERUGSLAG,
   redenProbleem, parseerKlasse, worpVoorKlasse, promoveerKlasse,
   isHerhaaldeReden, onthoudReden, huisonderwerpenUit, raaktHuisonderwerp, EER_HERHAALD,
-  schoonOnderwerp, ONDERWERP_UITLEG,
-  onderwerpProbleem,
 } = require('./lib/eerwaarde.js');
 const {
   inStilVenster, weegDaad, KORST_PUNTEN, KORST_MAX_PER_WEEK, korstenDezeWeek,
@@ -448,27 +429,6 @@ const app = new App({
           const { geverId, ontvangerId, reden } = await leesBody(req);
           const bericht = await voerDashboardEer(geverId, ontvangerId, reden);
           logAudit('eer', bericht);
-          res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
-          res.end(JSON.stringify({ ok: true, bericht }));
-        } catch (err) {
-          res.writeHead(500, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ ok: false, error: err.message }));
-        }
-      },
-    },
-    {
-      // Huisonderwerpen: de voordrachten van de leden goed- of afkeuren. Dit moet langs de
-      // eigenaar en kan niet vanzelf: raaktHuisonderwerp vergelijkt op deelwoord, dus één te
-      // ruim woord promoveert elke reden in het spel een klasse. Dat is geen smaakkwestie
-      // maar een inflatieknop.
-      path: '/api/huisonderwerp',
-      method: ['POST'],
-      handler: async (req, res) => {
-        if (!dashboardAuth(req, res)) return;
-        try {
-          const { woord, actie } = await leesBody(req);
-          const bericht = await voerHuisonderwerpBeheer(woord, actie);
-          logAudit('huisonderwerp', bericht);
           res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
           res.end(JSON.stringify({ ok: true, bericht }));
         } catch (err) {
@@ -1967,19 +1927,16 @@ function bouwLedenStatus() {
   const members   = loadMembers();
   const scores    = loadScores();
   const verbanning = loadVerbanning();
-  const heldentitels = loadHeldentitels();
   const nu = Date.now();
 
   const ledenLijst = Object.entries(members).map(([id, lid]) => {
     const punten  = scores[id] ?? 0;
     const ban     = verbanning[id];
     const actief  = ban && nu < new Date(ban.tot).getTime();
-    const helden  = heldentitels[id] || 0;
     const banInfo = actief
       ? ` — ⛔ VERBANNEN tot ${new Date(ban.tot).toLocaleString('nl-NL', { timeZone: 'Europe/Amsterdam', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })} (reden: ${ban.reden || 'onbekend'})`
       : '';
-    const heldInfo = helden > 0 ? ` — 🏅 ${helden}× kroket-held van de week` : '';
-    return `- ${lid.bijnaam}: ${punten} kroketpunten${heldInfo}${banInfo}`;
+    return `- ${lid.bijnaam}: ${punten} kroketpunten${banInfo}`;
   }).join('\n');
 
   const actiefVerbannen = Object.entries(verbanning)
@@ -2038,7 +1995,7 @@ function vraagNaarLedenData(tekst) {
 const KORTAF_UITGESLOTEN = new Set([
   'hoelang', 'weer', 'feitje', 'mop', 'grap', 'quiz', 'orakel', 'dossier', 'prompts',
   'kroketprompts', 'help', 'missie', 'complot', 'biecht', 'beroep', 'uitbreken', 'eer',
-  'straf', 'klacht', 'rechtbank', 'stem', 'alliantie', 'ranglijst', 'score', 'stand',
+  'straf', 'klacht', 'alliantie', 'ranglijst', 'score', 'stand',
   'leden', 'status', 'overzicht', 'gebod', 'geboden',
 ]);
 
@@ -2274,16 +2231,6 @@ function bouwGesprekHistorie({ maxBerichten = 6, maxChars = 2000 } = {}) {
     ? { role: 'assistant', content: b.tekst }
     : { role: 'user', content: neutraliseerDelimiters(`${b.spreker}: ${b.tekst}`) });
 }
-
-// ── Stemmen ───────────────────────────────────────────────────────────────────
-
-const loadStemmen = () => readJSON('stemmen.json', { weekStart: null, stemmen: {} });
-const saveStemmen = (data) => writeJSON('stemmen.json', data);
-
-// ── Heldentitels (cumulatief aantal keer kroket-held van de week) ─────────────
-
-const loadHeldentitels = () => readJSON('heldentitels.json', {});
-const saveHeldentitels = (data) => writeJSON('heldentitels.json', data);
 
 // ── Roem (permanente prestige-score — reset NOOIT) ────────────────────────────
 // Elke kroketpunt die ergens wordt verdiend (+delta > 0) gaat ook naar roem.
@@ -2875,12 +2822,6 @@ function logVergrijp(userId, type = 'belediging') {
   vergrijpen[userId] = lijst;
   saveVergrijpen(vergrijpen);
   return lijst.length;
-}
-
-// Geeft het aantal actieve vergrijpen terug zonder iets toe te voegen.
-function telVergrijpen(userId) {
-  const vergrijpen = loadVergrijpen();
-  return (vergrijpen[userId] || []).filter(v => Date.now() - v.ts < VERGRIJP_VENSTER_MS).length;
 }
 
 // Wist vergrijpen na een ban (schone lei).
@@ -4497,119 +4438,6 @@ function stripOndertekening(tekst) {
 const schoonOutput = (tekst) => normaliseerOndertekening(vervangNamen(
   tekst.replace(VERZONNEN_TOKEN, '').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim()
 ));
-
-// ── WK 2026 actuele data ─────────────────────────────────────────────────────
-// Haalt live WK-standen, uitslagen en programma op via football-data.org (gratis tier).
-// Vereist WK_API_KEY in .env (gratis account op football-data.org).
-// Data wordt 15 minuten gecached om binnen de 10 req/min limiet te blijven.
-
-const WK_CACHE_TTL = 15 * 60 * 1000;
-let _wkCache = { data: null, ts: 0 };
-
-const WK_CUES = /\b(wk|world\s*cup|mondiale|fifa|wereldkamp(ioen(schap)?)?|groepsfase|achtste\s*finale|kwartfinale|halve\s*finale|de\s*finale|oranje\b|nederland.*voetbal|voetbal.*nederland|voetbal(stand|uitslag|wedstrijd|team|ploeg|speler|programma)|stand.*groep|groep.*stand|poule|uitslag(en)?|wedstrijd(en)?|goals?|doelpunt(en)?|bondscoach)\b/i;
-
-function gaatOverWK(tekst) {
-  return WK_CUES.test(tekst || '');
-}
-
-async function haalWKData() {
-  const apiKey = process.env.WK_API_KEY;
-  if (!apiKey) return null;
-
-  const nu = Date.now();
-  if (_wkCache.data && nu - _wkCache.ts < WK_CACHE_TTL) return _wkCache.data;
-
-  const competitie = process.env.WK_COMPETITION_CODE || 'WC';
-  const headers = { 'X-Auth-Token': apiKey };
-
-  try {
-    const [matchRes, standRes] = await Promise.allSettled([
-      fetch(`https://api.football-data.org/v4/competitions/${competitie}/matches?limit=30`, { headers, signal: AbortSignal.timeout(8000) }),
-      fetch(`https://api.football-data.org/v4/competitions/${competitie}/standings`, { headers, signal: AbortSignal.timeout(8000) }),
-    ]);
-
-    const matchData = matchRes.status === 'fulfilled' && matchRes.value.ok ? await matchRes.value.json() : null;
-    const standData = standRes.status === 'fulfilled' && standRes.value.ok ? await standRes.value.json() : null;
-
-    if (!matchData && !standData) return null;
-
-    const formatted = _formatWKContext(matchData, standData);
-    _wkCache = { data: formatted, ts: nu };
-    return formatted;
-  } catch (e) {
-    console.error('⚽ WK API fout:', e.message);
-    return null;
-  }
-}
-
-function _formatWKContext(matchData, standData) {
-  const AMS = 'Europe/Amsterdam';
-  const nuAms = new Date().toLocaleDateString('nl-NL', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: AMS });
-  const vandaagStr = new Date().toLocaleDateString('en-CA', { timeZone: AMS }); // YYYY-MM-DD in AMS
-
-  const lines = [`=== WK 2026 ACTUELE DATA (nu: ${nuAms}) ===`];
-
-  // Standen per groep
-  if (standData?.standings?.length) {
-    const totaalStanden = standData.standings.filter(s => s.type === 'TOTAL');
-    if (totaalStanden.length) {
-      lines.push('\n📊 GROEPSSTANDEN:');
-      for (const groep of totaalStanden) {
-        const label = groep.group?.replace('GROUP_', 'Groep ') || groep.stage || '';
-        const rijen = (groep.table || []).slice(0, 4).map(r =>
-          `  ${r.position}. ${r.team.name}: ${r.points}pts (${r.playedGames}G ${r.won}W ${r.draw}G ${r.lost}V, ${r.goalsFor}-${r.goalsAgainst})`
-        ).join('\n');
-        if (rijen) lines.push(`${label}:\n${rijen}`);
-      }
-    }
-  }
-
-  if (matchData?.matches?.length) {
-    const live = matchData.matches.filter(m => ['IN_PLAY', 'PAUSED', 'HALFTIME'].includes(m.status));
-    const gespeeld = matchData.matches
-      .filter(m => m.status === 'FINISHED')
-      .sort((a, b) => new Date(b.utcDate) - new Date(a.utcDate))
-      .slice(0, 6);
-    const gepland = matchData.matches
-      .filter(m => ['SCHEDULED', 'TIMED'].includes(m.status))
-      .sort((a, b) => new Date(a.utcDate) - new Date(b.utcDate))
-      .slice(0, 8);
-
-    const dagLabel = (utcDate) => {
-      const datumStr = new Date(utcDate).toLocaleDateString('en-CA', { timeZone: AMS });
-      const label = new Date(utcDate).toLocaleDateString('nl-NL', { weekday: 'long', day: 'numeric', month: 'short', timeZone: AMS });
-      return datumStr === vandaagStr ? `VANDAAG (${label})` : label;
-    };
-
-    if (live.length) {
-      lines.push('\n🔴 LIVE NU:');
-      for (const m of live) {
-        const thuis = m.score?.fullTime?.home ?? '?';
-        const uit = m.score?.fullTime?.away ?? '?';
-        lines.push(`  ${m.homeTeam.name} ${thuis} - ${uit} ${m.awayTeam.name}`);
-      }
-    }
-    if (gespeeld.length) {
-      lines.push('\n✅ RECENTE UITSLAGEN:');
-      for (const m of gespeeld) {
-        const d = dagLabel(m.utcDate);
-        const thuis = m.score?.fullTime?.home ?? '?';
-        const uit = m.score?.fullTime?.away ?? '?';
-        lines.push(`  ${d}: ${m.homeTeam.name} ${thuis}-${uit} ${m.awayTeam.name}`);
-      }
-    }
-    if (gepland.length) {
-      lines.push('\n📅 KOMENDE WEDSTRIJDEN:');
-      for (const m of gepland) {
-        const dag = dagLabel(m.utcDate);
-        const tijd = new Date(m.utcDate).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit', timeZone: AMS });
-        lines.push(`  ${dag} ${tijd}: ${m.homeTeam.name} vs ${m.awayTeam.name}`);
-      }
-    }
-  }
-
-  return lines.join('\n');
-}
 
 // ── Rate limiter ────────────────────────────────────────────────────────────────
 // Slack Tier 3 = ~50 chat.postMessage per minuut per kanaal.
@@ -6390,7 +6218,6 @@ async function voerKroketCommandoUit({ command, respond, client }) {
         'kroket vs bitterbal',
         'rap de snackleer',
         'rap [naam]',
-        'rechtbank [naam1] vs [naam2]',
         'schrijf een necrologie voor een mislukte kroket',
         'schrijf een kroket-huwelijksaanzoek',
         'schrijf een kroket-horrorscenario',
@@ -7118,18 +6945,15 @@ async function voerKroketCommandoUit({ command, respond, client }) {
       const scores = loadScores();
       const roemData = loadRoem();
       const allMembers = loadMembers();
-      const heldentitels = loadHeldentitels();
       const troonKoning = readJSON('troon.json', { koningId: null }).koningId;
       // Sorteer op weekscore voor de competitie-positie
       const gesorteerd = Object.entries(scores).sort((a, b) => b[1] - a[1]);
       const lijst = gesorteerd.map(([id, score]) => {
         const roem = roemData[id] || 0;
         const rang = getRang(roem);
-        const heldAantal = heldentitels[id] || 0;
-        const heldLabel = heldAantal > 0 ? `  🏅 ${heldAantal}× held` : '';
         const kroon = id === troonKoning ? ' 👑' : '';
         const goud = heeftPowerup(id, 'gouden_korst') ? ' ✨' : ''; // Gouden Korst (Aflatenhandel)
-        return `${rang.naam} — ${allMembers[id]?.bijnaam || id}${kroon}${goud}: ${score} pts deze week  _(${roem} roem)_${heldLabel}`;
+        return `${rang.naam} — ${allMembers[id]?.bijnaam || id}${kroon}${goud}: ${score} pts deze week  _(${roem} roem)_`;
       }).join('\n');
       const tekst = `⚜️ DE HEILIGE RANGLIJST DER KROKET ILLUMINATI ⚜️\n\n${lijst}\n\n_Rang is permanent en stijgt nooit terug. Kroketpunten resetten elke week (zondagnacht), maandag 08:00 volgt ${ZAKGELD} zakgeld; roem blijft voor altijd._\n\n— De Almachtige Kroket God`;
       if (isDM) {
@@ -7154,12 +6978,10 @@ async function voerKroketCommandoUit({ command, respond, client }) {
       const scores = loadScores();
       const roemData = loadRoem();
       const streaks = loadStreaks();
-      const heldentitels = loadHeldentitels();
       const punten = scores[id] ?? 0;
       const roem = roemData[id] || 0;
       const rang = getRang(roem);
       const streak = streaks[id]?.huidig ?? 0;
-      const heldAantal = heldentitels[id] || 0;
       const lidSinds = lid.lidSinds ? new Date(lid.lidSinds).toLocaleDateString('nl-NL') : 'onbekend';
 
       const banStatus = isVerbannen(id);
@@ -7176,7 +6998,6 @@ async function voerKroketCommandoUit({ command, respond, client }) {
             .map(p => `${WINKEL_ITEMS[p.item]?.icoon || '•'} ${WINKEL_ITEMS[p.item]?.naam || p.item}`);
           return actief.length ? `\n*Actieve zegeningen:* ${actief.join(' · ')}` : '';
         })() +
-        (heldAantal > 0 ? `\n*Kroket-Held van de Week:* 🏅 ${heldAantal}× gekroond` : '') +
         (streak ? `\n*Vrijdagstreak:* ${streak} week(en) onafgebroken` : '') +
         (lid.favorieteKroket ? `\n*Favoriete kroket:* ${lid.favorieteKroket}` : '') +
         (lid.verjaardag ? `\n*Verjaardag:* ${lid.verjaardag}` : '') +
@@ -7255,40 +7076,6 @@ async function voerKroketCommandoUit({ command, respond, client }) {
         `📖 *DE BLADZIJDE*\n${regels}` +
         (open ? `\n\n*Er staat iets voor u open:*\n${open}\n_De knoppen om te vergeven, vergelden of laten liggen staan op uw Home-tab._` : ''),
       });
-      return;
-    }
-
-    // ── Huisonderwerp voordragen ─────────────────────────────────────────────
-    // Een lid draagt voor, de eigenaar keurt goed op het dashboard. Niet vrij: raaktHuisonderwerp
-    // vergelijkt op deelwoord, dus één te algemeen woord promoveert élke reden in het spel.
-    if (input.startsWith('huisonderwerp')) {
-      const woord = input.replace(/^huisonderwerp\s*/i, '').trim();
-      const data = loadVoorstellen();
-      const eigen = (data.voorstellen || []).filter(v => v.door === command.user_id && v.status !== 'afgewezen');
-      if (!woord) {
-        const lijst = actieveHuisonderwerpen();
-        await respond({ text:
-          `📖 _Huisonderwerpen wegen bij een eerbewijs een klasse zwaarder._\n` +
-          `Nu actief: ${lijst.length ? lijst.map(o => `\`${o}\``).join(' · ') : '(geen)'}\n` +
-          (eigen.length ? `Uw voorstellen: ${eigen.map(v => `\`${v.woord}\` (${v.status})`).join(' · ')}\n` : '') +
-          `Voordragen met \`/kroketgod huisonderwerp [woord]\` — maximaal 2 per lid, de Raad keurt goed.`,
-          response_type: 'ephemeral' });
-        return;
-      }
-      if (eigen.length >= 2) {
-        await respond({ text: '_U heeft al twee onderwerpen voorgedragen. Wacht tot de Raad erover oordeelt._', response_type: 'ephemeral' });
-        return;
-      }
-      const probleem = onderwerpProbleem(woord, [...actieveHuisonderwerpen(), ...(data.voorstellen || []).map(v => v.woord)]);
-      if (probleem) {
-        const uitleg = ONDERWERP_UITLEG[probleem] || 'Dat kan niet.';
-        await respond({ text: `_${uitleg}_`, response_type: 'ephemeral' });
-        return;
-      }
-      data.voorstellen = [...(data.voorstellen || []), { door: command.user_id, woord: schoonOnderwerp(woord), ts: Date.now(), status: 'voorgedragen' }];
-      saveVoorstellen(data);
-      logAudit('huisonderwerp', `${aanvrager} draagt "${schoonOnderwerp(woord)}" voor`);
-      await respond({ text: `_"${schoonOnderwerp(woord)}" is voorgedragen. De Hoge Frituurraad beslist._`, response_type: 'ephemeral' });
       return;
     }
 
@@ -7775,85 +7562,6 @@ async function voerKroketCommandoUit({ command, respond, client }) {
 
 
 
-    // ── Rechtbank
-    // Zie voerZaak: dit was een eenmalig vonnis dat daarna verdween. Nu krijgt het een zaaknummer
-    // en wordt het precedent voor volgende zaken.
-    if (input.startsWith('rechtbank')) {
-      const zaakInvoer = input.replace(/^rechtbank\s*/, '').trim();
-      if (!zaakInvoer) {
-        await respond({ text: '_Gebruik: `/kroketgod rechtbank [naam1] vs [naam2]` — eventueel met `over [grond]` erachter. Elk vonnis krijgt een zaaknummer en telt mee als precedent._', response_type: 'ephemeral' });
-        return;
-      }
-      const uitkomst = await voerZaak(client, command.user_id, zaakInvoer, command.channel_id);
-      await respond({ text: uitkomst.tekst, response_type: 'ephemeral' });
-      return;
-    }
-
-    // ── Het register van gewezen zaken ────────────────────────────────────────
-    if (input === 'jurisprudentie' || input === 'zaken' || input === 'zaak' || input.startsWith('zaak ')) {
-      const { zaken } = loadJurisprudentie();
-      if (!zaken?.length) {
-        await respond({ text: '_De Raad heeft nog geen zaak gewezen. Begin er een met `/kroketgod rechtbank [naam1] vs [naam2]`._', response_type: 'ephemeral' });
-        return;
-      }
-      const gevraagd = input.startsWith('zaak ') ? input.replace(/^zaak\s*/, '').trim() : '';
-      if (gevraagd) {
-        // Zowel "2026/VII" als alleen "VII" of "7" moet werken — niemand typt het jaar erbij.
-        const z = zaken.find(x => x.nummer.toLowerCase() === gevraagd.toLowerCase())
-          || zaken.find(x => x.nummer.split('/')[1].toLowerCase() === gevraagd.toLowerCase());
-        if (!z) {
-          await respond({ text: `_Zaak "${gevraagd}" staat niet in het register. Bekijk \`/kroketgod jurisprudentie\`._`, response_type: 'ephemeral' });
-          return;
-        }
-        await respond({ text: `⚖️ *${z.nummer}*\n\n${z.tekst}`, response_type: 'ephemeral' });
-        return;
-      }
-      const regels = zaken.slice(-12).reverse()
-        .map(z => `> *${z.nummer}* — ${z.partij1} / ${z.partij2}${z.grond ? ` _(over ${z.grond})_` : ''}`)
-        .join('\n');
-      await respond({ text: `⚖️ *HET REGISTER VAN DE HOGE FRITUURRAAD*\n\n${regels}\n\n_${zaken.length} zaak/zaken gewezen · \`/kroketgod zaak [nummer]\` voor de volledige uitspraak · elke zaak is precedent voor de volgende._`, response_type: 'ephemeral' });
-      return;
-    }
-
-    // ── Stem
-    if (input.startsWith('stem ')) {
-      const invoer = input.replace('stem ', '').trim();
-      const gevonden = getMemberByNaam(invoer);
-      if (!gevonden) {
-        await respond(`De Kroket God kent geen volgeling genaamd "${invoer}".`);
-        return;
-      }
-      const [voteeId, voteeLid] = gevonden;
-      const stemData = loadStemmen();
-      const weekStart = getMondayOfWeek();
-
-      if (stemData.weekStart !== weekStart) {
-        stemData.weekStart = weekStart;
-        stemData.stemmen = {};
-      }
-
-      if (stemData.stemmen[command.user_id]) {
-        const vorigeId = stemData.stemmen[command.user_id];
-        const vorige = members[vorigeId]?.bijnaam || 'iemand';
-        await respond({ text: `U heeft deze week al gestemd op ${vorige}. De Hoge Frituurraad accepteert geen dubbele stemmen.`, response_type: 'ephemeral' });
-        return;
-      }
-
-      stemData.stemmen[command.user_id] = voteeId;
-      saveStemmen(stemData);
-
-      const aantalStemmen = Object.values(stemData.stemmen).filter(id => id === voteeId).length;
-      const tekst = await kroketResponse(
-        `[STEMMER: ${aanvrager}] [KANDIDAAT: ${voteeLid.bijnaam}] ` +
-        `${aanvrager} heeft zijn stem uitgebracht op ${voteeLid.bijnaam} als kroket-held van de week. ` +
-        `${voteeLid.bijnaam} staat nu op ${aantalStemmen} stem(men). ` +
-        `Richt de aankondiging tot de groep — niet tot één persoon. Reageer plechtig op deze democratische daad. Geen inleidingszin.`,
-        350, false
-      );
-      await postToChannel(client, command.channel_id, tekst);
-      return;
-    }
-
     // ── Uitverkorene
     if (input === 'slachtoffer') {
       const positief = Math.random() < 0.5;
@@ -8223,36 +7931,6 @@ async function voerKroketCommandoUit({ command, respond, client }) {
       return;
     }
 
-    // ── De Tijdcapsule ────────────────────────────────────────────────────────
-    if (input.startsWith('voorspel')) {
-      const rest = input.replace(/^voorspel(ling)?\s*/, '').trim();
-      if (!rest) {
-        await respond({ text: '_Gebruik: `voorspel [wanneer] [wat]` — bijvoorbeeld `voorspel over 2 weken de bamischijf valt`, `voorspel vrijdag het regent ragout` of `voorspel 31 december alles is anders`._', response_type: 'ephemeral' });
-        return;
-      }
-      const uitkomst = await verzegelCapsule(client, command.user_id, rest);
-      await respond({ text: uitkomst.tekst, response_type: 'ephemeral' });
-      return;
-    }
-
-    if (input === 'capsules' || input === 'capsule' || input === 'voorspellingen') {
-      const items = loadCapsules().items || [];
-      if (!items.length) {
-        await respond({ text: '_Er is nog nooit een tijdcapsule verzegeld. Wees de eerste: `/kroketgod voorspel over 2 weken [wat]`._', response_type: 'ephemeral' });
-        return;
-      }
-      const naam = (id) => members[id]?.bijnaam || 'een oud-lid';
-      const open = items.filter(c => c.status === 'verzegeld' || c.status === 'stemming')
-        .sort((a, b) => a.deadline - b.deadline)
-        .map(c => `> *${naam(c.userId)}*: "${c.tekst}" — ${c.status === 'stemming' ? '_de Raad stemt nu_' : capsuleDatum(c.deadline)}`);
-      const gedaan = items.filter(c => c.status === 'beslecht').slice(-5).reverse()
-        .map(c => `> ${c.uitkomst?.uitgekomen ? '✅' : c.uitkomst?.gelijk ? '➖' : '❌'} *${naam(c.userId)}*: "${c.tekst}"`);
-      await respond({ text:
-        `⏳ *DE TIJDCAPSULES*\n\n*Nog verzegeld*\n${open.length ? open.join('\n') : '> _geen_'}\n\n` +
-        `*Beoordeeld*\n${gedaan.length ? gedaan.join('\n') : '> _geen_'}`, response_type: 'ephemeral' });
-      return;
-    }
-
     // ── Het Sociale Weefsel ───────────────────────────────────────────────────
     // Ephemeral, en de eigen draden staan erbij: het groepsrapport alleen zou de vraag
     // "en ik dan?" oproepen, terwijl juist dat de bruikbare helft is.
@@ -8478,7 +8156,6 @@ async function voerKroketCommandoUit({ command, respond, client }) {
       return;
     }
 
-    // ── De titels van het Rijk: wie draagt wat, en hoe pakt u het af ──────────
     // ── De Vetwissel: lenen, aflossen, kwijtschelden, innen ─────────────────
     if (input === 'wissel' || input.startsWith('wissel ') || input === 'wissels') {
       const rest = input.replace(/^wissels?\s*/, '').trim();
@@ -9952,14 +9629,6 @@ app.event('app_mention', async ({ event, client }) => {
       prompt += `\n\n${bouwLedenStatus()}`;
     }
 
-    // Injecteer actuele WK-data als de vraag WK-gerelateerd is
-    if (input && gaatOverWK(input)) {
-      const wkData = await haalWKData();
-      if (wkData) {
-        prompt += `\n\n${wkData}\n\nDe bovenstaande WK-data is actueel. Verwerk dit in je antwoord. Spreek over het WK zoals de Kroket God dat doet: als een heilige strijd tussen volken, een paneerlaag-beproeving op mondiaal niveau. Gebruik concrete feiten uit de data.`;
-      }
-    }
-
     // Gouden Korst (Aflatenhandel): de Kroket God spreekt de drager aan als Gezalfde.
     if (members[userId] && heeftPowerup(userId, 'gouden_korst')) {
       prompt += `\n\n${bijnaam} draagt op dit moment de GOUDEN KORST, verworven in de Heilige Aflatenhandel. ` +
@@ -10546,7 +10215,6 @@ const CRON_LABELS = {
   '0 12 * * *':      { label: 'Heilig moment', vrijdagOnly: true, toonExpr: '0 12 * * 5' },
   '2 12 * * *':      { label: 'Kroontribuut' },
   '0 15 * * 5':      { label: 'Weekoverzicht' },
-  '0 16 * * 5':      { label: 'Wekelijkse held' },
   '59 23 * * 0':     { label: 'Weekkampioen + reset' },
   '30 10 * * 1':     { label: 'Kroket-bingo' },
   '0 10 * * 1':      { label: 'Wekelijkse rang-gunst' },
@@ -10886,43 +10554,6 @@ planCron('0 9 * * 2-5', async () => {
     await postToChannel(app.client, process.env.SLACK_CHANNEL_ID, tekst);
   } catch (err) {
     console.error('Fout bij stemming aankondiging:', err);
-  }
-}, { timezone: 'Europe/Amsterdam' });
-
-// ── Cron: vrijdag 16:00 — wekelijkse held verkondigen ─────────────────────────
-
-planCron('0 16 * * 5', async () => {
-  try {
-    const stemData = loadStemmen();
-    const weekStart = getMondayOfWeek();
-    if (stemData.weekStart !== weekStart || Object.keys(stemData.stemmen).length === 0) return;
-
-    const telling = {};
-    for (const voteeId of Object.values(stemData.stemmen)) {
-      telling[voteeId] = (telling[voteeId] || 0) + 1;
-    }
-    const [winnaarId, aantal] = Object.entries(telling).sort((a, b) => b[1] - a[1])[0];
-    const members = loadMembers();
-    const winnaar = members[winnaarId]?.bijnaam || 'Onbekend';
-
-    // Kroon de winnaar met 2 extra punten
-    const uitgesteldeZegens = []; // verbondszegen pas posten ná de heldverkondiging
-    await pasScoreAanMetCheck(app.client, winnaarId, 2, { uitgesteldeZegens });
-
-    // Heldentitel teller ophogen
-    const heldentitels = loadHeldentitels();
-    heldentitels[winnaarId] = (heldentitels[winnaarId] || 0) + 1;
-    saveHeldentitels(heldentitels);
-    const aantalTitels = heldentitels[winnaarId];
-
-    const tekst = await kroketResponse(
-      `Het is vrijdag 16:00. De stemmen zijn geteld. ${winnaar} is uitgeroepen tot Kroket-Held van de Week met ${aantal} stem(men). Dit is hun ${aantalTitels}e heldentitel. Verkondig dit plechtig, ken hen extra eer toe (2 kroketpunten extra), en sluit de stembussen tot volgende week. Geen inleidingszin.`,
-      500, false
-    );
-    await postMetStem(app.client, process.env.SLACK_CHANNEL_ID, tekst);
-    for (const post of uitgesteldeZegens) await post();
-  } catch (error) {
-    console.error('Fout bij wekelijkse held:', error);
   }
 }, { timezone: 'Europe/Amsterdam' });
 
@@ -13772,12 +13403,6 @@ function legVetpapier(geverId, spreker, tekst, ts, kanaal) {
   return papiertjes.length;
 }
 
-function vetpapierBudgetOver(userId) {
-  const data = loadVetpapier();
-  if (data.week !== getMondayOfWeek()) return VETPAPIER_BUDGET;
-  return Math.max(0, VETPAPIER_BUDGET - (data.papiertjes || []).filter(p => p.geverId === userId).length);
-}
-
 // Maandag 10:20 — de best ingepakte regel. Templated behalve één droge slotregel; die heeft een
 // volledig vangnet, dus quota-uitval kost hoogstens de grap en nooit de uitkering.
 async function leesVetpapierVoor(client) {
@@ -14373,7 +13998,7 @@ async function voerEer(client, geverId, ontvangerIds, reden, channelId, opties =
   // Werkt ook bovenop een herhaalde reden — "sowieso extra" is sowieso extra — maar de
   // herhaalstraf blijft staan, dus een hergebruikt huisonderwerp komt één klasse lager uit dan
   // een verse. Dat is precies de juiste rangorde.
-  const huisGeraakt = raaktHuisonderwerp(schoneReden, actieveHuisonderwerpen());
+  const huisGeraakt = raaktHuisonderwerp(schoneReden, huisonderwerpenUit(instelling('eerHuisonderwerpen')));
   const basisKlasse = huisGeraakt ? promoveerKlasse(juryKlasse) : juryKlasse;
   if (!vanGod) onthoudEerReden(geverId, schoneReden);
 
@@ -16414,14 +16039,6 @@ function ambtHouder(key) {
   return houder;
 }
 
-// Resterende zegels van een ambt. Het budget is de norm van het ambt plus wat de rang erbij
-// geeft (zegelExtra), en de onderste trede haalt er juist één af.
-function zegelsOver(key) {
-  const rec = loadAmbten().ambten[key];
-  if (!rec?.houderId) return 0;
-  return Math.max(0, rec.zegels ?? 0);
-}
-
 function zegelNormVoor(key, houderId) {
   return zegelBudget(key, getVoorrechten(houderId).zegelExtra);
 }
@@ -16778,12 +16395,6 @@ async function keerGulheidUit(client) {
 // De kaart toont geen getallen maar toestanden, en biedt één keuze aan wie iets is aangedaan.
 // Bewust GEEN eigen kanaalberichten: dit hoort bij wat je ziet als je kijkt, niet bij wat er
 // langskomt. Het hele punt van deze feature is dat wrok zichtbaar wordt zonder luider te worden.
-registreerFeature({
-  naam: 'huisonderwerpen',
-  state: ['huisonderwerpen.json'],
-  help: [{ gebruik: '/kroketgod huisonderwerp [woord]', verwacht: 'draag een eigen onderwerp voor dat bij eer een klasse zwaarder weegt' }],
-});
-
 registreerFeature({
   naam: 'gunst',
   state: ['gunsten.json'],
@@ -18740,19 +18351,6 @@ function cooldownTekst(st) {
   // ergens staan.
   if (regels.some(r => r.includes('`'))) regels.push('', '_`▓` = nog te doen · `░` = verbruikt_');
   return regels.join('\n');
-}
-
-// Block Kit-vorm voor de App Home: daar is de ruimte breder en is monospace juist de huisstijl
-// (zie homeTabel), dus daar lijnen de kolommen echt uit.
-function cooldownBlocks(st) {
-  const blocks = [];
-  for (const g of cooldownGroepen(st)) {
-    const rijen = g.items.map(c => cooldownRij(c, g.breedte, g.resetMs));
-    blocks.push({ type: 'section', text: { type: 'mrkdwn', text:
-      `*${g.homeKop}*\n${homeTabel(rijen.map(r => [r.naam, `${r.meter ? `${r.meter}  ` : ''}${r.status}`]))}` } });
-    blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: cooldownGroepNoot(g) }] });
-  }
-  return blocks;
 }
 
 // Het GROEPSoverzicht, templated. Dit stond eerst in een LLM-prompt ("gebruik uitsluitend deze
@@ -22738,362 +22336,6 @@ planCron('0 16 * * 1-5', async () => {
 }, { timezone: 'Europe/Amsterdam' });
 
 // ══════════════════════════════════════════════════════════════════════════════
-// DE HOGE FRITUURRAAD — jurisprudentie
-// ══════════════════════════════════════════════════════════════════════════════
-// Het bestaande `rechtbank [A] vs [B]`-commando was eenmalig theater: de Kroket God sprak een
-// vonnis en dat was daarna weg. Nu krijgt elk vonnis een ZAAKNUMMER en wordt het bewaard — en bij
-// een volgende zaak haalt de BM25-index van Het Grote Archief de vergelijkbare vonnissen op, die de
-// God in zijn uitspraak MOET aanhalen.
-//
-// Daardoor ontstaat er een rechtsstelsel dat niemand heeft ontworpen: "conform de zaak
-// Kroketinho/KroketPet, 2026/III". Elke uitspraak verhoudt zich tot de vorige, en na een paar
-// maanden heeft het genootschap een eigen rechtsleer met precedenten die de leden zelf hebben
-// veroorzaakt.
-//
-// BEWUST GEEN PUNTEN OF STRAFFEN. Er zijn al twee wegen voor echte gevolgen (de gele kaart met
-// stemming, en het tribunaal). Een derde weg met sancties zou die twee ondermijnen en van een grap
-// een machtsmiddel maken. Dit is de civiele, ceremoniële tak: de uitspraak zélf is de inzet.
-//
-// ÉÉN ZAAK PER AANKLAGER PER DAG. Elk vonnis is voorgoed precedent, dus zonder rem zou één lid op
-// één middag de hele rechtsleer kunnen schrijven.
-
-const JURISPRUDENTIE_BESTAND = 'jurisprudentie.json';
-const loadJurisprudentie = () => readJSON(JURISPRUDENTIE_BESTAND, { zaken: [], laatsteZaak: {} });
-const saveJurisprudentie = (data) => writeJSON(JURISPRUDENTIE_BESTAND, data);
-
-// Hoeveel vonnissen we in het overzicht bewaren. Het archief houdt ze allemaal (en dat is de bron
-// voor de precedenten); dit bestand is het register en mag begrensd blijven.
-const JURISPRUDENTIE_MAX = 100;
-const ZAAK_COOLDOWN_MS = 20 * 3_600_000; // ~een dag, maar niet op de klok van middernacht
-
-// Voert een zaak. Geeft { ok, tekst } terug; bij ok plaatst hij zelf het vonnis in het kanaal.
-async function voerZaak(client, aanklagerId, invoer, channelId) {
-  const ontleed = parseerZaak(invoer);
-  if (ontleed.fout) return { ok: false, tekst: `_${ontleed.fout}_` };
-
-  const data = loadJurisprudentie();
-  const laatste = data.laatsteZaak?.[aanklagerId] || 0;
-  if (Date.now() - laatste < ZAAK_COOLDOWN_MS) {
-    const rest = resterendeTijd(ZAAK_COOLDOWN_MS - (Date.now() - laatste));
-    return { ok: false, tekst: `_De Raad behandelt één zaak per aanklager per dag. Uw volgende zittingsuur begint over ${rest}._` };
-  }
-
-  // Namen naar leden herleiden waar mogelijk; een buitenstaander mag ook partij zijn (zoals het
-  // oude commando ook toestond) maar wordt als zodanig benoemd.
-  const g1 = getMemberByNaam(ontleed.partij1);
-  const g2 = getMemberByNaam(ontleed.partij2);
-  const partij1 = g1 ? g1[1].bijnaam : `Buitenstaander "${ontleed.partij1}"`;
-  const partij2 = g2 ? g2[1].bijnaam : `Buitenstaander "${ontleed.partij2}"`;
-  if (g1 && g2 && g1[0] === g2[0]) {
-    return { ok: false, tekst: '_Een zaak tegen uzelf is geen zaak maar een gewetenskwestie._' };
-  }
-
-  const jaar = new Date().getFullYear();
-  const nummer = zaakNummer(jaar, volgendeTeller(data.zaken, jaar));
-
-  // Precedenten: zoek in het archief naar eerdere VONNISSEN die op deze zaak lijken. De grond
-  // weegt het zwaarst, maar de partijnamen doen ook mee — een eerdere zaak tussen dezelfde twee
-  // is per definitie relevant.
-  const zoekterm = [ontleed.grond, partij1, partij2].filter(Boolean).join(' ');
-  const precedenten = zoekArchief(zoekterm, { n: 3, soort: 'vonnis', minLengte: 20 });
-  const precedentBlok = precedenten.length
-    ? `\n\n${wrapOnvertrouwd(
-        'EERDERE VONNISSEN VAN DE RAAD (precedenten). Haal er MINSTENS ÉÉN expliciet aan bij zaaknummer, ' +
-        'en verhoud je uitspraak ertoe: volg het precedent, of wijk er beargumenteerd van af',
-        precedenten.map(p => p.tekst).join('\n\n'))}`
-    : '\n\nEr zijn nog geen precedenten: dit is een zaak van de eerste soort. Zeg dat expliciet — de Raad vestigt hier nieuw recht.';
-
-  const grondZin = ontleed.grond
-    ? `De grond van de aanklacht: "${ontleed.grond}".`
-    : 'De grond van de aanklacht is niet nader omschreven; benoem dat en leid hem zelf af uit de snackleer.';
-
-  const vonnis = await kroketResponseMetVangnet(
-    `Je bent de Hoge Frituurraad en spreekt vonnis in zaak ${nummer}: ${partij1} tegen ${partij2}. ${grondZin}\n\n` +
-    `EISEN:\n` +
-    `- Begin met "*ZAAK ${nummer} — ${partij1} / ${partij2}*" en niets daarvoor.\n` +
-    `- Spreek beide partijen uitsluitend aan bij hun exacte naam: "${partij1}" en "${partij2}".\n` +
-    `- Structuur: de aanklacht (1 zin), het verweer (1 zin), de overweging (1-2 zinnen, verwijs naar de Geboden of de snackleer), het vonnis (1-2 zinnen).\n` +
-    `- Er is een winnende en een verliezende partij. Geen gelijkspel, geen ontwijking.\n` +
-    `- Leg GEEN kroketpunten, straffen of verbanningen op — de Raad spreekt hier recht, geen sancties.\n` +
-    `- Juridische, plechtige taal. Geen inleidingszin.` +
-    precedentBlok,
-    700, false,
-    `⚖️ *ZAAK ${nummer} — ${partij1} / ${partij2}*\n\n> De Raad heeft de zaak gehoord, maar het Vetbad is te onrustig voor een volwaardig vonnis. ` +
-    `De zaak wordt aangehouden en het nummer blijft gereserveerd.\n\n— De Hoge Frituurraad`
-  );
-
-  const zaak = {
-    nummer, jaar, ts: Date.now(),
-    aanklagerId,
-    partij1, partij2,
-    partij1Id: g1 ? g1[0] : null,
-    partij2Id: g2 ? g2[0] : null,
-    grond: ontleed.grond || null,
-    tekst: vonnis,
-  };
-  data.zaken = [...(data.zaken || []), zaak].slice(-JURISPRUDENTIE_MAX);
-  data.laatsteZaak = { ...(data.laatsteZaak || {}), [aanklagerId]: Date.now() };
-  saveJurisprudentie(data);
-
-  // Naar het archief met soort 'vonnis', zodat de BM25-index hem bij een volgende zaak als
-  // precedent kan opdiepen. Het zaaknummer staat vooraan in de tekst — zonder dat kan een
-  // volgend vonnis er niet naar verwijzen, en dan is het geen precedent maar een anekdote.
-  voegToeAanArchief({
-    soort: 'vonnis', spreker: 'De Hoge Frituurraad', sprekerId: null,
-    tekst: `Zaak ${nummer} (${partij1} tegen ${partij2}${ontleed.grond ? `, over ${ontleed.grond}` : ''}): ` +
-      `${stripSlackOpmaak(vonnis, 380)}`,
-  });
-  logGebeurtenis('zaak', g1 ? g1[0] : null, `Zaak ${nummer}: ${partij1} tegen ${partij2}${ontleed.grond ? ` over ${ontleed.grond}` : ''}`, null, aanklagerId);
-
-  await postToChannel(client, channelId, vonnis);
-  return { ok: true, tekst: `_Zaak ${nummer} is gewezen en opgenomen in de jurisprudentie._`, nummer };
-}
-
-registreerFeature({
-  naam: 'jurisprudentie',
-  state: [JURISPRUDENTIE_BESTAND],
-  help: [
-    { gebruik: '/kroketgod rechtbank [naam1] vs [naam2] (over [grond])', verwacht: 'de Hoge Frituurraad wijst vonnis; elke uitspraak krijgt een zaaknummer en wordt precedent voor de volgende (1 zaak per dag)' },
-    { gebruik: '/kroketgod jurisprudentie', verwacht: 'het register van gewezen zaken (`zaak [nummer]` voor de volledige uitspraak)' },
-  ],
-});
-
-// ══════════════════════════════════════════════════════════════════════════════
-// DE TIJDCAPSULE — voorspellingen verzegelen en later afrekenen
-// ══════════════════════════════════════════════════════════════════════════════
-// Een lid verzegelt een voorspelling met een moment: `voorspel over 2 weken de bamischijf valt`.
-// Op dat moment ontzegelt de Kroket God hem en beoordeelt de Raad met emoji of het is uitgekomen.
-// Uitgekomen = roem, want dit is vooruitzien en dat is blijvend; niet uitgekomen kost niets.
-//
-// WAAROM ROEM EN GEEN KROKETPUNTEN. De horizon is weken tot maanden. Kroketpunten resetten elke
-// zondag, dus een beloning in punten zou afhangen van in welke week je capsule toevallig opengaat.
-// Roem is de enige munt die net zo lang meegaat als de voorspelling zelf.
-//
-// WAAROM DE RAAD OORDEELT EN NIET DE LLM. "Is dit uitgekomen?" is precies het soort vraag waar een
-// taalmodel met volle overtuiging naast zit, en het gaat over de werkelijkheid van de groep — die
-// kennen de leden en het model niet. De emoji-stemming is bovendien gratis. Het patroon (stemmen
-// pas bij SLUITING uitlezen met reactions.get) komt van de gele-kaart-poll: geen gemiste events,
-// terugnemen telt automatisch, en er is geen eigen stemadministratie die kan gaan afwijken.
-//
-// TWEE FASEN IN ÉÉN DAGELIJKSE CRON: ontzegelen wat vervallen is, en beslechten wat al 24 uur
-// openstaat. Volledig uit tijdstempels afgeleid, dus een dag downtime haalt zichzelf in.
-
-const TIJDCAPSULE_BESTAND = 'tijdcapsule.json';
-const loadCapsules = () => readJSON(TIJDCAPSULE_BESTAND, { items: [] });
-const saveCapsules = (data) => writeJSON(TIJDCAPSULE_BESTAND, data);
-
-const CAPSULE_JA = 'large_green_square';   // uitgekomen
-const CAPSULE_NEE = 'large_red_square';    // niet uitgekomen
-const CAPSULE_STEMUREN = 24;
-const CAPSULE_ROEM = 3;
-// Hoeveel capsules er per lid tegelijk verzegeld mogen staan. Zonder grens kan één lid de kalender
-// volgooien en gaat er elke dag een capsule open — dan is het geen gebeurtenis meer.
-const CAPSULE_MAX_OPEN = 3;
-// Hoeveel er per dag hoogstens opengaan, zodat een stapel deadlines op dezelfde dag geen
-// berichtenlawine wordt. De rest schuift een dag door; ze zijn toch al verlopen.
-const CAPSULE_MAX_PER_DAG = 2;
-
-function capsuleDatum(ts) {
-  return new Date(ts).toLocaleDateString('nl-NL', {
-    timeZone: 'Europe/Amsterdam', weekday: 'long', day: 'numeric', month: 'long',
-  });
-}
-
-// Verzegelt een voorspelling. Geeft { ok, tekst } terug, net als de andere spelfuncties.
-async function verzegelCapsule(client, userId, invoer) {
-  const members = loadMembers();
-  if (!members[userId]) return { ok: false, tekst: '_Alleen leden van de Kroket Illuminati mogen de toekomst bezweren._' };
-  if (isVerbannen(userId)) return { ok: false, tekst: '_Een balling heeft geen zicht op de toekomst. Toon eerst berouw._' };
-
-  const data = loadCapsules();
-  const eigenOpen = (data.items || []).filter(c => c.userId === userId && c.status === 'verzegeld');
-  if (eigenOpen.length >= CAPSULE_MAX_OPEN) {
-    return { ok: false, tekst: `_U heeft al ${CAPSULE_MAX_OPEN} verzegelde voorspellingen openstaan. Wacht tot er één opengaat._` };
-  }
-
-  const ontleed = parseerWanneer(invoer);
-  if (ontleed.fout) return { ok: false, tekst: `_${ontleed.fout}_` };
-
-  const capsule = {
-    id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-    userId,
-    tekst: ontleed.rest.slice(0, 400),
-    label: ontleed.label,
-    gemaakt: Date.now(),
-    deadline: ontleed.deadline,
-    status: 'verzegeld',
-    kanaal: process.env.SLACK_CHANNEL_ID,
-    berichtTs: null,
-  };
-  data.items = [...(data.items || []), capsule];
-  saveCapsules(data);
-
-  // Wél een kanaalbericht, en dat is met opzet: een voorspelling die niemand kent is later niet
-  // te beoordelen, en de spanning zit er juist in dat de groep hem heeft zien verzegelen. De
-  // INHOUD is dus openbaar; alleen het oordeel wacht.
-  await postToChannel(client, capsule.kanaal,
-    `⏳ *EEN TIJDCAPSULE IS VERZEGELD* ⏳\n\n> *${members[userId].bijnaam}* voorspelt:\n> _"${capsule.tekst}"_\n> Te openen ${capsuleDatum(capsule.deadline)} (${capsule.label}).\n\n` +
-    `_Komt het uit, dan volgt ${CAPSULE_ROEM} roem. De Raad oordeelt straks._\n\n— De Hoge Frituurraad`);
-  logGebeurtenis('capsule', userId, `${members[userId].bijnaam} verzegelde een voorspelling voor ${capsuleDatum(capsule.deadline)}`, capsule.tekst);
-  return { ok: true, tekst: `_Verzegeld. De capsule gaat open op ${capsuleDatum(capsule.deadline)}._` };
-}
-
-// Fase 1: een vervallen capsule openen en de Raad laten stemmen.
-async function ontzegelCapsule(client, capsule) {
-  const members = loadMembers();
-  const naam = members[capsule.userId]?.bijnaam || 'een verdwenen volgeling';
-  const dagen = Math.max(1, Math.round((capsule.deadline - capsule.gemaakt) / 86_400_000));
-  const bericht = await slackLimiter.schedule(() => client.chat.postMessage({
-    channel: capsule.kanaal,
-    text: 'Een tijdcapsule wordt ontzegeld',
-    blocks: [
-      { type: 'header', text: { type: 'plain_text', text: '⏳ DE TIJDCAPSULE GAAT OPEN', emoji: true } },
-      { type: 'section', text: { type: 'mrkdwn', text:
-        `_${dagen} dag(en) geleden voorspelde *${naam}*:_\n\n> "${capsule.tekst}"\n\n*Is het uitgekomen?*` } },
-      { type: 'context', elements: [{ type: 'mrkdwn', text:
-        `:${CAPSULE_JA}: = uitgekomen · :${CAPSULE_NEE}: = niet uitgekomen · de Raad stemt ${CAPSULE_STEMUREN} uur · ` +
-        `de voorspeller stemt niet mee · bij gelijkspel geen roem` }] },
-    ],
-  }));
-  // De bot zet beide reacties voor, zodat er niets getypt hoeft te worden.
-  for (const emoji of [CAPSULE_JA, CAPSULE_NEE]) {
-    try {
-      await slackLimiter.schedule(() => client.reactions.add({ channel: capsule.kanaal, timestamp: bericht.ts, name: emoji }));
-    } catch (err) {
-      console.warn(`⚠️ Capsule-reactie ${emoji} zetten mislukt:`, err.data?.error || err.message);
-    }
-  }
-  return { berichtTs: bericht.ts, stemDeadline: Date.now() + CAPSULE_STEMUREN * 3_600_000 };
-}
-
-// Fase 2: stemmen uitlezen en beslechten. Zelfde uitleesregels als de gele-kaart-poll:
-// botreacties, niet-leden en ballingen tellen niet, en wie op beide stemt stemt op niets.
-async function beslechtCapsule(client, capsule) {
-  const members = loadMembers();
-  const uit = { ja: [], nee: [] };
-  try {
-    const res = await slackLimiter.schedule(() => client.reactions.get({
-      channel: capsule.kanaal, timestamp: capsule.berichtTs, full: true,
-    }));
-    for (const r of res.message?.reactions || []) {
-      const bak = r.name === CAPSULE_JA ? uit.ja : r.name === CAPSULE_NEE ? uit.nee : null;
-      if (!bak) continue;
-      for (const u of r.users || []) {
-        if (u === BOT_USER_ID) continue;
-        if (!members[u] || isVerbannen(u)) continue;
-        // De voorspeller beoordeelt zijn eigen voorspelling niet.
-        if (u === capsule.userId) continue;
-        if (!bak.includes(u)) bak.push(u);
-      }
-    }
-  } catch (err) {
-    console.error('⚠️ Capsule-stemmen uitlezen mislukt:', err.data?.error || err.message);
-    return null; // volgende ronde opnieuw proberen
-  }
-  const dubbel = uit.ja.filter(u => uit.nee.includes(u));
-  uit.ja = uit.ja.filter(u => !dubbel.includes(u));
-  uit.nee = uit.nee.filter(u => !dubbel.includes(u));
-
-  const naam = members[capsule.userId]?.bijnaam || 'een verdwenen volgeling';
-  const uitgekomen = uit.ja.length > uit.nee.length;
-  const gelijk = uit.ja.length === uit.nee.length;
-  let slot;
-  if (gelijk) {
-    slot = uit.ja.length === 0
-      ? '> De Raad zweeg. Geen oordeel, geen roem — de capsule verdwijnt in het vet.'
-      : `> De Raad staat gelijk (${uit.ja.length}–${uit.nee.length}). Geen oordeel, geen roem.`;
-  } else if (uitgekomen) {
-    slot = `> ✅ De Raad oordeelt met ${uit.ja.length}–${uit.nee.length}: *het is uitgekomen*. *${naam}* ontvangt *${CAPSULE_ROEM} roem*.`;
-  } else {
-    slot = `> ❌ De Raad oordeelt met ${uit.nee.length}–${uit.ja.length}: *het is niet uitgekomen*. Geen roem — maar de poging staat in de kronieken.`;
-  }
-  await postToChannel(client, capsule.kanaal,
-    `⏳ *HET VONNIS OVER DE TIJDCAPSULE* ⏳\n\n> *${naam}* voorspelde: _"${capsule.tekst}"_\n${slot}\n\n— De Hoge Frituurraad`);
-
-  // Elke stem is een daad: meestemmen over de voorspelling van een ander lid is precies het
-  // gedrag dat De Voorspraak der Zachte Korst hoort te belonen.
-  for (const stemmerId of new Set([...uit.ja, ...uit.nee])) {
-    if (members[stemmerId]) await telActie(client, stemmerId, 'capsule_stem');
-  }
-
-  if (uitgekomen && members[capsule.userId]) {
-    await pasRoemAan(client, capsule.userId, CAPSULE_ROEM);
-    logGebeurtenis('capsule', capsule.userId, `${naam} voorspelde het juist en ontving ${CAPSULE_ROEM} roem`, capsule.tekst);
-  }
-  return { uitgekomen, gelijk, ja: uit.ja.length, nee: uit.nee.length };
-}
-
-// De dagelijkse klok over alle capsules. Volledig uit tijdstempels afgeleid.
-async function verwerkCapsuleKlok(client) {
-  const data = loadCapsules();
-  const items = data.items || [];
-  if (!items.length) return;
-  const nu = Date.now();
-  let gewijzigd = false;
-
-  // Eerst beslechten: dat maakt ruimte en houdt de volgorde logisch (oude zaken eerst af).
-  for (const c of items.filter(x => x.status === 'stemming' && x.stemDeadline && nu >= x.stemDeadline)) {
-    const uitslag = await beslechtCapsule(client, c);
-    if (!uitslag) continue; // uitlezen mislukt → volgende ronde opnieuw
-    c.status = 'beslecht';
-    c.uitkomst = uitslag;
-    gewijzigd = true;
-  }
-
-  // Dan ontzegelen, met een dagplafond.
-  const teOpenen = items
-    .filter(x => x.status === 'verzegeld' && nu >= x.deadline)
-    .sort((a, b) => a.deadline - b.deadline)
-    .slice(0, CAPSULE_MAX_PER_DAG);
-  for (const c of teOpenen) {
-    // Een capsule van een lid dat het genootschap heeft verlaten wordt stil gesloten: er is
-    // niemand meer om roem aan te geven, en de Raad hoeft er geen tijd aan te besteden.
-    if (!loadMembers()[c.userId]) {
-      c.status = 'vervallen';
-      gewijzigd = true;
-      continue;
-    }
-    const geopend = await ontzegelCapsule(client, c);
-    if (!geopend) continue;
-    c.status = 'stemming';
-    c.berichtTs = geopend.berichtTs;
-    c.stemDeadline = geopend.stemDeadline;
-    gewijzigd = true;
-  }
-
-  if (gewijzigd) {
-    // Beslechte capsules blijven staan als geschiedenis, maar begrensd.
-    const beslecht = items.filter(x => x.status === 'beslecht' || x.status === 'vervallen').slice(-40);
-    const open = items.filter(x => x.status === 'verzegeld' || x.status === 'stemming');
-    saveCapsules({ items: [...beslecht, ...open] });
-  }
-}
-
-registreerFeature({
-  naam: 'tijdcapsule',
-  state: [TIJDCAPSULE_BESTAND],
-  help: [
-    { gebruik: '/kroketgod voorspel [wanneer] [voorspelling]', verwacht: `verzegel een voorspelling — bijvoorbeeld \`voorspel over 2 weken de bamischijf valt\`. Komt hij uit, dan ${CAPSULE_ROEM} roem (max ${CAPSULE_MAX_OPEN} open, hoogstens ${MAX_HORIZON_DAGEN} dagen vooruit)` },
-    { gebruik: '/kroketgod capsules', verwacht: 'alle verzegelde en beoordeelde tijdcapsules' },
-  ],
-  homeOrde: 40,
-  home: ({ userId, members }) => {
-    const items = (loadCapsules().items || []).filter(c => c.status === 'verzegeld' || c.status === 'stemming');
-    if (!items.length) return [];
-    const regels = items
-      .sort((a, b) => a.deadline - b.deadline)
-      .slice(0, 5)
-      .map(c => `> ${c.userId === userId ? '*u*' : `*${members[c.userId]?.bijnaam || 'onbekend'}*`}: ` +
-        `"${c.tekst.slice(0, 90)}${c.tekst.length > 90 ? '…' : ''}" — ${c.status === 'stemming' ? '_de Raad stemt nu_' : capsuleDatum(c.deadline)}`)
-      .join('\n');
-    return [
-      ...homeKaartKop('⏳ VERZEGELDE TIJDCAPSULES'),
-      { type: 'section', text: { type: 'mrkdwn', text: `${regels}\n\n_Verzegel er zelf een met_ \`/kroketgod voorspel [wanneer] [wat]\`` } },
-    ];
-  },
-});
-
-// ══════════════════════════════════════════════════════════════════════════════
 // HET VERHOOR — wie zei dit?
 // ══════════════════════════════════════════════════════════════════════════════
 // De Kroket God diept een ECHT citaat uit Het Grote Archief op en de Raad raadt wie het zei.
@@ -23289,15 +22531,6 @@ planCron('0 11 * * 4', async () => {
 planCron('0 16 * * 4', async () => {
   try { await onthulVerhoor(app.client); }
   catch (err) { console.error('⚠️ Verhoor onthullen mislukt:', err.message); }
-}, { timezone: 'Europe/Amsterdam' });
-
-// ── De Tijdcapsule: dagelijks 10:10 ontzegelen en beslechten ──────────────────
-// Eén cron voor beide fasen; alles is uit tijdstempels afgeleid, dus een gemiste dag haalt zich
-// de volgende dag in. Geen CRON_LABELS-entry: op de meeste dagen post dit niets, en overslaan
-// zou een capsule voor onbepaalde tijd dicht houden.
-planCron('10 10 * * *', async () => {
-  try { await verwerkCapsuleKlok(app.client); }
-  catch (err) { console.error('⚠️ Capsuleklok mislukt:', err.message); }
 }, { timezone: 'Europe/Amsterdam' });
 
 app.action(/^verhoor_gok_/, async ({ ack, body, client }) => {
@@ -23549,7 +22782,7 @@ async function bouwDashboardData() {
   };
 
   // Spelstatus voor het Spel-tabblad: troon, gouden kroket, kroket-gok, quiz, bingo,
-  // allianties, streaks en heldentitels. Dit is de admin-weergave — de geplande tijd van
+  // allianties en streaks. Dit is de admin-weergave — de geplande tijd van
   // de Gouden Kroket en de gedane gokken zijn hier wél zichtbaar.
   const troonData = readJSON('troon.json', { koningId: null, sinds: null });
   const gkData = loadGoudenKroket();
@@ -23557,7 +22790,6 @@ async function bouwDashboardData() {
   const quizData = loadQuiz();
   const bingoData = readJSON('bingo.json', {});
   const streaksData = loadStreaks();
-  const heldentitelsData = loadHeldentitels();
   // Zelfde vorm { a, b } als vroeger, zodat dashboard.html ongewijzigd blijft: bij een verbond van
   // drie staan de andere twee samen in b.
   const alliantieParen = alleVerbonden().map(g => ({ a: naam(g[0]), b: g.slice(1).map(naam).join(' & ') }));
@@ -23599,9 +22831,6 @@ async function bouwDashboardData() {
       .map(([id, s]) => ({ naam: naam(id), huidig: s?.huidig || 0, record: s?.record || 0 }))
       .filter(s => s.huidig > 0 || s.record > 0)
       .sort((a, b) => b.huidig - a.huidig),
-    heldentitels: Object.entries(heldentitelsData)
-      .map(([id, aantal]) => ({ naam: naam(id), aantal }))
-      .sort((a, b) => b.aantal - a.aantal),
   };
 
   const stemming = getDagelijkseStemming();
@@ -23650,10 +22879,6 @@ async function bouwDashboardData() {
       const vandaag = new Set(gastenVandaag().map(g => g.id));
       return Object.entries(loadPersonas()).map(([id, p]) => ({ id, ...p, vandaag: vandaag.has(id) }));
     })(),
-    huisonderwerpen: {
-      actief: actieveHuisonderwerpen(),
-      voorstellen: (loadVoorstellen().voorstellen || []).map(v => ({ ...v, naam: loadMembers()[v.door]?.bijnaam || v.door })),
-    },
   };
 }
 
@@ -23682,42 +22907,6 @@ async function voerDashboardEer(geverId, ontvangerId, reden) {
   const punten = uitkomst.punten[ontvangerId];
   return `${members[geverId].bijnaam} eerde ${members[ontvangerId].bijnaam}: ${punten === 0 ? 'niets' : `+${punten}`} ` +
     `(${uitkomst.klasse}${uitkomst.herhaald ? ', herhaalde reden' : ''})${uitkomst.terugslag ? ` · verbondstrouw +${uitkomst.terugslag}` : ''}`;
-}
-
-// Huisonderwerp-beheer vanuit het dashboard. Goedkeuren laat het woord meewegen bij elk
-// eerbewijs, dus het gaat langs dezelfde toets als de voordracht zelf — een woord dat intussen
-// te algemeen is geworden (omdat er al iets soortgelijks goedgekeurd is) wordt hier alsnog
-// geweigerd in plaats van stilletjes toegelaten.
-async function voerHuisonderwerpBeheer(woord, actie) {
-  const data = loadVoorstellen();
-  const lijst = data.voorstellen || [];
-  const i = lijst.findIndex(v => v && v.woord === woord);
-  if (i < 0) throw new Error('Onbekend voorstel');
-  const v = lijst[i];
-  const members = loadMembers();
-  const naam = members[v.door]?.bijnaam || v.door;
-  if (actie === 'verwijderen') {
-    data.voorstellen = lijst.filter((_, j) => j !== i);
-    saveVoorstellen(data);
-    return `Huisonderwerp "${woord}" van ${naam} verwijderd.`;
-  }
-  if (actie === 'afwijzen') {
-    data.voorstellen = lijst.map((x, j) => (j === i ? { ...x, status: 'afgewezen' } : x));
-    saveVoorstellen(data);
-    return `Huisonderwerp "${woord}" van ${naam} afgewezen.`;
-  }
-  if (actie !== 'goedkeuren') throw new Error('Onbekende actie (goedkeuren/afwijzen/verwijderen)');
-  const probleem = onderwerpProbleem(woord, actieveHuisonderwerpen());
-  if (probleem) throw new Error(`Kan niet goedkeuren — ${ONDERWERP_UITLEG[probleem] || probleem}`);
-  data.voorstellen = lijst.map((x, j) => (j === i ? { ...x, status: 'goedgekeurd', goedgekeurdTs: Date.now() } : x));
-  saveVoorstellen(data);
-  // Eén regel in het kanaal, want dit verandert de spelregels voor iedereen. Niet meer dan een
-  // regel: de Raad kondigt al genoeg aan.
-  try {
-    await postToChannel(app.client, KANAAL(),
-      `📖 De Raad neemt *${woord}* op in het huisboek, op voordracht van <@${v.door}>. Een eerbewijs dat dit raakt weegt voortaan een klasse zwaarder.`);
-  } catch (_) { /* het dashboard mag niet struikelen over een stille Slack */ }
-  return `Huisonderwerp "${woord}" van ${naam} goedgekeurd.`;
 }
 
 async function voerWinkelBeheer(actie, userId, item, aankondig) {
