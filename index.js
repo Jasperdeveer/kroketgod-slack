@@ -174,7 +174,7 @@ const {
 const { GOKPAUZE_DAGEN, GOKPAUZE_VERBOD, rustEinde, schuif: schuifDag, naCasinoSpel, opRustdag, moetWaarschuwen, naWaarschuwing, naPoging, zonderRustdag, standVan } = require('./lib/gokpauze.js');
 const { boekSpel: boekCasinoStat, vatSamen: vatCasinoSamen, feiten: casinoFeiten, kiesFeiten: kiesCasinoFeiten } = require('./lib/casinostats.js');
 const { LOT_PRIJS, stand: loterijStand, koopLot, trek: trekLoterij } = require('./lib/loterij.js');
-const { gaveVan, maxHpVoor, isRazend, slaatTerug, terugslagBuit, schadeNaGave, komtTerug, vijandBeurt } = require('./lib/weekvijand.js');
+const { gaveVan, maxHpVoor, isRazend, slaatTerug, terugslagBuit, schadeNaGave, komtTerug, vijandBeurt, aanvalsLimiet, aanvallenGedaan } = require('./lib/weekvijand.js');
 const {
   WAPENS, WAPENREK_MAX, KANON_DOEL, KANON_MIN_LEDEN, VETBOM_KETST_BUIT, PEKEL_AANVALLEN,
   zwakTegen, koopWeigering, wapenUithaal, pekelBonus, kanonInleg, kanonTotaal, kanonLeden, kanonVuurt, kanonSchade,
@@ -12334,7 +12334,7 @@ function bouwRaidBlocks(raid) {
     ] });
   }
   blocks.push({ type: 'context', elements: [{ type: 'mrkdwn',
-    text: `Eén aanval per lid per dag · ${WAPENREK_MAX} wapens per lid per vijand, in te zetten bij uw volgende aanval · hij slaat terug · wapens, kanon en terugslag gaan naar zijn buit: terug als hij valt · elke middag zijn eigen beurt · niet verslagen vóór vrijdag 14:50 → plundering · ook via \`/kroketgod aanval\` en \`/kroketgod koop [wapen]\`` }] });
+    text: `${aanvalsLimiet(raid, new Intl.DateTimeFormat('nl-NL', { timeZone: 'Europe/Amsterdam' }).format(new Date())) > 1 ? '🎁 *Vandaag twee aanvallen per lid*' : 'Eén aanval per lid per dag'} · ${WAPENREK_MAX} wapens per lid per vijand, in te zetten bij uw volgende aanval · hij slaat terug · wapens, kanon en terugslag gaan naar zijn buit: terug als hij valt · elke middag zijn eigen beurt · niet verslagen vóór vrijdag 14:50 → plundering · ook via \`/kroketgod aanval\` en \`/kroketgod koop [wapen]\`` }] });
   return blocks;
 }
 
@@ -12392,8 +12392,10 @@ async function voerBamischijfAanval(client, userId, metOffer) {
   const vandaagKey = new Intl.DateTimeFormat('nl-NL', { timeZone: 'Europe/Amsterdam' }).format(new Date());
   raid.strijders = raid.strijders || {};
   const strijder = raid.strijders[userId] || { schade: 0 };
-  if (strijder.laatsteAanval === vandaagKey) {
-    return { ok: false, tekst: '_Eén aanval per dag — zelfs heilige krijgers moeten op adem komen. Morgen mag u weer._' };
+  if (aanvallenGedaan(strijder, vandaagKey) >= aanvalsLimiet(raid, vandaagKey)) {
+    return { ok: false, tekst: aanvalsLimiet(raid, vandaagKey) > 1
+      ? '_Uw twee aanvallen van vandaag zijn op — zelfs heilige krijgers moeten op adem komen. Morgen mag u weer._'
+      : '_Eén aanval per dag — zelfs heilige krijgers moeten op adem komen. Morgen mag u weer._' };
   }
   const vijandNaam = raid.vijand?.naam || 'De Bamischijf der Duisternis';
   const gave = gaveVan(raid.vijand?.key);
@@ -12434,6 +12436,7 @@ async function voerBamischijfAanval(client, userId, metOffer) {
       (pekel.bonus ? ' (🧂 gepekeld: +1)' : '');
   const wasRazend = isRazend(raid, gave);
   strijder.schade = (strijder.schade || 0) + schade;
+  if (strijder.laatsteAanval === vandaagKey) strijder.tweedeAanval = vandaagKey; // extra aanvalsdag
   strijder.laatsteAanval = vandaagKey;
   raid.strijders[userId] = strijder;
   const hpVoor = raid.hp; // voor de GIF: de balk loopt van hier naar beneden
@@ -16023,8 +16026,8 @@ function opdrachtHaalbaar(userId, o, resterend = o.doel) {
         const raid = readJSON('bamischijf.json', {});
         if (!raid.actief || raid.hp <= 0) return false;          // geen monster om aan te vallen
         if (raid.deadlineTs && Date.now() > raid.deadlineTs) return false;
-        if (resterend > 1) return false;                          // één aanval per dag
-        return raid.strijders?.[userId]?.laatsteAanval !== vandaagKey;
+        // Eén aanval per dag, twee op een extra aanvalsdag.
+        return resterend <= aanvalsLimiet(raid, vandaagKey) - aanvallenGedaan(raid.strijders?.[userId], vandaagKey);
       }
       case 'bingo_claim': {
         const bingo = readJSON('bingo.json', null);
@@ -18604,11 +18607,11 @@ function persoonlijkeStatus(userId) {
 
   const raid = readJSON('bamischijf.json', {});
   if (raid.actief && raid.hp > 0) {
-    const aanvalGedaan = raid.strijders?.[userId]?.laatsteAanval === vandaagKey;
+    const gedaan = aanvallenGedaan(raid.strijders?.[userId], vandaagKey), limiet = aanvalsLimiet(raid, vandaagKey);
     cooldowns.push({
       naam: `Aanval op ${raid.vijand?.naam || 'de weekvijand'}`,
-      gebruikt: aanvalGedaan ? 1 : 0, limiet: 1,
-      restMs: aanvalGedaan ? msTotDagreset() : 0, per: 'dag',
+      gebruikt: gedaan, limiet,
+      restMs: gedaan >= limiet ? msTotDagreset() : 0, per: 'dag',
     });
   }
 
@@ -20339,7 +20342,7 @@ function bouwAppHomeBlocks(userId, melding = '', extraBlocks = []) {
   const vetbad = readJSON('vetbad.json', {});
   const offersVandaag = vetbad[userId]?.datum === vandaagKey ? (vetbad[userId].aantal || 0) : 0;
   const raidNu = readJSON('bamischijf.json', {});
-  const aanvalGedaan = raidNu.strijders?.[userId]?.laatsteAanval === vandaagKey;
+  const aanvalGedaan = aanvallenGedaan(raidNu.strijders?.[userId], vandaagKey) >= aanvalsLimiet(raidNu, vandaagKey);
   const duelsVandaag = duels[userId]?.datum === vandaagKey ? (duels[userId].aantal ?? 1) : 0;
   const duelKan = duelsVandaag < duelLimiet(userId);
   const roofKan = cooldowns.roof?.[userId] !== getMondayOfWeek();
