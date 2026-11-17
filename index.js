@@ -15477,27 +15477,7 @@ registreerFeature({
   naam: 'opdrachten',
   state: ['opdrachten.json', 'tellers.json'],
   help: [{ gebruik: '/kroketgod opdrachten', verwacht: 'uw dagelijkse en wekelijkse opdrachten met voortgang en beloning' }],
-  homeOrde: 20, // vlak onder de statuskaart: dit is waar je je dag mee begint
-  home: ({ userId, verbannen }) => {
-    if (verbannen) return [];
-    const { dag, week } = opdrachtOverzicht(userId);
-    // Noot buiten de ternary: ook een AL VOLBRACHTE herkansing verdient uitleg, anders wijkt
-    // je lijst zichtbaar af van die van de anderen zonder dat je weet waarom.
-    const regel = ({ o, klaar, nu }) =>
-      (klaar ? `> ✅ ~${opdrachtTekst(o)}~ — *+${o.beloning}* geïnd`
-             : `> ${homeVoortgangInline(nu, o.doel)} ${opdrachtTekst(o)} — *+${o.beloning}*`) + opdrachtNoot(o);
-    const b = raadpleegStaat().leden[userId]?.biecht;
-    const boeteRegel = b?.boete
-      ? '\n' + (b.voldaan ? `> ✅ ~Boetedoening: ${b.boete.tekst}~ — *+1* geïnd` : `> 🕯️ Boetedoening: ${b.boete.tekst} — *+1*`)
-      : '';
-    return [
-      { type: 'divider' },
-      { type: 'section', text: { type: 'mrkdwn', text:
-        `*📜 OPDRACHTEN VAN VANDAAG*\n${dag.map(regel).join('\n')}${boeteRegel}` } },
-      { type: 'section', text: { type: 'mrkdwn', text:
-        `*📜 DEZE WEEK*\n${week.map(regel).join('\n')}` } },
-    ];
-  },
+  homeOrde: 20, // de opdrachten staan sinds de herindeling in UW BEURT (uwBeurtBlokken)
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -15631,32 +15611,13 @@ registreerFeature({
   state: ['paarboek.json', 'claims.json'],
   help: [{ gebruik: '/kroketgod bladzijde', verwacht: 'wat er tussen u en elk ander lid staat, en wat er voor u openstaat' }],
   homeOrde: 7,
-  home: ({ userId, members, verbannen }) => {
-    const nu = Date.now();
+  home: ({ userId, members }) => {
     const rijen = bladzijdenVan(loadPaarboek(), userId, Object.keys(members));
-    const claims = openClaimsVan(loadClaims(), userId, nu);
-    if (!rijen.length && !claims.length) return [];
+    if (!rijen.length) return []; // open claims staan in UW BEURT (claimBlokken)
 
     const blocks = [...homeKaartKop('📖 DE BLADZIJDE')];
-    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: rijen.length
-      ? rijen.map(r => `> ${r.toestand.icoon} *${members[r.id]?.bijnaam || r.id}* — ${r.toestand.naam}`).join('\n')
-      : '_Met niemand staat er iets open. Dat is óf vrede, óf u heeft nog niets gedaan._' } });
-
-    // Elke open claim krijgt zijn eigen drie knoppen. Niet samengevoegd: je vergeeft een
-    // persoon, geen stapel.
-    for (const c of claims) {
-      const daderNaam = members[c.dader]?.bijnaam || 'een volgeling';
-      const urenOver = Math.max(1, Math.round((CLAIM_GELDIG_MS - (nu - c.ts)) / 3_600_000));
-      blocks.push({ type: 'section', text: { type: 'mrkdwn', text:
-        `*${daderNaam}* deed u iets aan (${CLAIM_AANLEIDING[c.soort] || c.soort}). Nog ${urenOver} uur om te kiezen.` } });
-      if (!verbannen) {
-        blocks.push({ type: 'actions', elements: [
-          { type: 'button', text: { type: 'plain_text', text: '🕊️ Vergeven', emoji: true }, action_id: `claim_vergeven_${c.dader}`, style: 'primary' },
-          { type: 'button', text: { type: 'plain_text', text: '⚔️ Vergelden', emoji: true }, action_id: `claim_vergelden_${c.dader}` },
-          { type: 'button', text: { type: 'plain_text', text: '🤷 Laten liggen', emoji: true }, action_id: `claim_laten_${c.dader}` },
-        ] });
-      }
-    }
+    blocks.push({ type: 'section', text: { type: 'mrkdwn', text:
+      rijen.map(r => `> ${r.toestand.icoon} *${members[r.id]?.bijnaam || r.id}* — ${r.toestand.naam}`).join('\n') } });
     blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text:
       'Vergeven strijkt de bladzijde glad en levert +1 roem op · vergelden geeft u 24 uur één gratis tegenzet · laten liggen vervaagt vanzelf' }] });
     return blocks;
@@ -18219,12 +18180,6 @@ registreerFeature({
           (t.fase === 'stemming'
             ? `_${eigenStem ? `U stemde: *${eigenStem}* (wijzigbaar, en geheim).` : 'U heeft nog niet gestemd.'}_`
             : '_Genadetermijn — de stemming is nog niet open._') } });
-      if (t.fase === 'stemming' && t.doelwitId !== userId) {
-        blocks.push({ type: 'actions', elements: [
-          { type: 'button', text: { type: 'plain_text', text: '⚖️ Vóór verwijdering', emoji: true }, action_id: 'tribunaal_voor', style: 'danger' },
-          { type: 'button', text: { type: 'plain_text', text: '🛡️ Tegen', emoji: true }, action_id: 'tribunaal_tegen', style: 'primary' },
-        ] });
-      }
     }
     return blocks;
   },
@@ -18472,6 +18427,232 @@ function bouwNaslagVenster(sleutel, userId, melding = '') {
   };
 }
 
+// ══════════════════════════════════════════════════════════════════════════════
+// DE VASTE BOVENKANT VAN DE HOME: VANDAAG, UW BEURT, WEEKVIJAND
+// ══════════════════════════════════════════════════════════════════════════════
+// Wat u nu kunt doen of niet mag missen staat in één blok bovenaan; al het andere is menu of venster.
+// Alle blokken van deze groepen krijgen in bouwAppHomeBlocks een block_id `top_<groep>_<n>`.
+
+const REGIE_EFFECT_NAAM = {
+  hogeTafel: 'Hoge tafel', dicht: 'Casino dicht', goudenUur: 'Gouden uur', duelverbod: 'Duelverbod', inflatie: 'Inflatie',
+  uitverkoop: 'Uitverkoop', dubbeleEer: 'Dubbele eer', omgekeerdUur: 'Omgekeerd uur', vrijgevig: 'Vrijgevige bui',
+  zegendag: 'Zegendag', verbondsdag: 'Verbondsdag', klachtenuur: 'Klachtenuur',
+};
+const REGIE_VERRASSING_NAAM = {
+  hete_kroket: 'De Hete Kroket', flitsopdracht: 'Flitsopdracht', raadsel: 'Het raadsel van de Kroket God', puntenregen: 'Puntenregen',
+  woede_bij_stilte: 'De woede van de Kroket God', stadhouder: 'De Stadhouder', herverdeling: 'De grote herverdeling',
+  archief_spreekt: 'Het Archief spreekt', omgekeerd_uur: 'Het omgekeerde uur',
+};
+// "tot 15:00", of "tot middernacht" voor wat de dag uitloopt.
+const totTijd = (ms) => { const t = hhmmAms(ms); return `tot ${t === '00:00' ? 'middernacht' : t}`; };
+
+// VANDAAG: wat de Kroket God vandaag deed en wat er nu loopt, in hoogstens vier regels.
+function vandaagBlokken(userId, nu = Date.now()) {
+  const members = loadMembers();
+  const s = regieStaat();
+  const naam = (id) => (id === userId ? 'u' : members[id]?.bijnaam || 'een volgeling');
+  const regels = [];
+
+  const v = s.verrassing && nu < s.verrassing.tot ? s.verrassing : null;
+  const effecten = s.effecten
+    .filter((e) => e.tot > nu && (REGIE_EFFECT_NAAM[e.soort] || e.soort === 'seizoensdag') && !(v?.id === 'omgekeerd_uur' && e.soort === 'omgekeerdUur'))
+    .sort((a, b) => a.tot - b.tot)
+    .map((e) => `${e.soort === 'seizoensdag' ? e.data?.naam || 'Seizoensdag' : REGIE_EFFECT_NAAM[e.soort]} ${totTijd(e.tot)}`);
+  if (effecten.length) regels.push(`⏳ ${effecten.slice(0, 3).join(' · ')}${effecten.length > 3 ? ` · +${effecten.length - 3}` : ''}`);
+
+  if (v) {
+    regels.push(v.id === 'hete_kroket' && v.data?.houder
+      ? `🔥 De Hete Kroket is bij *${naam(v.data.houder)}*, doorgeven vóór ${hhmmAms(v.data.deadline)}`
+      : `🎁 ${REGIE_VERRASSING_NAAM[v.id] || 'Een verrassing'} loopt ${totTijd(v.tot)}`);
+  }
+  if (s.zaak && nu < s.zaak.sluitTs) regels.push(`⚖️ Licht tribunaal over *${naam(s.zaak.doel)}*, stemmen kan ${totTijd(s.zaak.sluitTs)}`);
+
+  const dag = regie.amsMoment(nu).dag;
+  const laatste = s.log.filter((r) => (r.laag === 'ingreep' || r.laag === 'verrassing') && regie.amsMoment(r.ts).dag === dag)
+    .sort((a, b) => b.ts - a.ts)[0];
+  const opdracht = laatste && regie.REGIEBOEK.find((i) => i.id === laatste.id)?.opdracht;
+  if (typeof opdracht === 'string') regels.push(`🔱 Laatste ingreep, ${hhmmAms(laatste.ts)}: ${opdracht}`);
+
+  const heilige = raadpleeg.heiligeVandaag(raadpleegStaat());
+  if (heilige) regels.push(`😇 Heilige van de Dag: *${naam(heilige)}*`);
+
+  return [{ type: 'divider' }, { type: 'section', text: { type: 'mrkdwn', text: kapTekst(
+    `*VANDAAG*\n${regels.length ? regels.slice(0, 4).map((r) => `> ${r}`).join('\n') : '_De Kroket God houdt zich vandaag nog stil._'}`, 3000) } }];
+}
+
+// De opdrachten van vandaag en deze week, één regel per opdracht met voortgang.
+function opdrachtRegelsCompact(userId) {
+  const { dag, week } = opdrachtOverzicht(userId);
+  const regel = ({ o, klaar, nu }) => (klaar
+    ? `> ✅ ~${opdrachtTekst(o)}~ — *+${o.beloning}* geïnd`
+    : `> ${homeVoortgangInline(nu, o.doel)} ${opdrachtTekst(o)} — *+${o.beloning}*`)
+    + (o.verving ? ' _(herkansing)_' : o.onhaalbaar ? ' _(vandaag niet haalbaar)_' : '');
+  const b = raadpleegStaat().leden[userId]?.biecht;
+  const boete = b?.boete ? [b.voldaan ? `> ✅ ~Boetedoening: ${b.boete.tekst}~ — *+1* geïnd` : `> 🕯️ Boetedoening: ${b.boete.tekst} — *+1*`] : [];
+  return [`_Vandaag_`, ...dag.map(regel), ...boete, `_Deze week_`, ...week.map(regel)];
+}
+
+// De knoppen van een open claim op de bladzijde (zelfde action_id's als voorheen).
+function claimBlokken(c, members, nu) {
+  const urenOver = Math.max(1, Math.round((CLAIM_GELDIG_MS - (nu - c.ts)) / 3_600_000));
+  return [
+    { type: 'section', text: { type: 'mrkdwn', text: `📖 *${members[c.dader]?.bijnaam || 'een volgeling'}* deed u iets aan (${CLAIM_AANLEIDING[c.soort] || c.soort}). Nog ${urenOver} uur om te kiezen.` } },
+    { type: 'actions', elements: [
+      { type: 'button', text: { type: 'plain_text', text: '🕊️ Vergeven', emoji: true }, action_id: `claim_vergeven_${c.dader}`, style: 'primary' },
+      { type: 'button', text: { type: 'plain_text', text: '⚔️ Vergelden', emoji: true }, action_id: `claim_vergelden_${c.dader}` },
+      { type: 'button', text: { type: 'plain_text', text: '🤷 Laten liggen', emoji: true }, action_id: `claim_laten_${c.dader}` },
+    ] },
+  ];
+}
+
+// UW BEURT: opdrachten, wat op is, de actieknoppen, en elke actie met een deadline als regel met knop.
+// Niet voor verbannen leden: zij lezen alleen.
+function uwBeurtBlokken(userId, nu = Date.now()) {
+  if (isVerbannen(userId)) return [];
+  const members = loadMembers();
+  const eigenScore = loadScores()[userId] || 0;
+  const vandaagKey = new Intl.DateTimeFormat('nl-NL', { timeZone: 'Europe/Amsterdam' }).format(new Date(nu));
+  const week = getMondayOfWeek();
+  const naam = (id) => members[id]?.bijnaam || 'een volgeling';
+  const knop = (tekst, action_id, extra = {}) => ({ type: 'button', text: { type: 'plain_text', text: tekst.slice(0, 75), emoji: true }, action_id, ...extra });
+  const regel = (tekst, accessory) => ({ type: 'section', text: { type: 'mrkdwn', text: kapTekst(tekst, 3000) }, ...(accessory ? { accessory } : {}) });
+  const blocks = [{ type: 'divider' },
+    regel(`*UW BEURT*\n${opdrachtRegelsCompact(userId).join('\n')}`)];
+
+  // Wat op is en wat nog open staat bij de raadpleging: één grijze regel per soort.
+  const statusNu = persoonlijkeStatus(userId);
+  const op = statusNu.cooldowns.filter((c) => c.limiet - c.gebruikt <= 0);
+  const casinoWeek = vatCasinoSamen(readJSON('casinostats.json', {}), week, dagSleutel(), userId);
+  const openR = raadpleeg.openRituelen(raadpleegStaat(), userId).map((r) => (r === 'canoniseer' ? 'canonisatie' : r));
+  const info = [
+    op.length && `Op: ${op.map((c) => `${c.naam}${c.restMs ? ` (${resterendeTijd(c.restMs)})` : ''}`).join(' · ')}`,
+    casinoWeek.spellen && `🎰 Casino deze week: ${casinoWeek.spellen} ${casinoWeek.spellen === 1 ? 'spel' : 'spellen'} · ` +
+      `${casinoWeek.netto > 0 ? `*+${casinoWeek.netto}* gewonnen` : casinoWeek.netto < 0 ? `*${casinoWeek.netto}* verloren` : 'quitte'}`,
+    `🔱 *Raadpleeg de Kroket God* · _versie ${KROKETGOD_VERSIE}_ — ` +
+      (openR.length ? `Vandaag nog: ${openR.join(' · ')}` : '_U heeft vandaag alles gevraagd. Morgen spreekt hij weer._'),
+  ].filter(Boolean);
+  blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: info.join('\n') }] });
+
+  // De actieknoppen: dezelfde voorwaarden als voorheen, alleen in één rij samen.
+  const cooldowns = readJSON('cooldowns.json', {});
+  const duels = readJSON('duels.json', {});
+  const vetbad = readJSON('vetbad.json', {});
+  const offersVandaag = vetbad[userId]?.datum === vandaagKey ? (vetbad[userId].aantal || 0) : 0;
+  const duelsVandaag = duels[userId]?.datum === vandaagKey ? (duels[userId].aantal ?? 1) : 0;
+  const acties = [];
+  if (openR.length) acties.push(knop('Raadpleeg', 'open_raadpleeg', { style: 'primary' }));
+  if (duelsVandaag < duelLimiet(userId)) acties.push(knop('⚔️ Duelleren', 'open_duel'));
+  if (cooldowns.roof?.[userId] !== week) acties.push(knop('🥷 Beroven', 'open_roof'));
+  if (offersVandaag < offerLimiet(userId)) acties.push(knop('🎲 Offeren', 'open_offer'));
+  if (casinoOpen() && casinoResterend(userId) > 0) acties.push(knop('🎰 Casino', 'open_casino'));
+  if (telEerVandaag(userId) < eerLimiet(userId)) acties.push(knop('🙏 Eer geven', 'open_eer', { style: 'primary' }));
+  // De Gunst alleen tonen als hij werkelijk kan: een knop die gegarandeerd "u heeft er geen
+  // meer" antwoordt is een knop die liegt, dezelfde regel als bij het visioen.
+  if (gegevenDezeWeek(loadGunsten(), userId, week).length < GUNST_PER_WEEK && eigenScore - 1 >= GUNST_BODEM) acties.push(knop('🎁 Gunnen', 'open_gunst'));
+  if (getFrituurCooldownRest(userId) === 0) acties.push(knop('🔮 Visioen', 'open_visioen'));
+  if (herworpbaarVisioen(userId)) acties.push(knop('🔁 Zelfde wens, ander oog', 'visioen_herworp'));
+  const bingoNu = readJSON('bingo.json', null);
+  if (bingoNu?.weekStart === week && bingoNu.opdrachten?.length && (bingoNu.claims?.[userId] || []).length < bingoNu.opdrachten.length) {
+    acties.push(knop('🎲 Bingo claimen', 'open_bingo'));
+  }
+  if (handdrukVensterOpen()) {
+    const eigenKeuze = loadHanddruk().week === week ? loadHanddruk().keuzes?.[userId] : null;
+    for (const [id, medelid] of Object.entries(members)) {
+      if (id === userId || isVerbannen(id)) continue;
+      acties.push(knop(`${eigenKeuze === id ? '✅' : '🤝'} ${medelid.bijnaam}`, `handdruk_${id}`));
+    }
+  }
+  const kvddNu = loadKroketVanDeDag();
+  const gokNu = readJSON('kroketgok.json', {});
+  if (kvddNu?.ts && kvddNu.datum === new Date(nu).toISOString().slice(0, 10) && !(gokNu.ts === kvddNu.ts && gokNu.gokken?.[userId])) {
+    acties.push(knop('🔮 Gokken', 'open_gok'));
+  }
+  // Slack staat 25 elementen per actions-blok toe; de handdrukknoppen kunnen daar overheen.
+  for (let i = 0; i < acties.length; i += 25) blocks.push({ type: 'actions', elements: acties.slice(i, i + 25) });
+
+  // ── Acties met een deadline: een regel met zijn bestaande knop(pen) ──
+  const s = regieStaat();
+  const v = s.verrassing;
+  if (v?.id === 'hete_kroket' && v.data?.houder === userId && nu < v.data.deadline) {
+    blocks.push(regel(`🔥 *Hete Kroket:* u houdt hem vast. Geef hem door vóór ${hhmmAms(v.data.deadline)}, anders ontploft hij.`,
+      knop('Geef door', 'regie_hete_kroket', { style: 'danger', value: 'hete' })));
+  }
+  if (s.zaak && nu < s.zaak.sluitTs && s.zaak.doel !== userId) {
+    const eigen = s.zaak.stemmen?.[userId];
+    blocks.push(regel(`⚖️ *Licht tribunaal* over ${naam(s.zaak.doel)} (${s.zaak.grond === 'ketterij' ? 'ketterij' : 'twee gele kaarten in dertig dagen'}), stem vóór ${hhmmAms(s.zaak.sluitTs)}.` +
+      `${eigen ? ` U stemde *${eigen === 'vrij' ? 'vrijspraak' : eigen}*, wijzigen kan.` : ''}`),
+    { type: 'actions', elements: [
+      knop('Boete', 'regie_zaak_boete', { value: s.zaak.id, style: 'danger' }),
+      knop('Schandtitel', 'regie_zaak_titel', { value: s.zaak.id }),
+      knop('Vrijspraak', 'regie_zaak_vrij', { value: s.zaak.id, style: 'primary' }),
+    ] });
+  }
+  const tribunaal = readJSON('tribunaal.json', null);
+  if (tribunaal && tribunaal.fase === 'stemming' && tribunaal.doelwitId !== userId) {
+    const eigenStem = tribunaal.stemmen?.[userId];
+    blocks.push(regel(`⚖️ *Tribunaal der Vergetelheid:* beschuldigde ${naam(tribunaal.doelwitId)}. ` +
+      `${eigenStem ? `U stemde *${eigenStem}* (wijzigbaar, en geheim).` : 'U heeft nog niet gestemd.'}`),
+    { type: 'actions', elements: [
+      knop('⚖️ Vóór verwijdering', 'tribunaal_voor', { style: 'danger' }),
+      knop('🛡️ Tegen', 'tribunaal_tegen', { style: 'primary' }),
+    ] });
+  }
+  const poll = loadGeleKaartPoll();
+  if (poll?.actief && poll.doelwitId !== userId) {
+    // De stemming loopt met emoji-reacties op het bericht in het kanaal: er zijn geen knoppen.
+    blocks.push(regel(`🟨 *Gele-kaartstemming* over ${naam(poll.doelwitId)}, ${totTijd(poll.sluitTs)}. Stem met een reactie op het bericht in het kanaal.`));
+  }
+  for (const c of openClaimsVan(loadClaims(), userId, nu)) blocks.push(...claimBlokken(c, members, nu));
+  const vertrekkers = gastenVandaag().filter((g) => g.afscheid).slice(0, 4);
+  if (vertrekkers.length) {
+    blocks.push(regel(`🚪 *Een gast neemt afscheid:* ${vertrekkers.map((g) => ontsnapMrkdwn(g.naam)).join(' · ')}. Houd hem een werkdag langer vast.`),
+      { type: 'actions', elements: vertrekkers.map((g, i) => knop(`🔒 Houd ${g.naam} vast (${GAST_KOSTEN_VASTHOUDEN} pt)`, `gast_vasthouden_${i}`, { value: g.id })) });
+  }
+  const veilingNu = readJSON('veiling.json', {});
+  if (veilingNu.status === 'open' && veilingNu.weekStart === week && (!veilingNu.sluitTs || nu < veilingNu.sluitTs)) {
+    const hoogste = [...(veilingNu.biedingen || [])].sort((a, b) => b.bod - a.bod)[0];
+    blocks.push(regel(`🔨 *Grote Veiling:* *${veilingNu.artefact?.naam || 'artefact'}* — ` +
+      (hoogste ? `hoogste bod *${hoogste.bod}* door ${naam(hoogste.userId)}${hoogste.userId === userId ? ' (u!)' : ''}` : 'nog geen biedingen')),
+    { type: 'actions', elements: [knop('💰 Bied +1', 'veiling_bied_1', { style: 'primary' }), knop('💎 Bied +3', 'veiling_bied_3')] });
+  }
+  const uitdaging = s.effecten.find((e) => e.soort === 'uitdaging' && e.tot > nu && !e.data?.gebruikt && e.data?.koploper === userId);
+  if (uitdaging) {
+    blocks.push(regel(`🔱 *Uitdaging:* daag ${naam(uitdaging.data.hekkensluiter)} uit voor een duel, ${totTijd(uitdaging.tot)}.`,
+      knop('Daag de hekkensluiter uit', 'regie_uitdaging', { style: 'primary', value: uitdaging.id })));
+  }
+  const gunst = s.effecten.find((e) => e.soort === 'gunst' && e.tot > nu && !e.data?.gebruikt && e.data?.doel === userId);
+  if (gunst) {
+    blocks.push(regel(`🔱 *Een gunst van de Kroket God:* eis hem op ${totTijd(gunst.tot)}.`,
+      knop('Eis de gunst op', 'regie_gunst', { style: 'primary', value: gunst.id })));
+  }
+  return blocks;
+}
+
+// WEEKVIJAND (alleen als er een is): naam, HP, eigen schade en de aanvalsknoppen.
+function weekvijandBlokken(userId, verbannen) {
+  const raid = readJSON('bamischijf.json', {});
+  if (!(raid.actief && raid.hp > 0)) return [];
+  const vandaagKey = new Intl.DateTimeFormat('nl-NL', { timeZone: 'Europe/Amsterdam' }).format(new Date());
+  const strijder = raid.strijders?.[userId];
+  const gave = gaveVan(raid.vijand?.key);
+  const rest = aanvalsLimiet(raid, vandaagKey) - aanvallenGedaan(strijder, vandaagKey);
+  const blocks = [{ type: 'divider' }, { type: 'section', text: { type: 'mrkdwn', text:
+    `*${raid.vijand?.emoji || '🐉'} ${(raid.vijand?.naam || 'De Bamischijf der Duisternis').toUpperCase()}*\n` +
+    `${hpBalk(raid.hp, raid.maxHp)}  *${Math.max(0, raid.hp)}/${raid.maxHp}* HP · uw schade: *${strijder?.schade || 0}* · ` +
+    `${Object.keys(raid.strijders || {}).length} strijders · ${rest > 0 ? `nog ${rest} aanval${rest === 1 ? '' : 'len'} vandaag` : 'vandaag aangevallen'}` +
+    (isRazend(raid, gave) ? ' · 😡 razend' : '') +
+    (gave ? `\n✨ _${gave.naam}: ${gave.regel}_` : '') +
+    (strijder?.verloren ? `\n_In zijn buit: ${strijder.verloren} kroketpunt(en) van u, terug als hij valt._` : '') +
+    (raid.wrok ? `\n_Voor de ${raid.wrok + 1}e week terug: hij is niet vergeten dat u faalde._` : '') } }];
+  if (!verbannen && rest > 0) {
+    blocks.push({ type: 'actions', elements: [
+      { type: 'button', text: { type: 'plain_text', text: '⚔️ Val aan', emoji: true }, action_id: 'bamischijf_aanval', style: 'primary' },
+      ...(gave?.soort === 'offerdoof' ? [] : [{ type: 'button', text: { type: 'plain_text', text: '🔥 Offer-aanval (1 pt)', emoji: true }, action_id: 'bamischijf_offer' }]),
+    ] });
+  }
+  return blocks;
+}
+
 function bouwAppHomeBlocks(userId, melding = '', extraBlocks = []) {
   const members = loadMembers();
   const lid = members[userId];
@@ -18517,128 +18698,49 @@ function bouwAppHomeBlocks(userId, melding = '', extraBlocks = []) {
   const eigenRoem = roem[userId] || 0;
   const volgende = volgendeDrempel(eigenRoem);
 
-  const blocks = [
-    { type: 'header', text: { type: 'plain_text', text: `⚜️ ${lid.bijnaam}`, emoji: true } },
-  ];
+  // De vaste bovenkant draagt block_id's `top_<groep>_<n>`: kapHomeBlocks mag daar nooit van knippen.
+  const blocks = [];
+  const topGroep = (groep, nieuw) => {
+    const van = blocks.length;
+    blocks.push(...nieuw);
+    for (let i = van; i < blocks.length; i++) blocks[i] = { ...blocks[i], block_id: `top_${groep}_${i}` };
+  };
+  topGroep('kop', [{ type: 'header', text: { type: 'plain_text', text: `⚜️ ${lid.bijnaam}`, emoji: true } }]);
   // Uitkomst van een zojuist ingedrukte knop — een ephemeral in het kanaal zou de gebruiker
   // die in de Home-tab kijkt niet zien, dus de melding komt bovenaan de ververste view.
-  if (melding) blocks.push({ type: 'section', text: { type: 'mrkdwn', text: kapTekst(`> ${melding}`, 3000) } });
+  if (melding) topGroep('melding', [{ type: 'section', text: { type: 'mrkdwn', text: kapTekst(`> ${melding}`, 3000) } }]);
   // Blokken die een commando als antwoord gaf (bv. het tribunaalbord), direct onder de melding.
-  if (extraBlocks.length) blocks.push(...extraBlocks.slice(0, 20), { type: 'divider' });
+  if (extraBlocks.length) topGroep('extra', [...extraBlocks.slice(0, 20), { type: 'divider' }]);
 
   // ── Wie u bent ──
   // Was een monospace-tabel van zes regels (rang, volgende rang, punten, roem, positie,
   // bondgenoot) plus een voortgangsbalk plus een negenregelige voorrechtenlijst. Nu twee regels:
   // de rang met de cijfers erachter, en de balk naar de volgende trede. De voorrechten zijn
   // naslag geworden — je leest ze één keer als je promoveert, niet elke dag.
-  blocks.push({ type: 'section', text: { type: 'mrkdwn', text:
+  topGroep('wie', [{ type: 'section', text: { type: 'mrkdwn', text:
     `${rangNaam(eigenRoem)} · *${eigenScore}* kroketpunt${eigenScore === 1 ? '' : 'en'} · ${eigenRoem} roem` +
     `${positie > 0 ? ` · #${positie} van ${gesorteerd.length}` : ''}` +
-    (bondgenoten.length ? `\n🤝 ${bondgenoten.length > 1 ? 'Bondgenoten' : 'Bondgenoot'}: *${bijnamenVan(bondgenoten, members)}*${alliantiesActief() ? '' : ' — _verbonden zijn gepauzeerd_'}` : '') } });
+    (bondgenoten.length ? `\n🤝 ${bondgenoten.length > 1 ? 'Bondgenoten' : 'Bondgenoot'}: *${bijnamenVan(bondgenoten, members)}*${alliantiesActief() ? '' : ' — _verbonden zijn gepauzeerd_'}` : '') } }]);
   if (volgende) {
     // homeVoortgangInline en niet ladingMeter: die laatste is een beurtenmeter (▓ = nog te
     // gebruiken, ░ = verbruikt) en geeft boven METER_MAX beurten bewust niets terug — bij een
     // afstand van 20 roem dus een lege balk. Hier gaat het om vordering, niet om voorraad.
-    blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text:
-      `${homeVoortgangInline(eigenRoem, volgende.drempel, 12)} roem — nog ${volgende.drempel - eigenRoem} tot ${volgende.kort}` }] });
+    topGroep('voortgang', [{ type: 'context', elements: [{ type: 'mrkdwn', text:
+      `${homeVoortgangInline(eigenRoem, volgende.drempel, 12)} roem — nog ${volgende.drempel - eigenRoem} tot ${volgende.kort}` }] }]);
   }
   if (verbannen) {
-    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '⛔ *U bent verbannen.* Spelacties zijn geblokkeerd tot de poorten heropenen. Toon berouw met `/kroketgod beroep`.' } });
+    topGroep('verbannen', [{ type: 'section', text: { type: 'mrkdwn', text: '⛔ *U bent verbannen.* Spelacties zijn geblokkeerd tot de poorten heropenen. Toon berouw met `/kroketgod beroep`.' } }]);
   }
   // Het verzegelde perkament, alleen voor de uitverkorene van vandaag. Hoog op de pagina: het
   // geldt maar tot middernacht, en een uitnodiging die je moet zoeken, is er geen.
-  blocks.push(...perkamentHomeBlocks(userId));
+  topGroep('perkament', perkamentHomeBlocks(userId));
 
-  // De raadpleegkaart: één blok, niet voor ballingen.
-  if (!verbannen) {
-    const openR = raadpleeg.openRituelen(raadpleegStaat(), userId).map(r => (r === 'canoniseer' ? 'canonisatie' : r));
-    blocks.push({ type: 'section',
-      text: { type: 'mrkdwn', text: `🔱 *Raadpleeg de Kroket God* · _versie ${KROKETGOD_VERSIE}_\n` +
-        (openR.length ? `Vandaag nog: ${openR.join(' · ')}` : '_U heeft vandaag alles gevraagd. Morgen spreekt hij weer._') },
-      ...(openR.length ? { accessory: { type: 'button', text: { type: 'plain_text', text: 'Raadpleeg', emoji: true }, style: 'primary', action_id: 'open_raadpleeg' } } : {}) });
-  }
-
-  // ── Wat u nu kunt doen ──
-  // Dit was drie monospace-tabellen (VANDAAG / DEZE WEEK / ELK UUR), elk met een eigen
-  // samenvattingsregel, plus een legenda die uitlegde wat de blokjes betekenden. Veertien
-  // blokken om te zeggen: dit mag nog, dat niet.
-  //
-  // Nu: één regel met wat OPEN staat, en één grijze regel met wat op is. Wat je kunt doen is de
-  // vraag waarmee je deze tab opent; wat je niet meer kunt doen is een voetnoot. Geen legenda
-  // meer nodig, want er staan geen blokjes meer die uitleg vragen.
-  const statusNu = persoonlijkeStatus(userId);
-  const open = statusNu.cooldowns.filter(c => c.limiet - c.gebruikt > 0);
-  const op = statusNu.cooldowns.filter(c => c.limiet - c.gebruikt <= 0);
-  blocks.push({ type: 'divider' });
-  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: open.length
-    ? `*NU TE DOEN*\n${open.map(c => {
-        const vrij = c.limiet - c.gebruikt;
-        return `> ${c.naam}${c.limiet > 1 ? ` — *${vrij}×*` : ''}${c.extra ? ` _(${c.extra})_` : ''}`;
-      }).join('\n')}`
-    : '*NU TE DOEN*\n_Alles is op voor nu. Morgen hervat de frituur._' } });
-  if (op.length) {
-    blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text:
-      `Op: ${op.map(c => `${c.naam}${c.restMs ? ` (${resterendeTijd(c.restMs)})` : ''}`).join(' · ')}` }] });
-  }
-  const casinoWeek = vatCasinoSamen(readJSON('casinostats.json', {}), getMondayOfWeek(), dagSleutel(), userId);
-  if (casinoWeek.spellen) {
-    blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text:
-      `🎰 Casino deze week: ${casinoWeek.spellen} ${casinoWeek.spellen === 1 ? 'spel' : 'spellen'} · ` +
-      `${casinoWeek.netto > 0 ? `*+${casinoWeek.netto}* gewonnen` : casinoWeek.netto < 0 ? `*${casinoWeek.netto}* verloren` : 'quitte'}` }] });
-  }
-
-  // De actieknoppen: onveranderd, want dit is de enige plek op de hele tab waar je iets DOET.
-  const cooldowns = readJSON('cooldowns.json', {});
-  const duels = readJSON('duels.json', {});
-  const vetbad = readJSON('vetbad.json', {});
-  const offersVandaag = vetbad[userId]?.datum === vandaagKey ? (vetbad[userId].aantal || 0) : 0;
-  const raidNu = readJSON('bamischijf.json', {});
-  const aanvalGedaan = aanvallenGedaan(raidNu.strijders?.[userId], vandaagKey) >= aanvalsLimiet(raidNu, vandaagKey);
-  const duelsVandaag = duels[userId]?.datum === vandaagKey ? (duels[userId].aantal ?? 1) : 0;
-  const duelKan = duelsVandaag < duelLimiet(userId);
-  const roofKan = cooldowns.roof?.[userId] !== getMondayOfWeek();
-  const offerKan = offersVandaag < offerLimiet(userId);
-  if (!verbannen) {
-    const acties = [];
-    if (duelKan) acties.push({ type: 'button', text: { type: 'plain_text', text: '⚔️ Duelleren', emoji: true }, action_id: 'open_duel' });
-    if (roofKan) acties.push({ type: 'button', text: { type: 'plain_text', text: '🥷 Beroven', emoji: true }, action_id: 'open_roof' });
-    if (offerKan) acties.push({ type: 'button', text: { type: 'plain_text', text: '🎲 Offeren', emoji: true }, action_id: 'open_offer' });
-    if (casinoOpen() && casinoResterend(userId) > 0) acties.push({ type: 'button', text: { type: 'plain_text', text: '🎰 Casino', emoji: true }, action_id: 'open_casino' });
-    if (telEerVandaag(userId) < eerLimiet(userId)) {
-      acties.push({ type: 'button', text: { type: 'plain_text', text: '🙏 Eer geven', emoji: true }, action_id: 'open_eer', style: 'primary' });
-    }
-    // De Gunst alleen tonen als hij werkelijk kan: een knop die gegarandeerd "u heeft er geen
-    // meer" antwoordt is een knop die liegt — dezelfde regel als bij het visioen.
-    if (gegevenDezeWeek(loadGunsten(), userId, getMondayOfWeek()).length < GUNST_PER_WEEK
-        && eigenScore - 1 >= GUNST_BODEM) {
-      acties.push({ type: 'button', text: { type: 'plain_text', text: '🎁 Gunnen', emoji: true }, action_id: 'open_gunst' });
-    }
-    if (getFrituurCooldownRest(userId) === 0) {
-      acties.push({ type: 'button', text: { type: 'plain_text', text: '🔮 Visioen', emoji: true }, action_id: 'open_visioen' });
-    }
-    if (herworpbaarVisioen(userId)) {
-      acties.push({ type: 'button', text: { type: 'plain_text', text: '🔁 Zelfde wens, ander oog', emoji: true }, action_id: 'visioen_herworp' });
-    }
-    const bingoNu = readJSON('bingo.json', null);
-    if (bingoNu?.weekStart === getMondayOfWeek() && bingoNu.opdrachten?.length
-        && (bingoNu.claims?.[userId] || []).length < bingoNu.opdrachten.length) {
-      acties.push({ type: 'button', text: { type: 'plain_text', text: '🎲 Bingo claimen', emoji: true }, action_id: 'open_bingo' });
-    }
-    if (handdrukVensterOpen()) {
-      const eigenKeuze = loadHanddruk().week === getMondayOfWeek() ? loadHanddruk().keuzes?.[userId] : null;
-      for (const [id, medelid] of Object.entries(members)) {
-        if (id === userId || isVerbannen(id)) continue;
-        acties.push({ type: 'button', text: { type: 'plain_text', text: `${eigenKeuze === id ? '✅' : '🤝'} ${medelid.bijnaam}`.slice(0, 75), emoji: true }, action_id: `handdruk_${id}` });
-      }
-    }
-    const kvddNu = loadKroketVanDeDag();
-    const gokNu = readJSON('kroketgok.json', {});
-    if (kvddNu?.ts && kvddNu.datum === new Date().toISOString().slice(0, 10)
-        && !(gokNu.ts === kvddNu.ts && gokNu.gokken?.[userId])) {
-      acties.push({ type: 'button', text: { type: 'plain_text', text: '🔮 Gokken', emoji: true }, action_id: 'open_gok' });
-    }
-    if (acties.length) blocks.push({ type: 'actions', elements: acties });
-  }
+  // ── De vaste bovenkant: VANDAAG, UW BEURT, WEEKVIJAND ──
+  // Alles wat u nu kunt doen of niet mag missen, in één blok boven de rest. De oude losse kaarten
+  // (raadpleeg, NU TE DOEN, de actierij, opdrachten, veiling, raid) zijn hierin opgegaan.
+  topGroep('vandaag', vandaagBlokken(userId, Date.now()));
+  topGroep('beurt', uwBeurtBlokken(userId, Date.now()));
+  topGroep('weekvijand', weekvijandBlokken(userId, verbannen));
 
   // ── Wat er op u actief is ──
   if (eretitels.length) {
@@ -18655,9 +18757,7 @@ function bouwAppHomeBlocks(userId, melding = '', extraBlocks = []) {
     blocks.push(...homeKaartKop('🚪 DE GASTEN VAN VANDAAG'));
     blocks.push({ type: 'section', text: { type: 'mrkdwn', text: gastenVandaagTekst(gastenNu) } });
     if (!verbannen) {
-      const elementen = gastenNu.filter(g => g.afscheid).slice(0, 4).map((g, i) => ({ type: 'button',
-        text: { type: 'plain_text', text: `🔒 Houd ${g.naam} vast (${GAST_KOSTEN_VASTHOUDEN} pt)`.slice(0, 75), emoji: true },
-        action_id: `gast_vasthouden_${i}`, value: g.id }));
+      const elementen = []; // de vasthoudknoppen staan in UW BEURT
       const wensen = readJSON('gastwensen.json', {}).wensen || {};
       const optie = ([id, p]) => ({ text: { type: 'plain_text', text: p.naam.slice(0, 75) }, value: id });
       const eigen = wensbaar.find(([id]) => id === wensen[userId]);
@@ -18670,49 +18770,6 @@ function bouwAppHomeBlocks(userId, melding = '', extraBlocks = []) {
         'Elke wens vergroot de kans dat het lot die gast bij de volgende werkdag meebrengt.' +
         (eigen ? ` U wenst *${ontsnapMrkdwn(eigen[1].naam)}*.` : '') +
         (personasNu[topId] ? ` Meest gewenst: ${ontsnapMrkdwn(personasNu[topId].naam)} (${topAantal}).` : '') }] });
-    }
-  }
-
-  // ── Wat er lóópt ──────────────────────────────────────────────────────────
-  // Tijdgebonden gebeurtenissen blijven op de pagina: een raid met een deadline, een veiling die
-  // sluit, een premie op iemands hoofd. Die kun je missen, en iets wat je kunt missen hoort niet
-  // achter een knop.
-  if (raidNu.actief && raidNu.hp > 0) {
-    blocks.push(...homeKaartKop(`${raidNu.vijand?.emoji || '🐉'} ${(raidNu.vijand?.naam || 'De Bamischijf der Duisternis').toUpperCase()}`));
-    // De wrok-regel en de Zegezaal-teller stonden in een TWEEDE kaart (de weekvijand-feature) die
-    // dezelfde bamischijf.json las en dus dezelfde HP nog een keer toonde. Die kaart is weg; het
-    // unieke ervan staat nu hier, in de kaart die ook de aanvalsknoppen heeft.
-    const verslagenNu = Object.keys(loadVerslagen()).length;
-    const gave = gaveVan(raidNu.vijand?.key);
-    blocks.push({ type: 'section', text: { type: 'mrkdwn', text:
-      `${hpBalk(raidNu.hp, raidNu.maxHp)}  *${Math.max(0, raidNu.hp)}/${raidNu.maxHp}* HP · uw schade: *${raidNu.strijders?.[userId]?.schade || 0}* · ${Object.keys(raidNu.strijders || {}).length} strijders` +
-      (isRazend(raidNu, gave) ? ' · 😡 razend' : '') +
-      (gave ? `\n✨ _${gave.naam}: ${gave.regel}_` : '') +
-      (raidNu.strijders?.[userId]?.verloren ? `\n_In zijn buit: ${raidNu.strijders[userId].verloren} kroketpunt(en) van u — terug als hij valt._` : '') +
-      (raidNu.wrok ? `\n_Voor de ${raidNu.wrok + 1}e week terug — hij is niet vergeten dat u faalde._` : '') +
-      `\n_Zegezaal: ${verslagenNu}/${WEEKVIJANDEN.length} vijanden voorgoed geveld._` } });
-    if (!verbannen && !aanvalGedaan) {
-      blocks.push({ type: 'actions', elements: [
-        { type: 'button', text: { type: 'plain_text', text: '⚔️ Val aan', emoji: true }, action_id: 'bamischijf_aanval', style: 'primary' },
-        ...(gave?.soort === 'offerdoof' ? [] : [{ type: 'button', text: { type: 'plain_text', text: '🔥 Offer-aanval (1 pt)', emoji: true }, action_id: 'bamischijf_offer' }]),
-      ] });
-    }
-  }
-
-  const veilingNu = readJSON('veiling.json', {});
-  const veilingOpen = veilingNu.status === 'open' && veilingNu.weekStart === getMondayOfWeek()
-    && (!veilingNu.sluitTs || Date.now() < veilingNu.sluitTs);
-  if (veilingOpen) {
-    const hoogste = [...(veilingNu.biedingen || [])].sort((a, b) => b.bod - a.bod)[0];
-    blocks.push(...homeKaartKop('🔨 DE GROTE VEILING'));
-    blocks.push({ type: 'section', text: { type: 'mrkdwn', text:
-      `*${veilingNu.artefact?.naam || 'artefact'}* — _${veilingNu.artefact?.uitleg || ''}_\n` +
-      (hoogste ? `Hoogste bod: *${hoogste.bod}* door ${members[hoogste.userId]?.bijnaam || 'een volgeling'}${hoogste.userId === userId ? ' (u!)' : ''}` : 'Nog geen biedingen.') } });
-    if (!verbannen) {
-      blocks.push({ type: 'actions', elements: [
-        { type: 'button', text: { type: 'plain_text', text: '💰 Bied +1', emoji: true }, action_id: 'veiling_bied_1', style: 'primary' },
-        { type: 'button', text: { type: 'plain_text', text: '💎 Bied +3', emoji: true }, action_id: 'veiling_bied_3' },
-      ] });
     }
   }
 
