@@ -39,6 +39,11 @@ harnas(async (h) => {
   await stemTribunaal(h.client, 'UA', 'tegen');
   h.ok(teller('UA', 'tribunaal_stem') === 1, 'tribunaal_stem telt de eerste stem, niet de wijziging');
 
+  // De beschuldigde telt niet mee voor zijn eigen tribunaal
+  h.schrijf('tribunaal.json', { fase: 'stemming', doelwitId: 'UD', stemmen: {}, sluitTs: nu + 3_600_000 });
+  await stemTribunaal(h.client, 'UD', 'tegen');
+  h.ok(teller('UD', 'tribunaal_stem') === 0, 'tribunaal_stem telt niet voor de beschuldigde');
+
   // Verbond
   h.schrijf('allianties.json', {});
   await h.commando('UA', 'alliantie Charlie');
@@ -64,4 +69,23 @@ harnas(async (h) => {
   seizoen('verloren');
   await telActie(h.client, 'UD', 'offer');
   h.ok(teller('UD', 'seizoen_daad') === 1, 'seizoen_daad blijft bij status verloren');
+
+  // Anonieme klacht: de weekopdracht beloont stil, zonder naam of id in kanaal, log of archief.
+  const OPD = h.index.alleOpdrachten();
+  const bewaard = OPD.splice(0, OPD.length, ...OPD.filter((o) => o.soort !== 'week' || o.id === 'w-klacht'));
+  const klachtRegel = OPD.find((o) => o.id === 'w-klacht');
+  const vanaf = klachtRegel.vanaf;
+  klachtRegel.vanaf = undefined; // los van de lanceerdatum
+  try {
+    h.schrijf('scores.json', { ...h.lees('scores.json'), UA: 20 });
+    const voor = h.lees('scores.json').UA;
+    const postsVoor = h.posts.length;
+    const t0 = Date.now();
+    await telActie(h.client, 'UA', 'klacht');
+    h.ok(h.lees('scores.json').UA === voor + 2, `w-klacht beloont (+2): ${voor} -> ${h.lees('scores.json').UA}`);
+    const nieuw = JSON.stringify(h.posts.slice(postsVoor)) + JSON.stringify(h.lees('weekgebeurtenissen.json'));
+    h.ok(!/klacht/i.test(nieuw) || !/Alfa|"UA"/.test(nieuw), 'w-klacht: geen naam of id bij de opdracht');
+    h.ok(!h.lees('weekgebeurtenissen.json').events.some((e) => e.ts >= t0 && e.type === 'opdracht' && (e.userId || /Alfa/.test(e.beschrijving))), 'w-klacht: logregel zonder lid');
+    h.ok(!h.posts.slice(postsVoor).some((p) => /WEEKOPDRACHT/.test(p.text)), 'w-klacht: geen kanaalpost');
+  } finally { klachtRegel.vanaf = vanaf; OPD.splice(0, OPD.length, ...bewaard); }
 });

@@ -14884,12 +14884,12 @@ const OPDRACHTEN = [
   { id: 'w-winkel',   soort: 'week', actie: 'winkel_koop',    doel: 3, beloning: 3, tekst: 'Doe drie aankopen in de Aflatenhandel' },
 
   // ── Spoor 3: de teruggebrachte spellen krijgen een opdracht ──
-  { id: 'd-zegen',     soort: 'dag',  actie: 'gezegend',         doel: 1,  beloning: 2, tekst: 'Laat u zegenen door de profeet of op een zegendag', vanaf: OPDRACHTEN_NIEUW_VANAF },
+  { id: 'd-zegen',     soort: 'dag',  actie: 'gezegend',         doel: 1,  beloning: 2, tekst: 'Laat u zegenen door de profeet', vanaf: OPDRACHTEN_NIEUW_VANAF },
   { id: 'd-seizoen',   soort: 'dag',  actie: 'seizoen_daad',     doel: 3,  beloning: 1, tekst: 'Drijf {dreiging} terug met drie daden in de frituur', vanaf: OPDRACHTEN_NIEUW_VANAF },
   { id: 'w-raad',      soort: 'week', actie: 'raad_stem',        doel: 1,  beloning: 3, tekst: 'Stem mee in de Raad over een gele kaart', vanaf: OPDRACHTEN_NIEUW_VANAF },
   { id: 'w-genade',    soort: 'week', actie: 'begenade',         doel: 1,  beloning: 4, tekst: 'Help een balling terug met begenade', vanaf: OPDRACHTEN_NIEUW_VANAF },
-  { id: 'w-klacht',    soort: 'week', actie: 'klacht',           doel: 1,  beloning: 2, tekst: 'Dien een klacht in bij de Raad', vanaf: OPDRACHTEN_NIEUW_VANAF },
-  { id: 'w-tribunaal', soort: 'week', actie: 'tribunaal_stem',   doel: 1,  beloning: 3, tekst: 'Stem in een tribunaal', vanaf: OPDRACHTEN_NIEUW_VANAF },
+  { id: 'w-klacht',    soort: 'week', actie: 'klacht',           doel: 1,  beloning: 2, tekst: 'Dien een klacht in bij de Raad', stil: true, vanaf: OPDRACHTEN_NIEUW_VANAF },
+  { id: 'w-tribunaal', soort: 'week', actie: 'tribunaal_stem',   doel: 1,  beloning: 3, tekst: 'Stem in een tribunaal', stil: true, vanaf: OPDRACHTEN_NIEUW_VANAF },
   { id: 'w-verbond',   soort: 'week', actie: 'verbond_gesloten', doel: 1,  beloning: 3, tekst: 'Sluit een verbond', vanaf: OPDRACHTEN_NIEUW_VANAF },
   { id: 'w-premie',    soort: 'week', actie: 'premie_geind',     doel: 1,  beloning: 4, tekst: 'Claim een premie', vanaf: OPDRACHTEN_NIEUW_VANAF },
   { id: 'w-missie',    soort: 'week', actie: 'missie_voltooid',  doel: 1,  beloning: 4, tekst: 'Voltooi een stille missie', vanaf: OPDRACHTEN_NIEUW_VANAF },
@@ -15187,13 +15187,15 @@ async function telActie(client, userId, actie, aantal = 1, naspel = null) {
     for (const o of voltooid) {
       const bijnaam = loadMembers()[userId]?.bijnaam || 'Een volgeling';
       await pasScoreAanMetCheck(client, userId, o.beloning, { channelId: process.env.SLACK_CHANNEL_ID, naspel });
-      logGebeurtenis('opdracht', userId, `${bijnaam} volbracht de ${o.soort === 'dag' ? 'dagopdracht' : 'weekopdracht'} "${opdrachtTekst(o)}" (+${o.beloning})`);
+      // `stil`: de daad is anoniem (klacht) of geheim (tribunaalstem) — dan geen naam of id in log, archief of kanaal.
+      if (o.stil) logGebeurtenis('opdracht', null, `Een weekopdracht werd volbracht (+${o.beloning})`);
+      else logGebeurtenis('opdracht', userId, `${bijnaam} volbracht de ${o.soort === 'dag' ? 'dagopdracht' : 'weekopdracht'} "${opdrachtTekst(o)}" (+${o.beloning})`);
       // Voltooide opdrachten zijn zelf ook een daad — voedt de 'plichtsgetrouw'-relikwieën.
       // Directe teller + check i.p.v. telActie(), om herintreden in deze functie te vermijden.
       await controleerPrestaties(client, userId, 'opdracht_klaar', bumpTeller(userId, 'opdracht_klaar', 1), naspel);
       // Dagopdrachten blijven stil (drie per lid per dag zou het kanaal verzuipen) — die zie
       // je in je App Home. Weekopdrachten zijn zeldzaam genoeg voor een verkondiging.
-      if (o.soort === 'week'
+      if (o.soort === 'week' && !o.stil
           && !naspelRegel(naspel, `📜 *Weekopdracht* — ${bijnaam} volbracht _${opdrachtTekst(o)}_ (+${o.beloning})`, userId)) {
         await postToChannel(client, process.env.SLACK_CHANNEL_ID,
           `📜 *WEEKOPDRACHT VOLBRACHT* 📜\n\n> *${bijnaam}* heeft volbracht: _${opdrachtTekst(o)}_.\n> De Hoge Frituurraad kent *+${o.beloning} kroketpunten* toe.\n\n— De Hoge Frituurraad`);
@@ -17655,7 +17657,7 @@ async function stemTribunaal(client, userId, keuze) {
   const oud = t.stemmen?.[userId];
   t.stemmen = { ...(t.stemmen || {}), [userId]: keuze };
   writeJSON('tribunaal.json', t);
-  if (!oud) await telActie(client, userId, 'tribunaal_stem');
+  if (!oud && userId !== t.doelwitId) await telActie(client, userId, 'tribunaal_stem');
   await updateTribunaalBericht(client, t);
   const naamDoel = members[t.doelwitId]?.bijnaam || 'de beschuldigde';
   // Bewust GEEN logGebeurtenis met de keuze erin: de stemming is geheim, ook in de logs.
