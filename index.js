@@ -14594,7 +14594,7 @@ async function voerRitueelUit(client, { userId, ritueel, rest, channelId, respon
 
 
 // De rooktests (scripts/rooktest/) komen zo bij de regisseur.
-if (process.env.KROKET_ROOKTEST) module.exports = { startStilleMissie, dagSleutel, stadKeuzes, voegToeAanArchief, regieKlok, voerOffer, voerBamischijfAanval, bouwDashboardData, voerDashboardActie, saveInstellingen, casinoOpen, regieTik, bouwRegieStand, voerIngreepUit, UITVOERDERS, regieStaat, bewaarRegie, stemZaak, sluitZaak, mogAutonoomPosten, werkdagenStil, casinoToegangReden, casinoMax, casinoPlafond, boekCasinoUitslag, sluitGeleKaartPoll, startGeleKaartPoll, voerDuel, voerEer, winkelPrijs, prijsRedenen, prijsToelichting, CRON_LABELS, geplandeCronMeta, BINGO_POOL, bouwDossierBlok, voerRitueelUit, raadpleegStaat, bewaarRaadpleeg, bouwAppHomeBlocks, bouwNaslagVenster, kapHomeBlocks, stemTribunaal, vollooiMissie, telActie, getMondayOfWeek, kiesOpdrachten, opdrachtHaalbaar, opdrachtTekst, opdrachtPool, alleOpdrachten, kenAlliantiePuntenBonus, draagBijAanSeizoen, bedelUitkomst, legDagstandVast, bouwAppHome2Blocks, publiceerHome, homeKrijgt2, homeKaart };
+if (process.env.KROKET_ROOKTEST) module.exports = { startStilleMissie, dagSleutel, stadKeuzes, voegToeAanArchief, regieKlok, voerOffer, voerBamischijfAanval, bouwDashboardData, voerDashboardActie, saveInstellingen, casinoOpen, regieTik, bouwRegieStand, voerIngreepUit, UITVOERDERS, regieStaat, bewaarRegie, stemZaak, sluitZaak, mogAutonoomPosten, werkdagenStil, casinoToegangReden, casinoMax, casinoPlafond, boekCasinoUitslag, sluitGeleKaartPoll, startGeleKaartPoll, voerDuel, voerEer, winkelPrijs, prijsRedenen, prijsToelichting, CRON_LABELS, geplandeCronMeta, BINGO_POOL, bouwDossierBlok, voerRitueelUit, raadpleegStaat, bewaarRaadpleeg, bouwAppHomeBlocks, bouwNaslagVenster, kapHomeBlocks, stemTribunaal, vollooiMissie, telActie, getMondayOfWeek, kiesOpdrachten, opdrachtHaalbaar, opdrachtTekst, opdrachtPool, alleOpdrachten, kenAlliantiePuntenBonus, draagBijAanSeizoen, bedelUitkomst, legDagstandVast, bouwAppHome2Blocks, publiceerHome, homeKrijgt2, homeKaart, homeBeelden, zorgVoorKaartbeelden };
 
 // Wat het dashboard over het casino laat zien (bouwDashboardData) en kan (/api/casino).
 function casinoDashboardData(naam) {
@@ -19012,6 +19012,53 @@ function weekGrafiek(userId) {
   } };
 }
 
+// ── Kaartbeelden (lib/kaartbeeld.js): één keer tekenen, op R2 zetten, URL onthouden ────────
+// kaartbeelden.json: { sleutel: url } met de actiesleutels en vijand_<key> voor de weekvijand.
+// Zonder R2 of zonder URL krijgt de kaart geen afbeelding; niets hangt ervan af. Wijzig je een
+// tekening, verwijder dan de bijbehorende sleutel (of het bestand): dan wordt hij opnieuw gezet.
+registreerFeature({ naam: 'kaartbeelden', state: ['kaartbeelden.json'] });
+const { kaartSvg, vijandPortret, KAART_SLEUTELS, KNOP_NAAR_SLEUTEL } = require('./lib/kaartbeeld.js');
+const KAARTBEELD_RETRY_MS = 10 * 60_000;
+let kaartbeeldBezig = null;
+let kaartbeeldLaatst = 0;
+
+const weekvijandBeeldSleutel = () => {
+  const raid = readJSON('bamischijf.json', {});
+  return raid.actief && raid.vijand?.key ? `vijand_${raid.vijand.key}` : null;
+};
+const ontbrekendeKaartbeelden = () => {
+  const cache = readJSON('kaartbeelden.json', {});
+  return [...KAART_SLEUTELS, weekvijandBeeldSleutel()].filter((k) => k && !cache[k]);
+};
+// action_id van de kaart (en 'weekvijand') -> URL, voor bouwAppHome2Blocks.
+function homeBeelden() {
+  const cache = readJSON('kaartbeelden.json', {});
+  const kaart = { ...Object.fromEntries(Object.entries(KNOP_NAAR_SLEUTEL).filter(([, k]) => cache[k]).map(([id, k]) => [id, cache[k]])) };
+  const vijand = weekvijandBeeldSleutel();
+  if (vijand && cache[vijand]) kaart.weekvijand = cache[vijand];
+  return kaart;
+}
+async function zorgVoorKaartbeelden() {
+  if (!process.env.R2_BUCKET) return;
+  if (kaartbeeldBezig) return kaartbeeldBezig;
+  if (!ontbrekendeKaartbeelden().length || Date.now() - kaartbeeldLaatst < KAARTBEELD_RETRY_MS) return;
+  kaartbeeldLaatst = Date.now();
+  kaartbeeldBezig = (async () => {
+    for (const sleutel of ontbrekendeKaartbeelden()) {
+      try {
+        const svg = sleutel.startsWith('vijand_') ? vijandPortret(sleutel.slice(7)) : kaartSvg(sleutel);
+        const url = await zetOpImgbb(naarPng(svg), sleutel, { map: 'home', timeout: 20000 });
+        writeJSON('kaartbeelden.json', { ...readJSON('kaartbeelden.json', {}), [sleutel]: url });
+      } catch (err) {
+        console.warn(`⚠️ Kaartbeeld ${sleutel} mislukt:`, err.message);
+      }
+    }
+  })().finally(() => { kaartbeeldBezig = null; });
+  return kaartbeeldBezig;
+}
+// Op de achtergrond, nooit wachten. De rooktests roepen zorgVoorKaartbeelden zelf aan.
+const kaartbeeldenOpAchtergrond = () => { if (!process.env.KROKET_ROOKTEST) zorgVoorKaartbeelden().catch(() => {}); };
+
 // De Home 2.0 van één lid. `opties.beelden`: { [action_id | 'weekvijand']: https-URL } voor de kaarten (K3).
 function bouwAppHome2Blocks(userId, melding = '', extraBlocks = [], opties = {}) {
   const beelden = opties.beelden || {};
@@ -19116,10 +19163,11 @@ async function publiceerHome(client, userId, melding = '', extraBlocks = []) {
   }
   // Home 2.0 voor wie hem krijgt; weigert Slack hem (of faalt het bouwen), dan krijgt dit lid de klassieke Home.
   if (homeKrijgt2(userId)) {
+    kaartbeeldenOpAchtergrond(); // ontbrekende beelden komen bij de volgende publicatie
     try {
       await slackLimiter.schedule(() => client.views.publish({
         user_id: userId,
-        view: { type: 'home', blocks: bouwAppHome2Blocks(userId, melding, extraBlocks) },
+        view: { type: 'home', blocks: bouwAppHome2Blocks(userId, melding, extraBlocks, { beelden: homeBeelden() }) },
       }));
       return;
     } catch (err) {
@@ -22248,6 +22296,7 @@ process.on('SIGINT',  () => gracefulShutdown('SIGINT'));
 // ── Start ──────────────────────────────────────────────────────────────────────
 
 (async () => {
+  kaartbeeldenOpAchtergrond();
   backfillAchievements();
   backfillRoem();
   // Vóór laadArchief: de migratie herschrijft het archiefbestand, en de index hoort de schone

@@ -111,6 +111,25 @@ harnas(async (h) => {
   h.ok(k3.find((b) => b.type === 'card').hero_image?.image_url.endsWith('vijand.png'), 'ook de weekvijandkaart krijgt zijn beeld');
   h.ok(!homeKaart({ titel: 'x', knoppen: [] }).hero_image, 'homeKaart zonder beeld heeft geen hero_image');
 
+  // 6b. Kaartbeelden (K3): zonder cache geen hero_image en geen fout; met cache wel; eenmalig renderen naar R2.
+  const { homeBeelden, zorgVoorKaartbeelden } = h.index;
+  h.schrijf('kaartbeelden.json', {});
+  h.schrijf('bamischijf.json', { actief: true, hp: 30, maxHp: 51, strijders: {}, vijand: { key: 'airfryer_kroket', naam: 'De Airfryer-Kroket' } });
+  h.ok(Object.keys(homeBeelden()).length === 0, 'zonder cache geen beelden');
+  const kaal = bouwAppHome2Blocks('UA', '', [], { beelden: homeBeelden() });
+  h.ok(kaal.find((b) => b.type === 'carousel').elements.every((c) => !c.hero_image) && !kaal.find((b) => b.type === 'card')?.hero_image, 'zonder cache: kaarten zonder hero_image, geen fout');
+  const r2Voor = h.r2.length;
+  await zorgVoorKaartbeelden();
+  const cache = h.lees('kaartbeelden.json');
+  h.ok(h.r2.length - r2Voor === 13 && Object.keys(cache).length === 13 && Object.values(cache).every((u) => /^https:\/\/beeld\.voorbeeld\.nl\/home\/[0-9a-f]{40}\.png$/.test(u)), `12 kaartbeelden + 1 vijandportret op R2 onder home/ (${h.r2.length - r2Voor})`);
+  h.ok(cache.vijand_airfryer_kroket, 'portret onder vijand_<key>');
+  const metBeeld = bouwAppHome2Blocks('UA', '', [], { beelden: homeBeelden() });
+  h.ok(metBeeld.find((b) => b.type === 'carousel').elements.every((c) => c.hero_image?.image_url === cache[({ open_raadpleeg: 'raadpleeg', open_duel: 'duel', open_roof: 'roof', open_offer: 'offer', open_casino: 'casino', open_eer: 'eer', open_gunst: 'gunst', open_visioen: 'visioen', open_bingo: 'bingo', open_gok: 'gok' })[c.actions[0].action_id]]), 'met cache: elke kaart krijgt zijn hero_image');
+  h.ok(metBeeld.find((b) => b.type === 'card').hero_image.image_url === cache.vijand_airfryer_kroket, 'weekvijandkaart krijgt zijn portret');
+  await zorgVoorKaartbeelden();
+  h.ok(h.r2.length - r2Voor === 13, 'tweede keer: cache hergebruikt, niets opnieuw gezet');
+  schoon(); vol();
+
   // 7. Verbannen lid: kop, alert, VANDAAG en secties; geen actiekaarten.
   schoon(); vol();
   h.schrijf('verbanning.json', { UA: { tot: new Date(nu + 3_600_000).toISOString() } });
