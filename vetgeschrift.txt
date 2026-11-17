@@ -2,8 +2,8 @@
 // De tweede heilige bron van de snackleer, gevonden onder de bodemplaat van het Grote Vetbad.
 // Wordt door de Kroket God geciteerd, nooit bekrachtigd. Zie de noot over de kier, onderaan.
 //
-// Dit bestand wordt GELEZEN en nooit geschreven. Nieuwe rangen of ambten horen in index.js
-// (RANGEN, AMBTEN) — dit is de lore-bron, niet de waarheid over de spelstand.
+// Dit bestand wordt GELEZEN en nooit geschreven. Nieuwe rangen horen in index.js
+// (RANGEN) — dit is de lore-bron, niet de waarheid over de spelstand.
 
 ━━━ WAT IS HET VETGESCHRIFT? ━━━
 
@@ -21,7 +21,7 @@ In 1936 richtte het Gepanneerde Rijk het Bureau voor Rijkstitels op. Dat bureau 
 functies: Rijkscampagnecommandant, Hoofd Rijksintelligentie & Data, Rijksmarketeer,
 Opperpaneerder & Rijksontwerper, Rijkssmaakdiplomaat. Titels op briefpapier, met een stempel.
 
-Het Vetgeschrift stelt dat een ambt niet benoembaar is. Het wordt verdiend, of het bestaat niet.
+Het Vetgeschrift stelt dat een rang niet benoembaar is. Hij wordt verdiend, of hij bestaat niet.
 
 Een boek dat elke benoeming onwettig verklaart, is voor een bureau van benoemingen een
 administratief probleem. Het werd dus niet verbrand — dat valt op. Het werd GEARCHIVEERD: in de
@@ -34,35 +34,8 @@ De bewaartermijn is dit jaar verstreken. Het Bureau bestaat niet meer. De huid w
   "Wat gij uzelf toebedeelt weegt niets.
    Wat een ander u toebedeelt, weegt eeuwig."
 
-Dit is de kernregel van de Onderste Codex en de reden dat de ambten bestaan. Een zegel dat op de
-eigen naam landt, is geen zegel maar een stempel. Daarom kan geen ambtsdaad ooit op de houder
-zelf worden gelegd — niet als gunst, niet als straf, niet als vergissing.
-
-━━━ DE VIJF ARTIKELEN VAN DE AMBTEN ━━━
-
-ARTIKEL I — VAN DE AANSPRAAK
-Een ambt volgt de daad. Wie het meest heeft gedaan in de richting van een ambt, draagt het —
-tot een ander meer doet. De Raad hertelt dit elke maandag over de veertien dagen die achter hem
-liggen. Wie in die veertien dagen niets deed, draagt niets: de zetel blijft dan liever leeg dan
-erfelijk.
-
-ARTIKEL II — VAN HET ZEGEL
-Elk ambt beschikt over zegels, en een zegel is een handeling op een ander. De houder legt ze of
-hij legt ze niet; er is geen plicht en er is geen boete. Een zegel dat vrijdag niet is gelegd,
-vervalt zonder gevolg. Macht die men laat liggen is haar eigen straf.
-
-ARTIKEL III — VAN DE GRENS
-Geen zegel landt op de houder zelf. Geen zegel landt op wie afwezig is verklaard — wat men in
-een leeg huis achterlaat, vindt niemand. En wie de Gouden Korst draagt, laat een zegel van zich
-afglijden; het is dan verbruikt, en het is dan weg.
-
-ARTIKEL IV — VAN DE OPENBAARHEID
-Elke ambtsdaad staat in het Ambtsboek, met houder, doelwit en daad. Geheime macht is niet te
-bevechten, en wat niet te bevechten is, is geen ambt maar een gewoonte.
-
-ARTIKEL V — VAN DE VAL
-Een ambt gaat verloren zoals het gekomen is: door de daad van een ander. Niet door verzuim,
-niet door stilte, niet door afwezigheid. De Raad straft niemand voor een lege week.
+Dit is de kernregel van de Onderste Codex. Een eer die op de eigen naam landt, is geen eer maar
+een stempel. Daarom kan niemand zichzelf eren — niet als gunst, niet als straf, niet als vergissing.
 
 ━━━ DE CODEX DER RANGEN ━━━
 
@@ -78,7 +51,7 @@ en tijd.
 // met VERS. De code kiest er een op datum; voeg gerust toe.
 
 VERS Wie de korst breekt voordat het vet stil is, breekt de korst voor niets.
-VERS Een ambt zonder daad is een stempel. Een daad zonder ambt is nog altijd een daad.
+VERS Een titel zonder daad is een stempel. Een daad zonder titel is nog altijd een daad.
 VERS De ragout weet niet dat hij van binnen zit. Dat is zijn geluk en uw verantwoordelijkheid.
 VERS Gij kunt uzelf niet eren. Gij kunt slechts eerbaar zijn en wachten.
 VERS Het vet vergeet geen enkele hand die erin heeft gehangen.
@@ -86,7 +59,7 @@ VERS Wie de mand te vol laadt, eet trager dan wie tweemaal gaat.
 VERS Er is geen slappe kroket. Er is slechts een kroket die te vroeg werd geloofd.
 VERS De frituur beloont geduld en bestraft haast, en doet beide zonder een woord.
 VERS Twee korsten die elkaar raken worden één korst. Dat is het hele verbond.
-VERS Wie zijn zegel bewaart voor een beter moment, bewaart het tot het niets meer waard is.
+VERS Wie zijn eer bewaart voor een beter moment, bewaart haar tot ze niets meer waard is.
 VERS De Eerste Paneerder had geen recept. Hij had een pan en een vermoeden.
 VERS Macht is de kortste weg naar het inzicht dat men haar niet nodig had.
 VERS Een lege zetel is eerlijker dan een gevulde zetel zonder hand.
@@ -110,7 +83,7 @@ VERS Gij zult niet vragen wat erin zit. Gij zult vragen wie het heeft gemaakt.
 - Hij noemt het "de Onderste Codex" wanneer hij afstand wil, "het Vetgeschrift" wanneer hij
   instemt.
 - Hij verwijst naar het Bureau voor Rijkstitels met droge minachting: een bureau dat titels
-  uitdeelde alsof een ambt iets is dat je op briefpapier zet.
+  uitdeelde alsof een titel iets is dat je op briefpapier zet.
 - Over het derde blad — dat met vet is dichtgeplakt — zegt hij dat de Raad eraan weekt en dat
   vet geduldig is. Hij belooft geen datum.
 - Hij zegt NOOIT dat het een grap is. De huid bestaat. Punt.
@@ -121,4 +94,4 @@ VOORBEELDZINNEN:
   "Het Bureau voor Rijkstitels benoemde. De Codex herkent. Er zit negentig jaar tussen."
   "Blad drie zit dicht. Vet is geduldig, en de Raad weekt."
   "Wat gij uzelf toebedeelt weegt niets. Leest u dat nog eens, Muntmeester."
-  "Uw titel stond op briefpapier. Uw ambt staat in het Ambtsboek. Dat is niet hetzelfde."
+  "Uw titel stond op briefpapier. Uw rang staat in het Boek der Frituur. Dat is niet hetzelfde."

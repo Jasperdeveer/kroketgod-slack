@@ -32,7 +32,7 @@ test('ingevulde formulieren worden weer het juiste commando', () => {
   assert.equal(bouwCommandoTekst('eer [namen] (voor [reden])', [['Piet', 'Klaas'], 'de borrel']), 'eer Piet en Klaas voor de borrel');
   assert.equal(bouwCommandoTekst('eer [namen] (voor [reden])', [['Piet'], '']), 'eer Piet');
   assert.equal(bouwCommandoTekst('/kroketgod gok krokant|slap', ['slap']), 'gok slap');
-  assert.equal(bouwCommandoTekst('rechtbank [naam] vs [naam]', ['Piet', 'Klaas']), 'rechtbank Piet vs Klaas');
+  assert.equal(bouwCommandoTekst('duel [naam] vs [naam]', ['Piet', 'Klaas']), 'duel Piet vs Klaas');
   assert.equal(bouwCommandoTekst('rolwissel [naam] | [nieuwe rol]', ['Piet', 'Frituurmeester']), 'rolwissel Piet | Frituurmeester');
   assert.equal(bouwCommandoTekst('geef [naam] een kroket-therapiesessie', ['Piet']), 'geef Piet een kroket-therapiesessie');
 });

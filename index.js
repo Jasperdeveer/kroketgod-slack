@@ -50,7 +50,7 @@ if (ontbrekendeVars.length) {
 //   homeOrde  lager = hoger in de App Home (standaard 50)
 // ── Interne modules (zie lib/) ────────────────────────────────────────────────
 const { FEATURES, registreerFeature } = require('./lib/registry.js');
-const { BACKUP_BASIS, backupBestanden, controleerBackupDekking, maakBackup } = require('./lib/backup.js');
+const { backupBestanden, controleerBackupDekking, maakBackup } = require('./lib/backup.js');
 const { dashboardAuth, logAudit, leesDashboardHtml } = require('./lib/dashboardkern.js');
 const { readJSON, writeJSON } = require('./lib/state.js');
 const { isWeekendAms, getAmsOffsetMs, getMondayOfWeek, secondenTotVrijdagMiddag, volgendeMiddernachtPacific } = require('./lib/tijd.js');
@@ -58,13 +58,13 @@ const { normaliseerOndertekening, splitsVoorBlokken, kiesKlasse, ontschreeuw, is
 const { commandoRegister, promptOverzicht } = require('./lib/commandoregister.js');
 const { bouwCommandoMenus, bouwMenuBlocks, bouwCommandoModal, bouwCommandoTekst, leesModalWaarden, heeftVelden } = require('./lib/homecommandos.js');
 const { hpBalk, homeTabel, homeBalken, homeVoortgang, homeVoortgangInline, ladingMeter, METER_MAX, homeKaartKop } = require('./lib/blocks.js');
-const { STANDAARD_INSTELLINGEN, loadInstellingen, instelling, saveInstellingen } = require('./lib/instellingen.js');
+const { loadInstellingen, instelling, saveInstellingen } = require('./lib/instellingen.js');
 const { ARCHIEF_BESTAND, laadArchief, voegToeAanArchief, zoekArchief, entriesTussen, willekeurigCitaat, herschrijfArchief, archiefOmvang } = require('./lib/archief.js');
 // Een anoniem gelegde vloek blijft anoniem, ook in het archief en de kroniek.
 const { vloekGelegdTekst, anonimiseerVloekRegel, anonimiseerKroniek } = require('./lib/anoniem.js');
 const { VOORRAAD_BESTAND, ruimVoorraadOp, haalUitVoorraad, vulVoorraad, voorraadStand } = require('./lib/voorraad.js');
 const {
-  SOORTEN, randSleutel, warmte: weefselWarmte, wrijving: weefselWrijving,
+  SOORTEN, randSleutel,
   graadPerLid, sterksteBand, grootsteVete, meestScheef, spil, eenlingen, relatiesVan,
 } = require('./lib/weefsel.js');
 const { kleurVoorNieuweKaart, schorsingUren, voegKaartToe } = require('./lib/kaarten.js');
@@ -72,13 +72,13 @@ const { kleurVoorNieuweKaart, schorsingUren, voegKaartToe } = require('./lib/kaa
 // wroklaag; draait voorlopig NAAST de kerfstok zodat beide dezelfde feiten zien en de
 // overgang te vergelijken is. De rekenkunde staat in de module, hier staat de bedrading.
 const {
-  toestandVan, bladzijdeVan, boekDaad, strijkGlad, schuifNaarNul, bladzijdenVan,
+  boekDaad, strijkGlad, schuifNaarNul, bladzijdenVan,
   maakClaim, openClaimsVan, sluitClaim, ruimOudeClaims, CLAIM_GELDIG_MS, duelGevolg,
 } = require('./lib/paarboek.js');
 // De Gunst: het enige werkwoord waarmee je een medelid iets geeft dat jou zelf iets kost.
 const {
   GUNST_PER_WEEK, GUNST_BODEM,
-  gegevenDezeWeek, mag: magGunst, boekGunst, nettoGulheid, uitkering: gunstUitkering, ruimOudeWeken,
+  gegevenDezeWeek, mag: magGunst, boekGunst, uitkering: gunstUitkering, ruimOudeWeken,
 } = require('./lib/gunst.js');
 // Daglimieten voor de bronnen die de speler niets kosten: zondebok, lofzang, organische eer.
 const {
@@ -103,15 +103,15 @@ const saveClaims = (d) => writeJSON('claims.json', d);
 // het uitdelen zelf.
 const {
   EER_KLASSEN, EER_KLASSE_LABEL, EER_REDEN_MIN, EER_REDEN_MAX, ALLIANTIE_TERUGSLAG,
-  redenProbleem, parseerKlasse, worpVoorKlasse, promoveerKlasse,
+  redenProbleem, worpVoorKlasse, promoveerKlasse,
   isHerhaaldeReden, onthoudReden, huisonderwerpenUit, raaktHuisonderwerp, EER_HERHAALD,
 } = require('./lib/eerwaarde.js');
 const {
   inStilVenster, weegDaad, KORST_PUNTEN, KORST_MAX_PER_WEEK, korstenDezeWeek,
 } = require('./lib/dubbelekorst.js');
 const {
-  paarSleutel, KERF_GEWICHT, KERF_MAX, kerfBij, kerven, vergeef, kerfstokVan,
-  TWIST_DUELS, twistRijp, twistStand, INZET_MAX, duelInzet, inzetRedenen,
+  paarSleutel, KERF_GEWICHT, kerfBij, kerven, vergeef, kerfstokVan,
+  TWIST_DUELS, twistRijp, twistStand, duelInzet, inzetRedenen,
 } = require('./lib/paar.js');
 const {
   ZAKGELD, uitdeelMomentGeweest, nogTeOntvangen, naUitkering, verdiendeStand, kampioenWaardig,
@@ -142,7 +142,7 @@ const {
 const { aanvalFilm, kanonFilm } = require('./lib/vijandbeeld.js');
 const { createHash } = require('crypto');
 const {
-  VERBOND_MAX, VERZOEK_GELDIG_MS, groepen: verbondGroepen, naarOpslag: verbondNaarOpslag,
+  VERBOND_MAX, VERZOEK_GELDIG_MS, groepen: verbondGroepen,
   groepVan: verbondGroepVan, bondgenotenVan, verlaat: verlaatVerbond, sluitPaar: sluitVerbondsPaar,
   beoordeelVerbond, toetsVerzoek: toetsVerbondsverzoek, sluitAan: sluitAanBijVerbond, kiesEen, namenLijst,
 } = require('./lib/verbond.js');
@@ -1701,7 +1701,7 @@ const WINKEL_ITEMS = {
   },
   gouden_korst: {
     naam: 'Gouden Korst', icoon: '👑', prijs: 3, duurUren: 24,
-    uitleg: '24 uur: een gele kaart die op u landt, glijdt van u af — en gouden status in de ranglijst',
+    uitleg: '24 uur: een gele of rode kaart die op u landt, glijdt van u af — en gouden status in de ranglijst',
   },
 };
 
@@ -2026,7 +2026,7 @@ function archiefDatum(ts) {
 // krijgt geen aanhalingstekens — anders zou de Kroket God "De Kronieken" gaan citeren als lid.
 function archiefRegel(t) {
   if (t.soort === 'gebeurtenis') return `[${archiefDatum(t.ts)}] uit de kronieken: ${t.tekst}`;
-  // Een vonnis draagt zijn zaaknummer al in de tekst (zie voerZaak), dus geen naam ervoor.
+  // Een vonnis draagt zijn zaaknummer al in de tekst (oude archiefitems; voerZaak bestaat niet meer), dus geen naam ervoor.
   if (t.soort === 'vonnis') return `[${archiefDatum(t.ts)}] uit de jurisprudentie: ${t.tekst}`;
   return `[${archiefDatum(t.ts)}] ${t.spreker}: "${t.tekst}"`;
 }
@@ -2996,7 +2996,7 @@ async function legRodeKaartOp(client, channelId, userId, bijnaam, reden, citaat,
   reden = reden || 'tweede gele kaart deze week';
   const eindeUtc = legKaartSchorsingOp(userId, 'rood', reden, citaat);
   if (!eindeUtc) {
-    logGebeurtenis('verbanning', userId, `${bijnaam} droeg de Gouden Korst: de rode kaart gleed af`, citaat, actorId);
+    logGebeurtenis('gelekaart', userId, `${bijnaam} droeg de Gouden Korst: de rode kaart gleed af`, citaat, actorId);
     return null;
   }
   logGebeurtenis('verbanning', userId, `${bijnaam} kreeg een rode kaart: een dag geschorst`, citaat, actorId);
@@ -8108,7 +8108,7 @@ async function voerKroketCommandoUit({ command, respond, client }) {
           `> onder de bodemplaat van het Grote Vetbad — bij de jaarlijkse verschoning van de olie.\n` +
           `> Geschreven door *De Eerste Paneerder*. Naamloos. Ouder dan de Tien Geboden, en strenger.\n\n` +
           `> *Waarom het verborgen was:* het Bureau voor Rijkstitels (1936) BENOEMDE functies. Het Vetgeschrift\n` +
-          `> stelt dat een ambt niet benoembaar is — het wordt verdiend of het bestaat niet. Een boek dat elke\n` +
+          `> stelt dat een rang niet benoembaar is — hij wordt verdiend of hij bestaat niet. Een boek dat elke\n` +
           `> benoeming onwettig verklaart werd niet verbrand, maar gearchiveerd: dossier VG/1936/0001,\n` +
           `> bewaartermijn negentig jaar. *Die termijn is dit jaar verstreken.*\n\n` +
           `> *De wet van het boek:*\n> _"Wat gij uzelf toebedeelt weegt niets. Wat een ander u toebedeelt, weegt eeuwig."_\n\n` +
@@ -13767,11 +13767,6 @@ async function openCasino(client, triggerId, userId) {
 // undefined = het huidige houden) en de nettowinst als er afgerekend is. null = niets te doen.
 // Een zet waarbij iets gebeurt, geeft ook `film` mee (de beelden ernaartoe, lib/casinobeeld.js).
 
-const CASINO_BEZIG = {
-  blackjack: '🃏 _De croupier legt de kaarten…_', hogerlager: '🃏 _De kaart draait om…_',
-  roulette: '🎡 _Het balletje rolt…_', gokkast: '🎰 _De rollen draaien…_', dobbelen: '🎲 _De stenen rollen…_',
-  schuifkast: '🪙 _De munten rollen…_',
-};
 // `voor`: de blackjackhand vóór de zet (null bij het delen); zonder `film` geen film (een geweigerde zet).
 const handFilm = (hand, voor) => () => (hand.spel === 'hogerlager' ? hogerLagerFilm(hand) : blackjackFilm(voor, hand));
 
@@ -14466,7 +14461,7 @@ async function koopWinkelItem(client, userId, itemKey, doelId, channelId) {
   const effect = {
     zegen: 'elke puntenstraf ketst 24 uur af op de heilige korst',
     dubbele_eer: 'ontvangen eer telt 24 uur dubbel',
-    gouden_korst: '24 uur glijdt een gele kaart van u af, en de Kroket God spreekt van de Gezalfde',
+    gouden_korst: '24 uur glijdt een gele of rode kaart van u af, en de Kroket God spreekt van de Gezalfde',
     korstverstevig: '48 uur halve kans op een geslaagde roof',
   }[itemKey] || item.uitleg;
   await postToChannel(client, channelId,
@@ -15833,7 +15828,7 @@ planCron('*/30 7-19 * * 1-5', async () => {
 registreerFeature({
   naam: 'wereldbord',
   state: ['wereldbord.json'],
-  help: [{ gebruik: '/kroketgod rijk', verwacht: 'de staat van het Gepaneerde Rijk: seizoen, titels, ambten en decreet' }],
+  help: [{ gebruik: '/kroketgod rijk', verwacht: 'de staat van het Gepaneerde Rijk: seizoen, titels en decreet' }],
 });
 
 
@@ -15915,7 +15910,7 @@ function bouwDossierBlok(userId) {
     const streak = loadStreaks()[userId]?.aantal;
     if (streak > 1) regels.push(`vrijdag-streak: ${streak} weken op rij aanwezig op het heilig moment`);
 
-    const relikwieën = (loadAchievements()[userId] || []).length;
+    const relikwieën = (loadAchievements()[userId] || []).filter(id => ACHIEVEMENTS.some(a => a.id === id)).length;
     if (relikwieën) regels.push(`relikwieën: ${relikwieën} van de ${ACHIEVEMENTS.length}`);
 
     if (!regels.length) return '';
@@ -20723,7 +20718,7 @@ async function voerWinkelBeheer(actie, userId, item, aankondig) {
     const teksten = {
       zegen: `> De Hoge Frituurraad schenkt *${naam}* de *Zegen van de Paneerlaag* — 24 uur lang ketst elke puntenstraf af op de heilige korst.`,
       dubbele_eer: `> De Hoge Frituurraad schenkt *${naam}* de zegen van *Dubbele Eer* — 24 uur lang telt elke ontvangen eer dubbel.`,
-      gouden_korst: `> De Hoge Frituurraad bekleedt *${naam}* met de *Gouden Korst* — 24 uur gouden status. Spreek voortaan van de Gezalfde.`,
+      gouden_korst: `> De Hoge Frituurraad bekleedt *${naam}* met de *Gouden Korst* — 24 uur gouden status; een gele of rode kaart glijdt van hem af. Spreek voortaan van de Gezalfde.`,
       vloek: `> In de schaduwen is een *Vloek der Slappe Korst* gelegd op *${naam}*. Diens eerstvolgende puntenwinst kan verbranden in het vet.`,
     };
     const kop = item === 'vloek' ? '😈 *EEN VLOEK IS GELEGD* 😈' : `${w.icoon} *EEN GESCHENK VAN DE RAAD* ${w.icoon}`;
