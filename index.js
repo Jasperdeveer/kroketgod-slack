@@ -7139,6 +7139,19 @@ async function voerKroketCommandoUit({ command, respond, client }) {
         );
         await postToChannel(client, command.channel_id, tekst);
       } else {
+        // Klachtenuur: de eerste klacht in het uur wordt een voordracht (de klager blijft anoniem, zoals bij gelekaart). Vóór de
+        // LLM-tekst, zodat een uitgevallen keten de voordracht niet tegenhoudt.
+        const uur = regieKnop('klachtenuur', 'klachtenuur');
+        if (uur && !uur.data.gebruikt) {
+          if (loadGeleKaartPoll()?.actief) {
+            await respond('_Er loopt al een stemming van de Raad: uw klacht blijft een klacht en wordt geen voordracht._');
+          } else {
+            verbruikRegieKnop(uur.id);
+            const cit = willekeurigCitaat({ sprekerIds: [doelwitId] });
+            const onderzoek = cit ? ` — uit het onderzoek: "${cit.tekst.slice(0, 100)}"` : '';
+            await startGeleKaartPoll(client, doelwitId, command.user_id, (reden || 'klacht') + onderzoek, command.channel_id);
+          }
+        }
         const tekst = await kroketResponse(
           `[BESCHULDIGDE: ${lid.bijnaam}] ` +
           `Een anonieme bron heeft een klacht ingediend bij de Hoge Frituurraad. ` +
@@ -13584,6 +13597,10 @@ function bouwRegieStand(nu = Date.now()) {
   const cijfers = readJSON('casinostats.json', {})[dag] || {};
   const verbanning = loadVerbanning(), vergrijpen = loadVergrijpen();
   const vandaagTs = (ts) => !!ts && regie.amsMoment(ts).dag === dag;
+  // Ketterij: het nieuwste lidbericht van vandaag uit het archief dat isKetterij is. In de week van de Airfryer-Kroket
+  // gaat elk aanvalsbericht over de airfryer, dus dan nooit.
+  const airfryerWeek = readJSON('bamischijf.json', {}).vijand?.key === 'airfryer_kroket';
+  const ketterBerichten = airfryerWeek ? [] : entriesTussen({ soort: 'lid', van: nu - regie.amsMoment(nu).minuut * 60_000, max: 3000 }).filter((e) => regie.isKetterij(e.tekst));
   const ledenStand = Object.keys(leden).map((id) => {
     const spellen = Object.values(cijfers.leden?.[id] || {});
     const reeks = (cijfers.uitslagen?.[id] || '').match(/W*$/)[0].length;
@@ -13596,6 +13613,7 @@ function bouwRegieStand(nu = Date.now()) {
       gast: false, // gasten zijn personas en staan niet in members.json
       zegen: heeftPowerup(id, 'zegen'), goudenKorst: heeftPowerup(id, 'gouden_korst'),
       geleKaartDezeWeek: heeftGeleKaartDezeWeek(id),
+      ketterij: ketterBerichten.filter((e) => e.sprekerId === id).pop()?.tekst.slice(0, 120) ?? null,
       ontsnapt: regieStaat().effecten.some((e) => e.soort === 'ontsnapt' && e.data?.doel === id && e.tot > nu),
       vergrijpVandaag: (vergrijpen[id] || []).some((v) => vandaagTs(v.ts)),
       casino: {
@@ -13620,6 +13638,7 @@ function bouwRegieStand(nu = Date.now()) {
     },
     kanaal: { laatsteLidBerichtMs: Math.max(0, ...berichten) || null },
     archiefKandidaat: archiefKandidaten(nu).length > 0,
+    raad: { pollLoopt: !!readJSON('gelekaartpoll.json', null)?.actief },
     premieDezeWeek: premieJson.weekStart === getMondayOfWeek(),
     missieLoopt: loadMissie()?.status === 'actief',
     opdrachtActies: [...kiesOpdrachten('dag', dagSleutel(), OPDRACHTEN_PER_DAG), ...kiesOpdrachten('week', getMondayOfWeek(), OPDRACHTEN_PER_WEEK)].map((o) => o.actie),
@@ -13751,6 +13770,18 @@ const UITVOERDERS = {
     writeJSON('premie.json', { doelwitId: keuze.doel, bonus: 3, weekStart: getMondayOfWeek(), geind: false, door: 'regisseur' });
     logGebeurtenis('premie', keuze.doel, `Premie van 3 punten gezet op ${naam}`);
     return { feiten: `Op het hoofd van ${naam} staat deze week een premie van 3 punten. Wie hem deze week in een duel verslaat, int die.` };
+  },
+  // De Kroket God draagt zelf een lid voor een gele kaart voor. Het bord is de aankondiging (tekst: null). Lukt het bord niet, dan
+  // gooien we, zodat er niets wordt geboekt. De reden bevat een lidbericht: startGeleKaartPoll saneert en het bord ontsnapt het.
+  ketter_voordracht: async (client, keuze) => {
+    const uit = await startGeleKaartPoll(client, keuze.doel, null, keuze.reden, KANAAL(), { door: 'regisseur', minuten: 15 });
+    if (!uit.ok) throw new Error(`ketter_voordracht: ${uit.tekst}`);
+    return { tekst: null, feiten: 'De Kroket God draagt een lid voor een gele kaart voor; het bord staat in het kanaal.' };
+  },
+  // Een uur lang levert de eerste klacht die niet ontmaskerd wordt een gele-kaartvoordracht op (zie het klacht-commando).
+  klachtenuur: async (client, keuze, stand, nu) => {
+    zetRegieKnop('klachtenuur', 'klachtenuur', keuze.duurMinuten || 60, {}, nu);
+    return { feiten: 'Een uur lang is de klachtenbus open: de eerste klacht die niet ontmaskerd wordt, leidt tot een stemming over een gele kaart. De klager blijft anoniem.' };
   },
   stille_missie: async (client, keuze) => {
     await startStilleMissie(client, KANAAL(), keuze.doel, { door: 'regisseur' });
@@ -14360,7 +14391,7 @@ async function voerRitueelUit(client, { userId, ritueel, rest, channelId, respon
 
 
 // De rooktests (scripts/rooktest/) komen zo bij de regisseur.
-if (process.env.KROKET_ROOKTEST) module.exports = { startStilleMissie, dagSleutel, stadKeuzes, voegToeAanArchief, regieKlok, voerOffer, voerBamischijfAanval, bouwDashboardData, voerDashboardActie, saveInstellingen, casinoOpen, regieTik, bouwRegieStand, voerIngreepUit, UITVOERDERS, regieStaat, bewaarRegie, mogAutonoomPosten, werkdagenStil, casinoToegangReden, casinoMax, casinoPlafond, boekCasinoUitslag, sluitGeleKaartPoll, voerDuel, voerEer, winkelPrijs, prijsRedenen, prijsToelichting, CRON_LABELS, geplandeCronMeta, BINGO_POOL, bouwDossierBlok, voerRitueelUit, raadpleegStaat, bewaarRaadpleeg, bouwAppHomeBlocks, stemTribunaal, vollooiMissie, telActie, getMondayOfWeek, kiesOpdrachten, opdrachtHaalbaar, opdrachtTekst, opdrachtPool, alleOpdrachten };
+if (process.env.KROKET_ROOKTEST) module.exports = { startStilleMissie, dagSleutel, stadKeuzes, voegToeAanArchief, regieKlok, voerOffer, voerBamischijfAanval, bouwDashboardData, voerDashboardActie, saveInstellingen, casinoOpen, regieTik, bouwRegieStand, voerIngreepUit, UITVOERDERS, regieStaat, bewaarRegie, mogAutonoomPosten, werkdagenStil, casinoToegangReden, casinoMax, casinoPlafond, boekCasinoUitslag, sluitGeleKaartPoll, startGeleKaartPoll, voerDuel, voerEer, winkelPrijs, prijsRedenen, prijsToelichting, CRON_LABELS, geplandeCronMeta, BINGO_POOL, bouwDossierBlok, voerRitueelUit, raadpleegStaat, bewaarRaadpleeg, bouwAppHomeBlocks, stemTribunaal, vollooiMissie, telActie, getMondayOfWeek, kiesOpdrachten, opdrachtHaalbaar, opdrachtTekst, opdrachtPool, alleOpdrachten };
 
 // Wat het dashboard over het casino laat zien (bouwDashboardData) en kan (/api/casino).
 function casinoDashboardData(naam) {
@@ -16872,7 +16903,7 @@ const loadGeleKaartPoll = () => readJSON('gelekaartpoll.json', null);
 const saveGeleKaartPoll = (data) => writeJSON('gelekaartpoll.json', data);
 
 // Opent de stemming. Retourneert { ok, tekst } voor de aanroeper (slash-commando).
-async function startGeleKaartPoll(client, doelwitId, aanklagerId, reden, channelId) {
+async function startGeleKaartPoll(client, doelwitId, aanklagerId, reden, channelId, { door, minuten } = {}) {
   const members = loadMembers();
   const lid = members[doelwitId];
   if (!lid) return { ok: false, tekst: 'De Kroket God kent geen volgeling met die naam.' };
@@ -16892,13 +16923,14 @@ async function startGeleKaartPoll(client, doelwitId, aanklagerId, reden, channel
   }
 
   const hadAlKaart = heeftGeleKaartDezeWeek(doelwitId);
-  const sluitTs = Date.now() + GELEKAART_POLL_MINUTEN * 60_000;
+  const doorGod = door === 'regisseur'; // de Kroket God draagt zelf voor: open, stemt niet mee, 15 minuten
+  const sluitTs = Date.now() + (doorGod ? (minuten || 15) : GELEKAART_POLL_MINUTEN) * 60_000;
   // De Kroket God stemt NU, en zijn keuze staat meteen op het bord. Dat is de reden dat de worp
   // hier gebeurt en niet bij het sluiten: een aangekondigde stem die later opnieuw gerold wordt,
   // zou een andere uitkomst kunnen geven dan wat hij de Raad heeft voorgehouden.
   const poll = {
-    actief: true, doelwitId, aanklagerId, reden: schoonReden(reden), hadAlKaart,
-    godStem: Math.random() < GELEKAART_GOD_KANS ? 'terecht' : 'onterecht',
+    actief: true, doelwitId, aanklagerId: doorGod ? null : aanklagerId, reden: schoonReden(reden), hadAlKaart,
+    ...(doorGod ? { door: 'regisseur', godStem: 'onthouden' } : { godStem: Math.random() < GELEKAART_GOD_KANS ? 'terecht' : 'onterecht' }),
     // Alleen relevant als een toekenning tot een verbanning leidt: dan valt de bondgenoot mee.
     bondgenootIds: hadAlKaart ? getBondgenoten(doelwitId) : [],
     gestart: Date.now(), sluitTs, kanaal: channelId || process.env.SLACK_CHANNEL_ID,
@@ -16930,9 +16962,10 @@ async function startGeleKaartPoll(client, doelwitId, aanklagerId, reden, channel
   // De beschrijving belandt in het vrijdagse weekoverzicht, dat publiek wordt gepost — dus
   // GEEN naam van de aanklager erin. `actorId` blijft wel staan: dat is een structureel veld dat
   // nergens wordt weergegeven, en het maakt misbruik (iemand die blijft voordragen) naspeurbaar.
+  const duurMin = Math.round((sluitTs - poll.gestart) / 60_000);
   logGebeurtenis('gelekaart', doelwitId,
-    `${lid.bijnaam} werd anoniem voorgedragen voor een gele kaart${reden ? `: ${reden}` : ''} — stemming ${GELEKAART_POLL_MINUTEN} min`, null, aanklagerId);
-  return { ok: true, tekst: `_Uw voordracht tegen ${lid.bijnaam} staat in het kanaal. De Raad stemt ${GELEKAART_POLL_MINUTEN} minuten._` };
+    `${lid.bijnaam} werd ${doorGod ? 'door de Kroket God' : 'anoniem'} voorgedragen voor een gele kaart${reden ? `: ${doorGod ? ontsnapMrkdwn(poll.reden) : reden}` : ''} — stemming ${duurMin} min`, null, aanklagerId);
+  return { ok: true, tekst: `_Uw voordracht tegen ${lid.bijnaam} staat in het kanaal. De Raad stemt ${duurMin} minuten._` };
 }
 
 function bouwGeleKaartPollBlocks(poll) {
@@ -16945,8 +16978,9 @@ function bouwGeleKaartPollBlocks(poll) {
     { type: 'header', text: { type: 'plain_text', text: '🟨 Voordracht: gele kaart', emoji: true } },
     { type: 'section', text: { type: 'mrkdwn', text:
       `*Voorgedragen:* ${naam}\n` +
-      `*Door:* _een anonieme volgeling_\n` +
-      (poll.reden ? `*Reden:* _"${poll.reden}"_\n` : '') +
+      (poll.door === 'regisseur' ? `*Door:* de Kroket God\n` : `*Door:* _een anonieme volgeling_\n`) +
+      // De reden van de Kroket God bevat een eigen bericht van een lid: Slack-opmaak (mention, link) onschadelijk maken.
+      (poll.reden ? `*Reden:* _"${poll.door === 'regisseur' ? ontsnapMrkdwn(poll.reden) : poll.reden}"_\n` : '') +
       (poll.hadAlKaart
         ? `\n⚠️ *${naam} heeft deze week al een gele kaart.* Wordt deze voordracht toegekend, dan wordt het *rood*: een dag geschorst.` +
           // Het heilige verbond sleept de bondgenoot mee in een verbanning (bestaand gedrag).
@@ -16969,7 +17003,9 @@ function bouwGeleKaartPollBlocks(poll) {
       `*Stem met een emoji op dit bericht:*\n` +
       `> :${GELEKAART_JA}:  terecht — geef de kaart\n` +
       `> :${GELEKAART_NEE}:  onterecht — laat hem gaan\n\n` +
-      (poll.godStem
+      (poll.godStem === 'onthouden'
+        ? `⚜️ De Kroket God stemt niet over zijn eigen voordracht: de Raad beslist. Bij 0 tegen 0 volgt geen kaart.\n`
+        : poll.godStem
         ? `⚜️ *De Kroket God heeft gesproken: :${godEmoji}: ${poll.godStem.toUpperCase()}* — zijn stem weegt *dubbel* en staat vast.\n`
         : `De Kroket God stemt zelf ook mee, en zijn stem weegt *dubbel*.\n`) +
       `De Raad heeft nog *~${min} minuut/minuten* om hem bij te vallen of te overrulen.` } });
@@ -16981,11 +17017,11 @@ function bouwGeleKaartPollBlocks(poll) {
     blocks.push({ type: 'section', text: { type: 'mrkdwn', text:
       `${kop}\n` +
       `> Terecht: *${u.terecht ?? 0}* · Onterecht: *${u.onterecht ?? 0}*\n` +
-      (u.regisseur ? `> 🔱 De Kroket God overrulet de Raad: de uitslag is omgedraaid.` : `> De Kroket God stemde *${u.god || '?'}* (dubbel geteld).`) } });
+      (u.regisseur ? `> 🔱 De Kroket God overrulet de Raad: de uitslag is omgedraaid.` : u.god === 'onthouden' ? `> De Kroket God stemde niet mee.` : `> De Kroket God stemde *${u.god || '?'}* (dubbel geteld).`) } });
   }
   blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text:
-    `De voordracht is anoniem — de aanklacht moet op eigen benen staan. Alleen leden stemmen mee; ${naam} mag zelf ook stemmen. ` +
-    `Bij gelijkspel volgt geen kaart — bij twijfel geen straf. De stem van de Kroket God staat vast vanaf het begin. ` +
+    `${poll.door === 'regisseur' ? 'Deze voordracht is van de Kroket God zelf.' : 'De voordracht is anoniem — de aanklacht moet op eigen benen staan.'} Alleen leden stemmen mee; ${naam} mag zelf ook stemmen. ` +
+    `Bij gelijkspel volgt geen kaart — bij twijfel geen straf.${poll.godStem === 'onthouden' ? '' : ' De stem van de Kroket God staat vast vanaf het begin.'} ` +
     `Let op: uw emoji-stem is voor iedereen zichtbaar.` }] });
   return blocks;
 }
@@ -17045,11 +17081,13 @@ async function sluitGeleKaartPoll(client, { rng = Math.random } = {}) {
   // De VASTGELEGDE stem van de Kroket God, gerold bij het openen en toen al aangekondigd.
   // Hier opnieuw rollen zou betekenen dat hij anders stemt dan hij de Raad heeft voorgehouden.
   // Alleen een stemming van vóór deze wijziging (geen godStem in de state) rolt hier nog.
-  const godTerecht = poll.godStem
+  // 'onthouden': de Kroket God stemt niet over zijn eigen voordracht; zijn stem weegt 0 en wordt nooit opnieuw geworpen.
+  const godOnthouden = poll.godStem === 'onthouden';
+  const godTerecht = godOnthouden ? false : poll.godStem
     ? poll.godStem === 'terecht'
     : Math.random() < GELEKAART_GOD_KANS;
   const totaalTerecht = terecht + (godTerecht ? GELEKAART_GOD_GEWICHT : 0);
-  const totaalOnterecht = onterecht + (godTerecht ? 0 : GELEKAART_GOD_GEWICHT);
+  const totaalOnterecht = onterecht + (godTerecht || godOnthouden ? 0 : GELEKAART_GOD_GEWICHT);
   let toegekend = totaalTerecht > totaalOnterecht; // gelijkspel → geen kaart
 
   // De Kroket God overrulet de Raad: kans 0,2, hoogstens 1 keer per week en alleen als de plafonds van de regisseur het toelaten.
@@ -17058,7 +17096,7 @@ async function sluitGeleKaartPoll(client, { rng = Math.random } = {}) {
   const regieNu = Date.now(), regieWeek = regie.amsMoment(regieNu).week;
   const rs = regieStaat();
   const regieMag = instelling('regieNiveau') !== 'uit' && !instelling('stilModus') && !instelling('alleenTestkanaal');
-  if (regieMag && (toegekend || regie.ruimte(rs, regieNu).schorsing > 0)
+  if (regieMag && poll.door !== 'regisseur' && (toegekend || regie.ruimte(rs, regieNu).schorsing > 0)
       && !rs.log.some((r) => r.id === 'overrule' && regie.amsMoment(r.ts).week === regieWeek)
       && rng() < 0.2) {
     regisseur = true;
@@ -17073,7 +17111,7 @@ async function sluitGeleKaartPoll(client, { rng = Math.random } = {}) {
   poll.uitslag = {
     terecht: totaalTerecht, onterecht: totaalOnterecht,
     ledenTerecht: terecht, ledenOnterecht: onterecht,
-    god: godTerecht ? 'terecht' : 'onterecht',
+    god: godOnthouden ? 'onthouden' : godTerecht ? 'terecht' : 'onterecht',
     ...(regisseur ? { regisseur: true } : {}),
   };
   saveGeleKaartPoll(poll); // vóór de trage acties: idempotent, een tweede aanroep valt op !actief
@@ -17084,15 +17122,17 @@ async function sluitGeleKaartPoll(client, { rng = Math.random } = {}) {
   // De reden is gebruikersinvoer en gaat dus als DATA de prompt in, niet als losse zin in de
   // instructie. `isPromptInjectie` bij het commando is een keyword-detector, geen garantie.
   const redenBlok = poll.reden
-    ? `\n\n${wrapOnvertrouwd('Reden zoals opgegeven door de anonieme aanklager', poll.reden)}`
+    ? `\n\n${wrapOnvertrouwd(poll.door === 'regisseur' ? 'Het bericht van het lid dat de aanleiding was voor uw voordracht' : 'Reden zoals opgegeven door de anonieme aanklager', poll.reden)}`
     : '';
   const stemBlok =
     `\n\n⚖️ *DE STEMMING*\n` +
     `> Terecht: *${totaalTerecht}* · Onterecht: *${totaalOnterecht}*\n` +
     (regisseur
       ? `> 🔱 *De Kroket God overrulet de Raad:* de uitslag is omgedraaid.`
-      : `> De Kroket God stemde *${godTerecht ? 'terecht' : 'onterecht'}* — zijn stem weegt dubbel.`);
-  const godToelichting = regisseur ? 'u heeft de uitslag van de Raad zelf omgedraaid' : null;
+      : godOnthouden
+        ? `> De Kroket God stemde niet mee over zijn eigen voordracht.`
+        : `> De Kroket God stemde *${godTerecht ? 'terecht' : 'onterecht'}* — zijn stem weegt dubbel.`);
+  const godToelichting = regisseur ? 'u heeft de uitslag van de Raad zelf omgedraaid' : godOnthouden ? 'u stemde zelf niet mee over uw eigen voordracht' : null;
 
   if (!toegekend) {
     logGebeurtenis('gelekaart', poll.doelwitId, `Voordracht tegen ${naam} verworpen (${totaalTerecht}-${totaalOnterecht})`);
