@@ -1042,6 +1042,7 @@ async function vollooiMissie(client, channelId, missie) {
     await pasScoreAanMetCheck(client, uid, 3, { uitgesteldeZegens });
   }
 
+  for (const uid of deelnemers) await telActie(client, uid, 'missie_voltooid');
   const namen = deelnemers.map(id => allMembers[id]?.bijnaam || id).join(' & ');
   const teamZin = deelnemers.length > 1 ? `Het alliantie-koppel ${namen} heeft samen` : `${missie.bijnaam} heeft`;
 
@@ -2861,6 +2862,7 @@ app.action(/^verbond_(accepteer|weiger)$/, async ({ ack, body, client }) => {
     const nieuweGroep = verbondGroepVan(loadAllianties(), v.vanId) || [];
     const vorigeGroepNamen = bijnamenVan(toets.groep, members);
     logGebeurtenis('alliantie', v.vanId, `${vanNaam} sloot zich aan bij het verbond van ${vorigeGroepNamen}`);
+    await telActie(client, v.vanId, 'verbond_gesloten');
     await haalDubbelKnopWeg(client, body, `✅ _Geaccepteerd door ${klikNaam}._`);
     const oudeZin = oudeBondgenoten.length ? `${vanNaam} verlaat daarmee het verbond met ${bijnamenVan(oudeBondgenoten, members)}. ` : '';
     const tekst = await kroketResponseMetVangnet(
@@ -6756,6 +6758,7 @@ async function voerKroketCommandoUit({ command, respond, client }) {
       const voorZegen = loadScores()[doelId] || 0;
       await pasScoreAanMetCheck(client, doelId, 1, { channelId: command.channel_id, geverId: command.user_id, uitgesteldeZegens });
       const zegenVerbrand = (loadScores()[doelId] || 0) <= voorZegen; // vloek kan de zegen verzwelgen
+      await telActie(client, doelId, 'gezegend');
       logGebeurtenis('zegen', doelId, `Profeet ${members[command.user_id].bijnaam} zegende ${doelLid.bijnaam} (${zegenVerbrand ? 'verbrand in vloek' : '+1'})`, null, command.user_id);
       await postToChannel(client, command.channel_id, zegenVerbrand
         ? `🕊️ *DE PROFETENZEGEN* 🕊️\n\n> De Profeet van de Week, *${members[command.user_id].bijnaam}*, legde de handen op *${doelLid.bijnaam}* — maar een Vloek der Slappe Korst verzwolg de zegen. Het lot is wreed; de zegen is niettemin vergeven.\n\n— De Hoge Frituurraad`
@@ -7083,6 +7086,7 @@ async function voerKroketCommandoUit({ command, respond, client }) {
       resetVergrijpen(doelwitId);
       const genadeNaam = members[command.user_id]?.bijnaam || 'een volgeling';
       logGebeurtenis('genade', doelwitId, `${lid.bijnaam} werd begenadigd door ${genadeNaam} (−${GENADE_KOSTEN})`, null, command.user_id);
+      await telActie(client, command.user_id, 'begenade');
       // Consistent met `uitbreken` en `beroep`: het verbond deelt de bevrijding. Dat ontbrak hier,
       // waardoor een begenadigd lid vrijkwam en zijn meegesleepte bondgenoot bleef zitten.
       const genadePartner = bevrijdAlliantiePartnerMee(doelwitId, lid.bijnaam, true);
@@ -7119,6 +7123,7 @@ async function voerKroketCommandoUit({ command, respond, client }) {
 
       // 15% kans: masker valt — aanklager wordt onthuld
       const maskValt = Math.random() < 0.15;
+      await telActie(client, command.user_id, 'klacht'); // de klacht is ingediend, in beide takken
       if (maskValt) {
         const tekst = await kroketResponse(
           `[BESCHULDIGDE: ${lid.bijnaam}] [AANKLAGER: ${aanvrager}] ` +
@@ -7231,6 +7236,7 @@ async function voerKroketCommandoUit({ command, respond, client }) {
       const oudeBondgenoten = getBondgenoten(command.user_id);
       sluitAlliantie(command.user_id, partnerId);
       logGebeurtenis('alliantie', command.user_id, `${aanvrager} sloot een alliantie met ${partnerLid.bijnaam}`);
+      await telActie(client, command.user_id, 'verbond_gesloten');
 
       const oudeZin = oudeBondgenoten.length
         ? `${aanvrager} verlaat hiermee het verbond met ${bijnamenVan(oudeBondgenoten)}. `
@@ -10596,6 +10602,7 @@ const BINGO_POOL = [
   'Stel de Kroket God een filosofische vraag over de snackleer',
   'Reageer met :lekker_kroketje: op drie berichten van mede-leden',
   'Win een duel op een gunstige horoscoop',
+  'Overleef een poging tot zelflof',
 ];
 
 planCron('30 10 * * 1', async () => {
@@ -11689,6 +11696,7 @@ async function voerDuel(client, userId, doelId, channelId, wapenId = null) {
     await pasScoreAanMetCheck(client, winId, premie.bonus || 3, { channelId, naspel });
     logGebeurtenis('premie', winId, `${winNaam} inde de premie op ${verliesNaam} (+${premie.bonus || 3})`);
     if (boekVerlies(verliesId, premie.bonus || 3, winId, 'premie_geind')?.claimGeopend) claimVoor = verliesId;
+    await telActie(client, winId, 'premie_geind', 1, naspel);
     premieBlok = `\n\n🎯 *PREMIE GEÏND* — op het hoofd van ${verliesNaam} stond een premie van de Kroket God. ${winNaam} int *+${premie.bonus || 3} kroketpunten* extra.`;
   }
   logGebeurtenis('duel', userId, `${uitdager.bijnaam} daagde ${doelLid.bijnaam} uit voor een duel — ${winNaam} won`);
@@ -14326,7 +14334,7 @@ async function voerRitueelUit(client, { userId, ritueel, rest, channelId, respon
 
 
 // De rooktests (scripts/rooktest/) komen zo bij de regisseur.
-if (process.env.KROKET_ROOKTEST) module.exports = { stadKeuzes, voegToeAanArchief, regieKlok, voerOffer, voerBamischijfAanval, bouwDashboardData, voerDashboardActie, saveInstellingen, casinoOpen, regieTik, bouwRegieStand, voerIngreepUit, UITVOERDERS, regieStaat, bewaarRegie, mogAutonoomPosten, werkdagenStil, casinoToegangReden, casinoMax, casinoPlafond, boekCasinoUitslag, sluitGeleKaartPoll, voerDuel, voerEer, winkelPrijs, prijsRedenen, prijsToelichting, CRON_LABELS, geplandeCronMeta, BINGO_POOL, bouwDossierBlok, voerRitueelUit, raadpleegStaat, bewaarRaadpleeg, bouwAppHomeBlocks };
+if (process.env.KROKET_ROOKTEST) module.exports = { stadKeuzes, voegToeAanArchief, regieKlok, voerOffer, voerBamischijfAanval, bouwDashboardData, voerDashboardActie, saveInstellingen, casinoOpen, regieTik, bouwRegieStand, voerIngreepUit, UITVOERDERS, regieStaat, bewaarRegie, mogAutonoomPosten, werkdagenStil, casinoToegangReden, casinoMax, casinoPlafond, boekCasinoUitslag, sluitGeleKaartPoll, voerDuel, voerEer, winkelPrijs, prijsRedenen, prijsToelichting, CRON_LABELS, geplandeCronMeta, BINGO_POOL, bouwDossierBlok, voerRitueelUit, raadpleegStaat, bewaarRaadpleeg, bouwAppHomeBlocks, stemTribunaal, vollooiMissie, telActie, getMondayOfWeek, kiesOpdrachten, opdrachtHaalbaar, opdrachtTekst, opdrachtPool, alleOpdrachten };
 
 // Wat het dashboard over het casino laat zien (bouwDashboardData) en kan (/api/casino).
 function casinoDashboardData(naam) {
@@ -14799,6 +14807,7 @@ async function koopWinkelItem(client, userId, itemKey, doelId, channelId) {
 //
 // Velden: id (uniek, ook de opslagsleutel) · soort 'dag'|'week' · actie (zie de hooks)
 //         doel (aantal) · beloning (kroketpunten) · tekst (weergave)
+const OPDRACHTEN_NIEUW_VANAF = '2026-11-18';
 const OPDRACHTEN = [
   // ── Dagelijks: klein, haalbaar, stuurt naar de spellen ──
   { id: 'd-offer',    soort: 'dag',  actie: 'offer',          doel: 1, beloning: 1, tekst: 'Offer aan het Grote Vetbad' },
@@ -14819,9 +14828,26 @@ const OPDRACHTEN = [
   { id: 'w-veiling',  soort: 'week', actie: 'veiling_bod',    doel: 1, beloning: 3, tekst: 'Bied op de Grote Veiling' },
   { id: 'w-roof',     soort: 'week', actie: 'roof_poging',    doel: 1, beloning: 3, tekst: 'Waag een Grote Kroketroof' },
   { id: 'w-goud',     soort: 'week', actie: 'gouden_kroket',  doel: 1, beloning: 5, tekst: 'Grijp de Gouden Kroket' },
-  // Houdt de weekpool op 8, zodat de weekkeuze (hash % pool) niet verschuift.
+  // Bestaande regels nooit weghalen of verplaatsen. Nieuwe regels komen achteraan en krijgen
+  // `vanaf` (zie opdrachtPool), zodat de keuze van een lopende dag/week (hash % pool) niet verschuift.
   { id: 'w-winkel',   soort: 'week', actie: 'winkel_koop',    doel: 3, beloning: 3, tekst: 'Doe drie aankopen in de Aflatenhandel' },
+
+  // ── Spoor 3: de teruggebrachte spellen krijgen een opdracht ──
+  { id: 'd-zegen',     soort: 'dag',  actie: 'gezegend',         doel: 1,  beloning: 2, tekst: 'Laat u zegenen door de profeet', vanaf: OPDRACHTEN_NIEUW_VANAF },
+  { id: 'd-seizoen',   soort: 'dag',  actie: 'seizoen_daad',     doel: 3,  beloning: 1, tekst: 'Drijf {dreiging} terug met drie daden in de frituur', vanaf: OPDRACHTEN_NIEUW_VANAF },
+  { id: 'w-raad',      soort: 'week', actie: 'raad_stem',        doel: 1,  beloning: 3, tekst: 'Stem mee in de Raad over een gele kaart', vanaf: OPDRACHTEN_NIEUW_VANAF },
+  { id: 'w-genade',    soort: 'week', actie: 'begenade',         doel: 1,  beloning: 4, tekst: 'Help een balling terug met begenade', vanaf: OPDRACHTEN_NIEUW_VANAF },
+  { id: 'w-klacht',    soort: 'week', actie: 'klacht',           doel: 1,  beloning: 2, tekst: 'Dien een klacht in bij de Raad', stil: true, vanaf: OPDRACHTEN_NIEUW_VANAF },
+  { id: 'w-tribunaal', soort: 'week', actie: 'tribunaal_stem',   doel: 1,  beloning: 3, tekst: 'Stem in een tribunaal', stil: true, vanaf: OPDRACHTEN_NIEUW_VANAF },
+  { id: 'w-verbond',   soort: 'week', actie: 'verbond_gesloten', doel: 1,  beloning: 3, tekst: 'Sluit een verbond', vanaf: OPDRACHTEN_NIEUW_VANAF },
+  { id: 'w-premie',    soort: 'week', actie: 'premie_geind',     doel: 1,  beloning: 4, tekst: 'Claim een premie', vanaf: OPDRACHTEN_NIEUW_VANAF },
+  { id: 'w-missie',    soort: 'week', actie: 'missie_voltooid',  doel: 1,  beloning: 4, tekst: 'Voltooi een stille missie', vanaf: OPDRACHTEN_NIEUW_VANAF },
+  { id: 'w-seizoen',   soort: 'week', actie: 'seizoen_daad',     doel: 15, beloning: 4, tekst: 'Doe deze week vijftien daden tegen {dreiging}', vanaf: OPDRACHTEN_NIEUW_VANAF },
 ];
+
+// Dagsleutel (JJJJ-MM-DD) vanaf wanneer de nieuwe regels meedoen: dagen en weken met een
+// oudere sleutel houden hun oude keuze. Dagen: vanaf morgen (18 nov). Weken: de eerste maandag
+// daarna (23 nov). Schuif het niet op naar een datum die al voorbij is.
 
 const OPDRACHTEN_PER_DAG = 3;
 const OPDRACHTEN_PER_WEEK = 2;
@@ -14841,8 +14867,14 @@ function fnvHash(sleutel) {
 // Deterministische keuze uit de pool op basis van een sleutel (datum of weekstart). Iedereen
 // krijgt dezelfde opdrachten, en er is geen opgeslagen selectie die kan verdwijnen of
 // verouderen als een cron gemist wordt.
+function alleOpdrachten() { return OPDRACHTEN; } // voor de rooktest (de export staat boven de const)
+
+function opdrachtPool(soort, sleutel) {
+  return OPDRACHTEN.filter(o => o.soort === soort && (!o.vanaf || o.vanaf <= sleutel));
+}
+
 function kiesOpdrachten(soort, sleutel, aantal) {
-  const pool = OPDRACHTEN.filter(o => o.soort === soort);
+  const pool = opdrachtPool(soort, sleutel);
   let h = fnvHash(sleutel);
   const rest = [...pool];
   const gekozen = [];
@@ -14895,6 +14927,16 @@ function opdrachtHaalbaar(userId, o, resterend = o.doel) {
         const open = bingo.opdrachten.length - (bingo.claims?.[userId] || []).length;
         return open >= resterend;
       }
+      // Alleen haalbaar zolang er iemand is die zegent: een profeet met een ongebruikte zegen
+      // (niet jij zelf) of een zegendag van de regisseur.
+      case 'gezegend': {
+        const profeet = readJSON('profeet.json', {});
+        const zegenOver = profeet.userId && profeet.userId !== userId
+          && profeet.weekStart === getMondayOfWeek() && !profeet.zegenGebruikt;
+        return !!zegenOver || !!regie.effectActief(regieStaat(), 'zegendag', Date.now());
+      }
+      case 'seizoen_daad':
+        return loadSeizoen()?.status === 'actief';
       default:
         return true;
     }
@@ -14916,7 +14958,7 @@ function opdrachtHaalbaar(userId, o, resterend = o.doel) {
 function dagOpdrachtenVoor(userId, lopend = null) {
   const basis = kiesOpdrachten('dag', dagSleutel(), OPDRACHTEN_PER_DAG);
   if (!userId) return basis;
-  const pool = OPDRACHTEN.filter(o => o.soort === 'dag');
+  const pool = opdrachtPool('dag', dagSleutel());
   const { alles, dag, week } = opdrachtBakken(userId);
   const vervangen = { ...(dag.vervangen || {}) };
   const resterendVan = (o) => o.doel - (dag.voortgang?.[o.id] || 0)
@@ -15085,6 +15127,7 @@ async function telActie(client, userId, actie, aantal = 1, naspel = null) {
     // precies de juiste plek — zo hoeft er geen nieuw commando te bestaan en telt gewoon
     // spelen automatisch mee. Bij 0 HP is de dreiging geveld en volgt de finale meteen.
     const seizoenNa = draagBijAanSeizoen(userId, actie, aantal);
+    if (seizoenNa) bumpTeller(userId, 'seizoen_daad', aantal);
     if (seizoenNa?.status === 'geveld') {
       await beslechtSeizoen(client, 'gewonnen');
     } else if (seizoenNa) {
@@ -15094,7 +15137,9 @@ async function telActie(client, userId, actie, aantal = 1, naspel = null) {
     // Per lid, want een onhaalbaar geworden dagopdracht is voor dit lid vervangen (zie
     // dagOpdrachtenVoor). `{ actie, aantal }` gaat mee zodat de daad die we NU bijschrijven
     // niet zelf voor "onhaalbaar" wordt aangezien — de poging is immers al verbruikt.
-    const actief = actieveOpdrachtenVoor(userId, { actie, aantal }).filter(o => o.actie === actie);
+    // Een daad die het seizoen raakt (seizoenNa) telt ook voor 'seizoen_daad'-opdrachten.
+    const actief = actieveOpdrachtenVoor(userId, { actie, aantal })
+      .filter(o => o.actie === actie || (seizoenNa && o.actie === 'seizoen_daad'));
     if (!actief.length) return;
     const { alles, dag, week } = opdrachtBakken(userId);
     const voltooid = [];
@@ -15113,13 +15158,15 @@ async function telActie(client, userId, actie, aantal = 1, naspel = null) {
     for (const o of voltooid) {
       const bijnaam = loadMembers()[userId]?.bijnaam || 'Een volgeling';
       await pasScoreAanMetCheck(client, userId, o.beloning, { channelId: process.env.SLACK_CHANNEL_ID, naspel });
-      logGebeurtenis('opdracht', userId, `${bijnaam} volbracht de ${o.soort === 'dag' ? 'dagopdracht' : 'weekopdracht'} "${opdrachtTekst(o)}" (+${o.beloning})`);
+      // `stil`: de daad is anoniem (klacht) of geheim (tribunaalstem) — dan geen naam of id in log, archief of kanaal.
+      if (o.stil) logGebeurtenis('opdracht', null, `Een weekopdracht werd volbracht (+${o.beloning})`);
+      else logGebeurtenis('opdracht', userId, `${bijnaam} volbracht de ${o.soort === 'dag' ? 'dagopdracht' : 'weekopdracht'} "${opdrachtTekst(o)}" (+${o.beloning})`);
       // Voltooide opdrachten zijn zelf ook een daad — voedt de 'plichtsgetrouw'-relikwieën.
       // Directe teller + check i.p.v. telActie(), om herintreden in deze functie te vermijden.
       await controleerPrestaties(client, userId, 'opdracht_klaar', bumpTeller(userId, 'opdracht_klaar', 1), naspel);
       // Dagopdrachten blijven stil (drie per lid per dag zou het kanaal verzuipen) — die zie
       // je in je App Home. Weekopdrachten zijn zeldzaam genoeg voor een verkondiging.
-      if (o.soort === 'week'
+      if (o.soort === 'week' && !o.stil
           && !naspelRegel(naspel, `📜 *Weekopdracht* — ${bijnaam} volbracht _${opdrachtTekst(o)}_ (+${o.beloning})`, userId)) {
         await postToChannel(client, process.env.SLACK_CHANNEL_ID,
           `📜 *WEEKOPDRACHT VOLBRACHT* 📜\n\n> *${bijnaam}* heeft volbracht: _${opdrachtTekst(o)}_.\n> De Hoge Frituurraad kent *+${o.beloning} kroketpunten* toe.\n\n— De Hoge Frituurraad`);
@@ -15161,7 +15208,14 @@ function huidigeVijandNaam({ middenInZin = false } = {}) {
 
 // Opdrachttekst met {vijand} opgelost. Elke plek die een opdracht toont gaat hierlangs.
 function opdrachtTekst(o) {
-  return String(o?.tekst || '').replace(/\{vijand\}/g, huidigeVijandNaam({ middenInZin: true }));
+  const dreiging = (() => {
+    const s = loadSeizoen();
+    const naam = s?.status === 'actief' && s.dreiging?.naam ? s.dreiging.naam : 'de dreiging van het seizoen';
+    return naam.replace(/^(De|Het|Een)\s/, (m) => m.toLowerCase());
+  })();
+  return String(o?.tekst || '')
+    .replace(/\{vijand\}/g, huidigeVijandNaam({ middenInZin: true }))
+    .replace(/\{dreiging\}/g, dreiging);
 }
 
 // Toelichting onder een opdrachtregel: waarom staat deze er (vervanging), of waarom lukt hij
@@ -16997,6 +17051,7 @@ async function sluitGeleKaartPoll(client, { rng = Math.random } = {}) {
     ...(regisseur ? { regisseur: true } : {}),
   };
   saveGeleKaartPoll(poll); // vóór de trage acties: idempotent, een tweede aanroep valt op !actief
+  for (const uid of [...(stemmen?.terecht || []), ...(stemmen?.onterecht || [])]) await telActie(client, uid, 'raad_stem');
   await updateGeleKaartPollBericht(client, poll);
 
   const naam = lid.bijnaam;
@@ -17579,6 +17634,7 @@ async function stemTribunaal(client, userId, keuze) {
   const oud = t.stemmen?.[userId];
   t.stemmen = { ...(t.stemmen || {}), [userId]: keuze };
   writeJSON('tribunaal.json', t);
+  if (!oud && userId !== t.doelwitId) await telActie(client, userId, 'tribunaal_stem');
   await updateTribunaalBericht(client, t);
   const naamDoel = members[t.doelwitId]?.bijnaam || 'de beschuldigde';
   // Bewust GEEN logGebeurtenis met de keuze erin: de stemming is geheim, ook in de logs.
