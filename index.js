@@ -8843,6 +8843,12 @@ app.event('app_mention', async ({ event, client }) => {
       }
     }
 
+    // Schandtitel van het lichte tribunaal (regie.json): vandaag spottend met die titel aanspreken.
+    const schandtitel = members[userId] && regieStaat().effecten.find((e) => e.soort === 'schandtitel' && e.data?.doel === userId && e.tot > Date.now());
+    if (schandtitel) {
+      prompt += `\n\n${bijnaam} draagt vandaag de schandtitel "${schandtitel.data.titel}", uitgesproken door de Raad. Spreek ${bijnaam} vandaag spottend met die titel aan.`;
+    }
+
     // Profeet van de Week: de regerend weekkampioen wordt met extra eerbied behandeld.
     const profeetData = readJSON('profeet.json', {});
     if (profeetData.userId === userId && profeetData.weekStart === getMondayOfWeek()) {
@@ -13595,7 +13601,7 @@ function bouwRegieStand(nu = Date.now()) {
   const dag = regie.amsMoment(nu).dag;
   const leden = loadMembers(), activiteit = loadActiviteit(), scores = loadScores();
   const cijfers = readJSON('casinostats.json', {})[dag] || {};
-  const verbanning = loadVerbanning(), vergrijpen = loadVergrijpen();
+  const verbanning = loadVerbanning(), vergrijpen = loadVergrijpen(), geleKaartenAlle = loadGeleKaarten();
   const vandaagTs = (ts) => !!ts && regie.amsMoment(ts).dag === dag;
   // Ketterij: het nieuwste lidbericht van vandaag uit het archief dat isKetterij is. In de week van de Airfryer-Kroket
   // gaat elk aanvalsbericht over de airfryer, dus dan nooit.
@@ -13613,6 +13619,7 @@ function bouwRegieStand(nu = Date.now()) {
       gast: false, // gasten zijn personas en staan niet in members.json
       zegen: heeftPowerup(id, 'zegen'), goudenKorst: heeftPowerup(id, 'gouden_korst'),
       geleKaartDezeWeek: heeftGeleKaartDezeWeek(id),
+      kaarten30: (geleKaartenAlle[id]?.kaarten || []).filter((k) => k.ts >= nu - 30 * DAG_MS).length,
       ketterij: ketterBerichten.filter((e) => e.sprekerId === id).pop()?.tekst.slice(0, 120) ?? null,
       ontsnapt: regieStaat().effecten.some((e) => e.soort === 'ontsnapt' && e.data?.doel === id && e.tot > nu),
       vergrijpVandaag: (vergrijpen[id] || []).some((v) => vandaagTs(v.ts)),
@@ -13639,6 +13646,7 @@ function bouwRegieStand(nu = Date.now()) {
     kanaal: { laatsteLidBerichtMs: Math.max(0, ...berichten) || null },
     archiefKandidaat: archiefKandidaten(nu).length > 0,
     raad: { pollLoopt: !!readJSON('gelekaartpoll.json', null)?.actief },
+    zaakLoopt: !!regieStaat().zaak,
     premieDezeWeek: premieJson.weekStart === getMondayOfWeek(),
     missieLoopt: loadMissie()?.status === 'actief',
     opdrachtActies: [...kiesOpdrachten('dag', dagSleutel(), OPDRACHTEN_PER_DAG), ...kiesOpdrachten('week', getMondayOfWeek(), OPDRACHTEN_PER_WEEK)].map((o) => o.actie),
@@ -13676,6 +13684,13 @@ function betaalNawerking({ nu = Date.now(), id, doel, punten }) {
   bewaarRegie(regie.boekNawerking(regie.betaal(regieStaat(), n).staat, { nu, id, doel, punten: n }));
   pasScoreAan(doel, n);
   return n;
+}
+// Het spiegelbeeld van betaalNawerking: een straf achteraf, met dezelfde begrenzing en Zegen-check als belasting en beslag
+// (neemVoorSchatkist), geboekt als nawerking. Geeft de uitkomst van neemVoorSchatkist terug (`punten` is negatief of 0).
+function neemNawerking({ nu = Date.now(), id, doel, punten }) {
+  const uit = neemVoorSchatkist({ doel, punten: -Math.abs(punten) }, nu);
+  if (uit.punten < 0) bewaarRegie(regie.boekNawerking(regieStaat(), { nu, id, doel, punten: uit.punten }));
+  return uit;
 }
 const REGIE_GEEN_RUIMTE = '_De Schatkist van de Kroket God is voor vandaag leeg: er valt niets meer uit te keren. Morgen weer._';
 const regieKnopTekst = (tekst, action_id, value, style = 'primary') => [{ type: 'button', action_id, value, style, text: { type: 'plain_text', text: tekst } }];
@@ -14078,6 +14093,13 @@ async function regieBericht(client, event) {
 
 // Het verlopen van een verrassing (de minuutklok). Gebeurt niets zonder lopende verrassing.
 async function regieKlok(client, { nu = Date.now() } = {}) {
+  // Het lichte tribunaal sluit hier, op zaak.sluitTs. Veel te laat (bot uren uit): stil laten vervallen, geen straf op een oud verhaal.
+  // In de stille modus wacht de zaak tot de Kroket God weer mag spreken.
+  const zaak = regieStaat().zaak;
+  if (zaak && nu > zaak.sluitTs + 3 * 3_600_000) { bewaarRegie({ ...regieStaat(), zaak: null }); logAudit('regie', `licht tribunaal tegen ${zaak.doel} stil vervallen: ruim verlopen`); }
+  else if (zaak && mogAutonoomPosten(nu, { weekendTelt: false })) {
+    try { await sluitZaak(client, nu); } catch (err) { console.error('Fout bij het sluiten van het lichte tribunaal:', err?.message || err); }
+  }
   const v = verrassingStaat();
   if (!v) return;
   // Ruim verlopen (bot uren uit, of stille modus net opgeheven): stil wissen, zonder uitbetaling of straf.
@@ -14260,6 +14282,79 @@ Object.assign(UITVOERDERS, {
   },
 });
 
+// ── Het lichte tribunaal (los van het Tribunaal der Vergetelheid: nooit een kick, nooit tribunaal.json of archief.json) ──
+// De zaak staat in regie.json (niet in `effecten`, want ruimOp zou hem weggooien) en sluit via regieKlok op zaak.sluitTs.
+const ZAAK_UITSPRAAK_MILD = ['vrij', 'titel', 'boete']; // bij gelijkspel wint de mildste
+Object.assign(UITVOERDERS, {
+  licht_tribunaal: async (client, keuze, stand, nu) => {
+    const lid = stand.leden.find((l) => l.id === keuze.doel);
+    const ketter = !!lid?.ketterij;
+    const zaak = {
+      id: `zaak-${nu}`, doel: keuze.doel, grond: ketter ? 'ketterij' : 'kaarten', citaat: ketter ? lid.ketterij : null,
+      titel: ketter ? 'Ketter van de Dag' : 'Vaste Klant van de Raad', stemmen: {}, sluitTs: nu + 30 * 60_000, kanaal: KANAAL(),
+    };
+    bewaarRegie({ ...regieStaat(), zaak });
+    const grond = ketter ? `ketterij: _"${ontsnapMrkdwn(zaak.citaat)}"_` : 'te vaak voor de Raad verschenen (twee gele kaarten in dertig dagen)';
+    const tekst = `⚖️ *HET LICHTE TRIBUNAAL* ⚖️\n<@${keuze.doel}> staat terecht, wegens ${grond}.\n` +
+      `Stem binnen 30 minuten: een *boete* van 2 punten, de *schandtitel* "${zaak.titel}" voor een dag, of *vrijspraak*. Bij gelijkspel wint de mildste, bij minder dan twee stemmen volgt vrijspraak. Geen kick, alleen een boete of een titel.`;
+    const knop = (k, label, style) => ({ type: 'button', action_id: `regie_zaak_${k}`, value: zaak.id, ...(style ? { style } : {}), text: { type: 'plain_text', text: label } });
+    return { punten: 0, feiten: 'Een licht tribunaal is geopend.', tekst, knoppen: [knop('boete', 'Boete', 'danger'), knop('titel', 'Schandtitel'), knop('vrij', 'Vrijspraak', 'primary')] };
+  },
+});
+
+// Eén stem per lid, te wijzigen. Lezen en schrijven zonder await ertussen: een dubbelklik of een wijziging kan niets overschrijven.
+async function stemZaak(client, userId, zaakId, keuze, nu = Date.now()) {
+  if (!['boete', 'titel', 'vrij'].includes(keuze)) return { ok: false, tekst: '_Onbekende keuze._' };
+  const s = regieStaat(), z = s.zaak;
+  if (!z || z.id !== zaakId || nu >= z.sluitTs) return { ok: false, tekst: '_Dit tribunaal is gesloten._' };
+  if (!loadMembers()[userId]) return { ok: false, tekst: '_Alleen leden mogen stemmen._' };
+  if (isVerbannen(userId)) return { ok: false, tekst: '_Wie verbannen is, stemt niet mee._' };
+  if (userId === z.doel) return { ok: false, tekst: '_U staat zelf terecht: u stemt niet mee._' };
+  const eerste = !(userId in (z.stemmen || {}));
+  bewaarRegie({ ...s, zaak: { ...z, stemmen: { ...z.stemmen, [userId]: keuze } } });
+  if (eerste) await telActie(client, userId, 'tribunaal_stem');
+  return { ok: true, tekst: `_Uw stem (*${keuze === 'vrij' ? 'vrijspraak' : keuze === 'titel' ? 'schandtitel' : 'boete'}*) is geteld. U kunt hem wijzigen tot de sluiting._` };
+}
+
+app.action(/^regie_zaak_(boete|titel|vrij)$/, async ({ ack, body, action, client }) => {
+  await ack();
+  const uit = await stemZaak(client, body.user.id, action.value, action.action_id.replace('regie_zaak_', ''));
+  await client.chat.postEphemeral({ channel: body.channel?.id || KANAAL(), user: body.user.id, text: uit.tekst }).catch(() => {});
+});
+
+// Sluit een verlopen zaak, hoogstens één keer: eerst `zaak: null`, dan pas uitvoeren en aankondigen.
+async function sluitZaak(client, nu = Date.now()) {
+  const s = regieStaat(), z = s.zaak;
+  if (!z || nu < z.sluitTs) return null;
+  bewaarRegie({ ...s, zaak: null });
+  const stemmen = Object.entries(z.stemmen || {}).filter(([u]) => u !== z.doel).map(([, k]) => k);
+  const tel = Object.fromEntries(['boete', 'titel', 'vrij'].map((k) => [k, stemmen.filter((x) => x === k).length]));
+  const top = Math.max(tel.boete, tel.titel, tel.vrij);
+  const uitspraak = stemmen.length < 2 || !loadMembers()[z.doel] ? 'vrij' : ZAAK_UITSPRAAK_MILD.find((k) => tel[k] === top);
+  const naam = loadMembers()[z.doel]?.bijnaam || 'een volgeling';
+  let feiten, vangnet, afgeketst = false;
+  if (uitspraak === 'boete') {
+    const uit = neemNawerking({ nu, id: 'licht_tribunaal', doel: z.doel, punten: 2 });
+    afgeketst = uit.punten === 0;
+    feiten = afgeketst ? `De Raad sprak een boete van 2 punten uit, maar die ketst af (${uit.feiten}) Spot met de poging.` : `De Raad sprak een boete uit: ${-uit.punten} punt${uit.punten === -1 ? '' : 'en'} naar de Schatkist.`;
+    vangnet = afgeketst ? `⚖️ De Raad wilde <@${z.doel}> beboeten, maar de boete ketst af. De Kroket God lacht.` : `⚖️ De Raad heeft gesproken: <@${z.doel}> draagt *${-uit.punten} punt${uit.punten === -1 ? '' : 'en'}* af aan de Schatkist.`;
+  } else if (uitspraak === 'titel') {
+    bewaarRegie(regie.voegEffectToe(regieStaat(), { id: `schandtitel_${z.doel}`, soort: 'schandtitel', tot: nu + 24 * 3_600_000, data: { doel: z.doel, titel: z.titel } }));
+    feiten = `De Raad sprak een schandtitel uit: een dag lang heet dit lid "${z.titel}".`;
+    vangnet = `⚖️ De Raad heeft gesproken: <@${z.doel}> draagt een dag lang de schandtitel *${z.titel}*.`;
+  } else {
+    feiten = 'De Raad sprak vrij: geen boete en geen titel.';
+    vangnet = `⚖️ De Raad heeft gesproken: <@${z.doel}> wordt vrijgesproken. Geen boete, geen titel.`;
+  }
+  logAudit('regie', `licht tribunaal tegen ${naam}: ${uitspraak} (boete ${tel.boete}, titel ${tel.titel}, vrij ${tel.vrij})${afgeketst ? ' (afgeketst)' : ''}`);
+  const prompt = `Kondig in het kanaal de uitspraak van een licht tribunaal aan, in één tot drie korte zinnen in je eigen stem.\nWat er gebeurd is: ${feiten}\n` +
+    `Het treft: ${wrapOnvertrouwd('Naam van het lid', naam)}\nStemmen: ${tel.boete} boete, ${tel.titel} titel, ${tel.vrij} vrijspraak.\nVoeg geen punten, namen of feiten toe die hierboven niet staan.`;
+  const tekst = await kroketResponseMetVangnet(prompt, 200, false, vangnet, 'licht');
+  try { await postToChannel(client, z.kanaal || KANAAL(), tekst); }
+  catch (err) { console.error('Fout bij het aankondigen van het lichte tribunaal:', err?.message || err); }
+  return { uitspraak, tel, afgeketst };
+}
+
 planCron('* * * * *', async () => {
   try { await regieKlok(app.client); }
   catch (err) { console.error('Fout bij de verrassingsklok:', err); }
@@ -14391,7 +14486,7 @@ async function voerRitueelUit(client, { userId, ritueel, rest, channelId, respon
 
 
 // De rooktests (scripts/rooktest/) komen zo bij de regisseur.
-if (process.env.KROKET_ROOKTEST) module.exports = { startStilleMissie, dagSleutel, stadKeuzes, voegToeAanArchief, regieKlok, voerOffer, voerBamischijfAanval, bouwDashboardData, voerDashboardActie, saveInstellingen, casinoOpen, regieTik, bouwRegieStand, voerIngreepUit, UITVOERDERS, regieStaat, bewaarRegie, mogAutonoomPosten, werkdagenStil, casinoToegangReden, casinoMax, casinoPlafond, boekCasinoUitslag, sluitGeleKaartPoll, startGeleKaartPoll, voerDuel, voerEer, winkelPrijs, prijsRedenen, prijsToelichting, CRON_LABELS, geplandeCronMeta, BINGO_POOL, bouwDossierBlok, voerRitueelUit, raadpleegStaat, bewaarRaadpleeg, bouwAppHomeBlocks, stemTribunaal, vollooiMissie, telActie, getMondayOfWeek, kiesOpdrachten, opdrachtHaalbaar, opdrachtTekst, opdrachtPool, alleOpdrachten };
+if (process.env.KROKET_ROOKTEST) module.exports = { startStilleMissie, dagSleutel, stadKeuzes, voegToeAanArchief, regieKlok, voerOffer, voerBamischijfAanval, bouwDashboardData, voerDashboardActie, saveInstellingen, casinoOpen, regieTik, bouwRegieStand, voerIngreepUit, UITVOERDERS, regieStaat, bewaarRegie, stemZaak, sluitZaak, mogAutonoomPosten, werkdagenStil, casinoToegangReden, casinoMax, casinoPlafond, boekCasinoUitslag, sluitGeleKaartPoll, startGeleKaartPoll, voerDuel, voerEer, winkelPrijs, prijsRedenen, prijsToelichting, CRON_LABELS, geplandeCronMeta, BINGO_POOL, bouwDossierBlok, voerRitueelUit, raadpleegStaat, bewaarRaadpleeg, bouwAppHomeBlocks, stemTribunaal, vollooiMissie, telActie, getMondayOfWeek, kiesOpdrachten, opdrachtHaalbaar, opdrachtTekst, opdrachtPool, alleOpdrachten };
 
 // Wat het dashboard over het casino laat zien (bouwDashboardData) en kan (/api/casino).
 function casinoDashboardData(naam) {
