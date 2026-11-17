@@ -1676,23 +1676,16 @@ async function kenAlliantiePuntenBonus(client, userId, opties = {}) {
     // Verbrandde de bonus in een Vloek der Slappe Korst? Dan géén zegen-aankondiging — de vloek
     // post zijn eigen bericht, en het kanaal mag geen punten claimen die nooit zijn geboekt.
     if ((loadScores()[partnerId] || 0) <= voor) return;
+    // Op een verbondsdag krijgt wie dat verbond sloot hetzelfde bedrag nog een keer, uit de Schatkist en begrensd op het plafond.
+    const dag = regie.effectActief(regieStaat(), 'verbondsdag', Date.now());
+    const extra = dag?.data?.gesloten?.includes(partnerId) ? betaalNawerking({ id: 'verbondsdag', doel: partnerId, punten: bonus }) : 0;
     const members = loadMembers();
     const naam = members[userId]?.bijnaam || 'een volgeling';
     const partnerNaam = members[partnerId]?.bijnaam || 'de bondgenoot';
-    const kanaal = opties.channelId || process.env.SLACK_CHANNEL_ID;
-    const punten = `+${bonus} kroketpunt${bonus > 1 ? 'en' : ''}`;
-    // In de bundel wordt het één regel in het naspel; zonder bundel blijft het het oude losse bericht.
-    if (naspelRegel(naspel, `⚔️ *Verbondszegen* — ${partnerNaam} ${punten} (trouw aan ${naam})`, partnerId)) return;
-    const tekst =
-      `⚔️ *VERBONDSZEGEN* ⚔️\n` +
-      `> Via het heilige verbond ontvangt ${partnerNaam} ${punten} — ` +
-      `de trouw aan ${naam} draagt vruchten.\n` +
-      `— De Hoge Frituurraad`;
-    const post = () => postToChannel(client, kanaal, tekst, opties.threadTs ? { thread_ts: opties.threadTs } : undefined);
-    // Uitstellen: als de caller een verzamel-array meegeeft, posten we de verbondszegen niet meteen
-    // maar pas nadat de hoofd-zegen op Slack staat — anders verschijnt de bonus vóór de zegen zelf.
-    if (Array.isArray(opties.uitgesteldeZegens)) opties.uitgesteldeZegens.push(post);
-    else await post();
+    const totaal = bonus + extra;
+    const punten = `+${totaal} kroketpunt${totaal > 1 ? 'en' : ''}${extra ? ` (verbondsdag${extra === bonus ? ' ×2' : ''})` : ''}`;
+    // Alleen nog een regel in de draad van het naspel; zonder naspel komt er geen los bericht, alleen de bonus.
+    naspelRegel(naspel, `⚔️ *Verbondszegen* — ${partnerNaam} ${punten} (trouw aan ${naam})`, partnerId);
   } catch (_) {}
 }
 
@@ -2896,6 +2889,7 @@ app.action(/^verbond_(accepteer|weiger)$/, async ({ ack, body, client }) => {
     }
     const oudeBondgenoten = bondgenotenVan(raw, v.vanId);
     saveAllianties(sluitAanBijVerbond(raw, v.vanId, v.doelId));
+    meldVerbondGesloten(v.vanId);
     const nieuweGroep = verbondGroepVan(loadAllianties(), v.vanId) || [];
     const vorigeGroepNamen = bijnamenVan(toets.groep, members);
     logGebeurtenis('alliantie', v.vanId, `${vanNaam} sloot zich aan bij het verbond van ${vorigeGroepNamen}`);
@@ -6729,12 +6723,17 @@ async function voerKroketCommandoUit({ command, respond, client }) {
       const members = loadMembers();
       const profeet = readJSON('profeet.json', {});
       const isProfeet = profeet.userId === command.user_id && profeet.weekStart === getMondayOfWeek();
-      if (!isProfeet) {
-        await respond({ text: '_Alleen de Profeet van de Week deelt heilige zegens uit. Word weekkampioen om het profeetschap te verwerven._', response_type: 'ephemeral' });
-        return;
-      }
-      if (profeet.zegenGebruikt) {
-        await respond({ text: '_U heeft uw heilige zegen deze week al vergeven. Eén zegen per profeetschap — zo luidt de snackleer._', response_type: 'ephemeral' });
+      // De profeet met een ongebruikte weekzegen zegent zoals altijd; anders mag iedereen één keer op een zegendag.
+      const profeetZegen = isProfeet && !profeet.zegenGebruikt;
+      const zegendag = regie.effectActief(regieStaat(), 'zegendag', Date.now());
+      const dagZegen = !profeetZegen && !!zegendag && !(zegendag.data?.gezegend || []).includes(command.user_id)
+        && !!members[command.user_id] && !isVerbannen(command.user_id);
+      if (!profeetZegen && !dagZegen) {
+        await respond({ text: zegendag && (zegendag.data?.gezegend || []).includes(command.user_id)
+          ? '_U heeft vandaag al gezegend: één zegen per zegendag._'
+          : isProfeet
+            ? '_U heeft uw heilige zegen deze week al vergeven. Eén zegen per profeetschap, tenzij de Kroket God een zegendag uitroept._'
+            : '_Alleen de Profeet van de Week deelt heilige zegens uit, of iedereen op een zegendag van de Kroket God. Word weekkampioen om het profeetschap te verwerven._', response_type: 'ephemeral' });
         return;
       }
       const doelNaam = input.replace(/^zegen\s*/, '').trim();
@@ -6754,6 +6753,19 @@ async function voerKroketCommandoUit({ command, respond, client }) {
       }
       if (isVerbannen(doelId)) {
         await respond({ text: `_${doelLid.bijnaam} is verbannen — zelfs een profetenzegen reikt niet voorbij de gesloten poorten._`, response_type: 'ephemeral' });
+        return;
+      }
+      if (!profeetZegen) {
+        // Zegendag: +1 uit de Schatkist, begrensd op het plafond. Is er geen ruimte, dan telt de zegen niet als gebruikt.
+        const n = betaalNawerking({ id: 'zegendag', doel: doelId, punten: 1 });
+        if (!n) {
+          await respond({ text: REGIE_GEEN_RUIMTE, response_type: 'ephemeral' });
+          return;
+        }
+        pasEffectAan(zegendag.id, (d) => ({ ...d, gezegend: [...(d.gezegend || []), command.user_id] }));
+        await telActie(client, doelId, 'gezegend');
+        logGebeurtenis('zegen', doelId, `${members[command.user_id].bijnaam} zegende ${doelLid.bijnaam} op de zegendag (+1)`, null, command.user_id);
+        await postToChannel(client, command.channel_id, `🕊️ *ZEGENDAG* 🕊️\n\n> *${members[command.user_id].bijnaam}* legt de handen op *${doelLid.bijnaam}*: *+1 kroketpunt*, uit de Schatkist van de Kroket God.\n\n— De Hoge Frituurraad`);
         return;
       }
       profeet.zegenGebruikt = true;
@@ -7252,6 +7264,7 @@ async function voerKroketCommandoUit({ command, respond, client }) {
       // Een nieuw paar: zoals het altijd ging, en wie in een verbond zat, verlaat dat.
       const oudeBondgenoten = getBondgenoten(command.user_id);
       sluitAlliantie(command.user_id, partnerId);
+      meldVerbondGesloten(command.user_id, partnerId);
       logGebeurtenis('alliantie', command.user_id, `${aanvrager} sloot een alliantie met ${partnerLid.bijnaam}`);
       await telActie(client, command.user_id, 'verbond_gesloten');
 
@@ -13621,6 +13634,7 @@ function bouwRegieStand(nu = Date.now()) {
       geleKaartDezeWeek: heeftGeleKaartDezeWeek(id),
       kaarten30: (geleKaartenAlle[id]?.kaarten || []).filter((k) => k.ts >= nu - 30 * DAG_MS).length,
       ketterij: ketterBerichten.filter((e) => e.sprekerId === id).pop()?.tekst.slice(0, 120) ?? null,
+      inVerbond: getBondgenoten(id).length > 0,
       ontsnapt: regieStaat().effecten.some((e) => e.soort === 'ontsnapt' && e.data?.doel === id && e.tot > nu),
       vergrijpVandaag: (vergrijpen[id] || []).some((v) => vandaagTs(v.ts)),
       casino: {
@@ -13634,6 +13648,8 @@ function bouwRegieStand(nu = Date.now()) {
   const berichten = ledenStand.map((l) => activiteit[l.id]?.laatsteBericht || 0);
   return {
     leden: ledenStand,
+    verbondenAan: alliantiesActief(),
+    seizoen: { actief: loadSeizoen()?.status === 'actief', dreiging: loadSeizoen()?.dreiging?.key },
     casino: {
       spellenVandaag: ledenStand.reduce((a, l) => a + Object.values(cijfers.leden?.[l.id] || {}).reduce((b, s) => b + (s.spellen || 0), 0), 0),
       open: casinoOpen(),
@@ -13672,9 +13688,16 @@ function zetRegieKnop(id, soort, duurMinuten, data, nu) {
   bewaarRegie(regie.voegEffectToe(regieStaat(), { id, soort, tot: nu + duurMinuten * 60_000, data: { ...data, gebruikt: false } }));
   return id;
 }
-function verbruikRegieKnop(id) {
+// Werkt de `data` van een lopend effect bij: f krijgt de huidige data en geeft de nieuwe terug.
+function pasEffectAan(id, f) {
   const s = regieStaat();
-  bewaarRegie({ ...s, effecten: s.effecten.map((e) => (e.id === id ? { ...e, data: { ...e.data, gebruikt: true } } : e)) });
+  bewaarRegie({ ...s, effecten: s.effecten.map((e) => (e.id === id ? { ...e, data: f(e.data || {}) } : e)) });
+}
+const verbruikRegieKnop = (id) => pasEffectAan(id, (d) => ({ ...d, gebruikt: true }));
+// Wie op een verbondsdag een verbond sluit, krijgt die dag een dubbele Verbondszegen.
+function meldVerbondGesloten(...ids) {
+  const dag = regie.effectActief(regieStaat(), 'verbondsdag', Date.now());
+  if (dag) pasEffectAan(dag.id, (d) => ({ ...d, gesloten: [...new Set([...(d.gesloten || []), ...ids])] }));
 }
 // Een uitbetaling achteraf (regel P16): op het moment van uitbetalen begrensd tegen de ruimte van nu, eerst uit de
 // Schatkist, geboekt als nawerking. Geeft het echt uitbetaalde bedrag terug (0 = geen ruimte).
@@ -13779,6 +13802,19 @@ const UITVOERDERS = {
     writeJSON('bamischijf.json', raid);
     await updateRaidBericht(client, raid);
     return { feiten: `Vandaag mag elk lid twee keer aanvallen op de weekvijand (${raid.vijand?.naam || 'de vijand'}), want hij staat nog stevig overeind.` };
+  },
+  zegendag: async (client, keuze, stand, nu) => {
+    regieEffect('zegendag', keuze.duurMinuten || regie.restVanDag(nu), { gezegend: [] });
+    return { feiten: 'Vandaag mag iedereen één keer een ander zegenen met `zegen [naam]`: +1 punt voor de ontvanger.' };
+  },
+  verbondsdag: async (client, keuze, stand, nu) => {
+    regieEffect('verbondsdag', keuze.duurMinuten || regie.restVanDag(nu), { gesloten: [] });
+    return { feiten: 'Wie vandaag een verbond sluit, krijgt een Verbondszegen er dubbel zo goed uit.' };
+  },
+  seizoensdag: async (client, keuze, stand, nu) => {
+    const dag = regie.SEIZOENSDAGEN[stand.seizoen.dreiging];
+    regieEffect('seizoensdag', keuze.duurMinuten || regie.restVanDag(nu), { actie: dag.actie, naam: dag.naam });
+    return { feiten: `${dag.naam}: ${dag.uitleg}` };
   },
   premie: async (client, keuze, stand, nu) => {
     const naam = loadMembers()[keuze.doel]?.bijnaam || 'een volgeling';
@@ -14486,7 +14522,7 @@ async function voerRitueelUit(client, { userId, ritueel, rest, channelId, respon
 
 
 // De rooktests (scripts/rooktest/) komen zo bij de regisseur.
-if (process.env.KROKET_ROOKTEST) module.exports = { startStilleMissie, dagSleutel, stadKeuzes, voegToeAanArchief, regieKlok, voerOffer, voerBamischijfAanval, bouwDashboardData, voerDashboardActie, saveInstellingen, casinoOpen, regieTik, bouwRegieStand, voerIngreepUit, UITVOERDERS, regieStaat, bewaarRegie, stemZaak, sluitZaak, mogAutonoomPosten, werkdagenStil, casinoToegangReden, casinoMax, casinoPlafond, boekCasinoUitslag, sluitGeleKaartPoll, startGeleKaartPoll, voerDuel, voerEer, winkelPrijs, prijsRedenen, prijsToelichting, CRON_LABELS, geplandeCronMeta, BINGO_POOL, bouwDossierBlok, voerRitueelUit, raadpleegStaat, bewaarRaadpleeg, bouwAppHomeBlocks, stemTribunaal, vollooiMissie, telActie, getMondayOfWeek, kiesOpdrachten, opdrachtHaalbaar, opdrachtTekst, opdrachtPool, alleOpdrachten };
+if (process.env.KROKET_ROOKTEST) module.exports = { startStilleMissie, dagSleutel, stadKeuzes, voegToeAanArchief, regieKlok, voerOffer, voerBamischijfAanval, bouwDashboardData, voerDashboardActie, saveInstellingen, casinoOpen, regieTik, bouwRegieStand, voerIngreepUit, UITVOERDERS, regieStaat, bewaarRegie, stemZaak, sluitZaak, mogAutonoomPosten, werkdagenStil, casinoToegangReden, casinoMax, casinoPlafond, boekCasinoUitslag, sluitGeleKaartPoll, startGeleKaartPoll, voerDuel, voerEer, winkelPrijs, prijsRedenen, prijsToelichting, CRON_LABELS, geplandeCronMeta, BINGO_POOL, bouwDossierBlok, voerRitueelUit, raadpleegStaat, bewaarRaadpleeg, bouwAppHomeBlocks, stemTribunaal, vollooiMissie, telActie, getMondayOfWeek, kiesOpdrachten, opdrachtHaalbaar, opdrachtTekst, opdrachtPool, alleOpdrachten, kenAlliantiePuntenBonus, draagBijAanSeizoen };
 
 // Wat het dashboard over het casino laat zien (bouwDashboardData) en kan (/api/casino).
 function casinoDashboardData(naam) {
@@ -14985,7 +15021,7 @@ const OPDRACHTEN = [
   { id: 'w-winkel',   soort: 'week', actie: 'winkel_koop',    doel: 3, beloning: 3, tekst: 'Doe drie aankopen in de Aflatenhandel' },
 
   // ── Spoor 3: de teruggebrachte spellen krijgen een opdracht ──
-  { id: 'd-zegen',     soort: 'dag',  actie: 'gezegend',         doel: 1,  beloning: 2, tekst: 'Laat u zegenen door de profeet', vanaf: OPDRACHTEN_NIEUW_VANAF },
+  { id: 'd-zegen',     soort: 'dag',  actie: 'gezegend',         doel: 1,  beloning: 2, tekst: 'Laat u zegenen door de profeet of op een zegendag', vanaf: OPDRACHTEN_NIEUW_VANAF },
   { id: 'd-seizoen',   soort: 'dag',  actie: 'seizoen_daad',     doel: 3,  beloning: 1, tekst: 'Drijf {dreiging} terug met drie daden in de frituur', vanaf: OPDRACHTEN_NIEUW_VANAF },
   { id: 'w-raad',      soort: 'week', actie: 'raad_stem',        doel: 1,  beloning: 3, tekst: 'Stem mee in de Raad over een gele kaart', vanaf: OPDRACHTEN_NIEUW_VANAF },
   { id: 'w-genade',    soort: 'week', actie: 'begenade',         doel: 1,  beloning: 4, tekst: 'Help een balling terug met begenade', vanaf: OPDRACHTEN_NIEUW_VANAF },
@@ -15972,7 +16008,8 @@ function draagBijAanSeizoen(userId, actie, aantal = 1) {
   if (!gewicht) return null;
   const s = loadSeizoen();
   if (!s || s.status !== 'actief') return null;
-  const schade = gewicht * Math.max(1, aantal);
+  const dag = regie.effectActief(regieStaat(), 'seizoensdag', Date.now()); // één actie telt die dag dubbel
+  const schade = gewicht * Math.max(1, aantal) * (dag?.data?.actie === actie ? 2 : 1);
   s.hp = Math.max(0, (s.hp ?? s.maxHp) - schade);
   s.bijdragen = s.bijdragen || {};
   s.bijdragen[userId] = (s.bijdragen[userId] || 0) + schade;
