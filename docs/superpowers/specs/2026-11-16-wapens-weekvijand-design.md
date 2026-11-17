@@ -1,5 +1,7 @@
 # Het Frituurarsenaal: wapens tegen de weekvijand
 
+> **Wijziging 17 november 2026:** de oorlogskas is geschrapt. Wapens en het kanon kosten nu echt punten, en wie de vijand velt krijgt niets terug. De prijzen zijn verdubbeld (Frietvork 2, Vliegenmepper/Ovenwant/Vershoudfolie 4, Kroketmes/Pekelspuit 6, Vetbom 10) en het kanon vraagt 24 punten. Aanleiding: de eigenaar vond de vijand te makkelijk; de Gehaktstaaf viel op dinsdag en de winnaars kregen hun wapens terug.
+
 Goedgekeurd door de eigenaar op 16 november 2026.
 
 ## Waarom

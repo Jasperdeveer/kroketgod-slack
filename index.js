@@ -12324,17 +12324,17 @@ function bouwRaidBlocks(raid) {
       { type: 'static_select', action_id: 'wapen_kies', placeholder: { type: 'plain_text', text: '🗡️ Koop een wapen…', emoji: true },
         options: Object.entries(WAPENS).map(([key, w]) => ({ text: { type: 'plain_text', text: `${w.icoon} ${w.naam} · ${w.prijs} pt`, emoji: true }, value: key })),
         confirm: { title: { type: 'plain_text', text: 'Wapen kopen' },
-          text: { type: 'mrkdwn', text: `Het wapen gaat op bij uw volgende aanval. U krijgt de prijs terug als hij valt. Hoogstens ${WAPENREK_MAX} per vijand.` },
+          text: { type: 'mrkdwn', text: `Het wapen gaat op bij uw volgende aanval. Wat u betaalt, krijgt u niet terug. Hoogstens ${WAPENREK_MAX} per vijand.` },
           confirm: { type: 'plain_text', text: 'Koop' }, deny: { type: 'plain_text', text: 'Laat maar' } } },
       ...(kanon.gevuurd ? [] : [{ type: 'static_select', action_id: 'kanon_inleg', placeholder: { type: 'plain_text', text: '🛢️ Laad het kanon…', emoji: true },
-        options: [1, 2, 3, 5].map(n => ({ text: { type: 'plain_text', text: `${n} pt inleggen` }, value: String(n) })),
+        options: [2, 4, 6, 10].map(n => ({ text: { type: 'plain_text', text: `${n} pt inleggen` }, value: String(n) })),
         confirm: { title: { type: 'plain_text', text: 'Kanon laden' },
-          text: { type: 'mrkdwn', text: `Bij ${KANON_DOEL} pt van minstens ${KANON_MIN_LEDEN} leden vuurt het kanon. U krijgt uw inleg terug als hij valt.` },
+          text: { type: 'mrkdwn', text: `Bij ${KANON_DOEL} pt van minstens ${KANON_MIN_LEDEN} leden vuurt het kanon. Uw inleg krijgt u niet terug.` },
           confirm: { type: 'plain_text', text: 'Leg in' }, deny: { type: 'plain_text', text: 'Laat maar' } } }]),
     ] });
   }
   blocks.push({ type: 'context', elements: [{ type: 'mrkdwn',
-    text: `${aanvalsLimiet(raid, new Intl.DateTimeFormat('nl-NL', { timeZone: 'Europe/Amsterdam' }).format(new Date())) > 1 ? '🎁 *Vandaag twee aanvallen per lid*' : 'Eén aanval per lid per dag'} · ${WAPENREK_MAX} wapens per lid per vijand, in te zetten bij uw volgende aanval · hij slaat terug · wapens, kanon en terugslag gaan naar zijn buit: terug als hij valt · elke middag zijn eigen beurt · niet verslagen vóór vrijdag 14:50 → plundering · ook via \`/kroketgod aanval\` en \`/kroketgod koop [wapen]\`` }] });
+    text: `${aanvalsLimiet(raid, new Intl.DateTimeFormat('nl-NL', { timeZone: 'Europe/Amsterdam' }).format(new Date())) > 1 ? '🎁 *Vandaag twee aanvallen per lid*' : 'Eén aanval per lid per dag'} · ${WAPENREK_MAX} wapens per lid per vijand, in te zetten bij uw volgende aanval · hij slaat terug · terugslag gaat naar zijn buit: terug als hij valt · wapens en kanon kosten echt punten · elke middag zijn eigen beurt · niet verslagen vóór vrijdag 14:50 → plundering · ook via \`/kroketgod aanval\` en \`/kroketgod koop [wapen]\`` }] });
   return blocks;
 }
 
@@ -12518,8 +12518,8 @@ async function voerBamischijfAanval(client, userId, metOffer) {
 
 // ── Het Frituurarsenaal: wapens kopen en het kanon laden (regels: lib/wapens.js) ──
 // De staat hoort bij de raid (raid.arsenaal, raid.kanon) en verdwijnt dus vanzelf met de vijand.
-// Elke uitgave gaat ook in zijn buit: terug als hij valt (beslechtBamischijfOverwinning), weg als
-// hij ontsnapt. Een koper wordt geen strijder; die beloning is voor wie aanvalt.
+// Wat je uitgeeft, ben je kwijt (sinds 17 nov 2026; eerst kwam het bij winst terug). Een koper wordt
+// geen strijder; die beloning is voor wie aanvalt.
 
 // Het arsenaal in de winkel staat er alleen zolang er een vijand leeft.
 const levendeRaid = () => { const r = readJSON('bamischijf.json', {}); return r.actief && r.hp > 0 ? r : null; };
@@ -12529,7 +12529,7 @@ function arsenaalTekst() {
   if (!raid) return '';
   return `\n\n🗡️ *HET FRITUURARSENAAL* — tegen ${raid.vijand?.naam || 'de weekvijand'}\n` +
     Object.entries(WAPENS).map(([key, w]) => `${w.icoon} *${w.naam}* — *${w.prijs} pt* — \`koop ${key}\`\n> _${w.uitleg}_`).join('\n') +
-    `\n_${WAPENREK_MAX} wapens per vijand, gebruikt bij uw volgende aanval. U krijgt de prijs terug als hij valt._`;
+    `\n_${WAPENREK_MAX} wapens per vijand, gebruikt bij uw volgende aanval. Wat u betaalt, krijgt u niet terug._`;
 }
 
 function arsenaalBlocks(userId, saldo) {
@@ -12538,7 +12538,7 @@ function arsenaalBlocks(userId, saldo) {
   const eigen = raid.arsenaal?.[userId] || {};
   const blocks = [{ type: 'divider' }, { type: 'section', text: { type: 'mrkdwn', text:
     `🗡️ *Het Frituurarsenaal* — tegen ${raid.vijand?.naam || 'de weekvijand'}\n` +
-    `_${WAPENREK_MAX} wapens per vijand (u kocht er ${eigen.gekocht || 0}), gebruikt bij uw volgende aanval. U krijgt de prijs terug als hij valt._` } }];
+    `_${WAPENREK_MAX} wapens per vijand (u kocht er ${eigen.gekocht || 0}), gebruikt bij uw volgende aanval. Wat u betaalt, krijgt u niet terug._` } }];
   for (const [key, w] of Object.entries(WAPENS)) {
     const nee = koopWeigering(eigen, key, saldo);
     const blok = { type: 'section', text: { type: 'mrkdwn', text: `${w.icoon} *${w.naam}* — *${w.prijs} pt*\n_${w.uitleg}_` + (nee ? `\n> _${nee}_` : '') } };
@@ -12546,12 +12546,6 @@ function arsenaalBlocks(userId, saldo) {
     blocks.push(blok);
   }
   return blocks;
-}
-
-function boekOorlogskas(raid, userId, bedrag) {
-  raid.buit = (raid.buit || 0) + bedrag;
-  raid.arsenaal = raid.arsenaal || {};
-  raid.arsenaal[userId] = { ...raid.arsenaal[userId], uitgegeven: (raid.arsenaal[userId]?.uitgegeven || 0) + bedrag };
 }
 
 // De raid waar het arsenaal op werkt, of een reden waarom het dicht is.
@@ -12578,7 +12572,6 @@ async function koopWapen(client, userId, key) {
   const w = WAPENS[key];
   pasScoreAan(userId, -w.prijs);
   raid.arsenaal[userId] = { ...eigen, inHand: key, gekocht: (eigen.gekocht || 0) + 1, vetbom: !!eigen.vetbom || key === 'vetbom' };
-  boekOorlogskas(raid, userId, w.prijs);
   writeJSON('bamischijf.json', raid);
   const bijnaam = loadMembers()[userId].bijnaam;
   logGebeurtenis('bamischijf', userId, `${bijnaam} kocht een ${w.naam} tegen ${raid.vijand?.naam || 'de weekvijand'} (−${w.prijs})`);
@@ -12587,7 +12580,7 @@ async function koopWapen(client, userId, key) {
     await postToChannel(client, raid.kanaal || process.env.SLACK_CHANNEL_ID,
       `${w.icoon} *${bijnaam}* koopt een *${w.naam}* — _${w.uitleg}_`, { thread_ts: raid.berichtTs });
   }
-  return { ok: true, tekst: `_${w.icoon} ${w.naam} ligt in uw hand voor uw volgende aanval. ${w.prijs} pt gaat naar de oorlogskas: u krijgt het terug als hij valt._` };
+  return { ok: true, tekst: `_${w.icoon} ${w.naam} ligt in uw hand voor uw volgende aanval. Dat kostte ${w.prijs} pt._` };
 }
 
 async function legInKanon(client, userId, n) {
@@ -12598,7 +12591,6 @@ async function legInKanon(client, userId, n) {
   if (weigering) return { ok: false, tekst: `_${weigering}_` };
   pasScoreAan(userId, -bedrag);
   raid.kanon.inleg = { ...raid.kanon.inleg, [userId]: (raid.kanon.inleg?.[userId] || 0) + bedrag };
-  boekOorlogskas(raid, userId, bedrag);
   const members = loadMembers();
   const bijnaam = members[userId].bijnaam;
   const kanaal = raid.kanaal || process.env.SLACK_CHANNEL_ID;
@@ -12609,7 +12601,7 @@ async function legInKanon(client, userId, n) {
     await updateRaidBericht(client, raid);
     await postToChannel(client, kanaal,
       `🛢️ *${bijnaam}* legt ${bedrag} pt in het Frituurkanon (${kanonTotaal(raid.kanon)}/${KANON_DOEL} pt, ${kanonLeden(raid.kanon)}/${KANON_MIN_LEDEN} leden).`, draad);
-    return { ok: true, tekst: `_U legde ${bedrag} pt in het kanon. U krijgt het terug als hij valt._` };
+    return { ok: true, tekst: `_U legde ${bedrag} pt in het kanon._` };
   }
   // Het kanon vuurt. Geen dagaanval van wie de lont aanstak, en het kanon vangt een eventuele knal.
   const schade = kanonSchade(raid.maxHp);
@@ -12653,9 +12645,6 @@ async function beslechtBamischijfOverwinning(client, channelId, raid, genadeslag
   }
   // Zijn buit keert terug naar wie hem verloor: kale boeking, want het is teruggave, geen verdienste.
   for (const [uid, s] of strijders) if (s.verloren) pasScoreAan(uid, s.verloren);
-  // De oorlogskas (lib/wapens.js): wat aan wapens en het kanon werd uitgegeven, zat ook in zijn buit
-  // en gaat terug naar wie het betaalde, ook als die zelf niet aanviel.
-  for (const [uid, a] of Object.entries(raid.arsenaal || {})) if (members[uid] && a.uitgegeven) pasScoreAan(uid, a.uitgegeven);
   const genadeslagNaam = members[genadeslagId]?.bijnaam || 'een volgeling';
   const gave = gaveVan(raid.vijand?.key);
   // Explosief: de knal kost de doder 1 punt van zijn beloning (die is net bijgeschreven, dus er is genoeg).
