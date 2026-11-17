@@ -9250,9 +9250,11 @@ app.event('reaction_added', async ({ event, client }) => {
       if (await grijpGoudenKroket(client, event.user)) return;
     }
 
+    // Ook vóór de kanaal-guard: een voordracht in een ander kanaal moet bevestigd kunnen worden (bevestigHeilige matcht op de exacte ts).
+    if (event.reaction === raadpleeg.HEILIG.emoji && await bevestigHeilige(client, event)) return;
+
     if (event.item.channel !== process.env.SLACK_CHANNEL_ID) return;
     if (event.user === event.item_user) return;
-    if (event.reaction === raadpleeg.HEILIG.emoji && await bevestigHeilige(client, event)) return;
 
     // ── Stille Missie: emoji-detectie ──────────────────────────────────────
     const missie = loadMissie();
@@ -9883,23 +9885,6 @@ async function maakKroketFeitje() {
     `Kort en concreet — max 3 zinnen. Geen inleidingszin.`,
     300, false
   );
-}
-
-// uitVoorraad: alleen de ongevraagde cron-post mag uit De Voorraadkelder komen. Wie zélf om een
-// feitje vraagt (`/kroketgod feitje`) krijgt een verse — een direct verzoek verdient een antwoord
-// op dát moment, en daar zit ook iemand op te wachten die het verschil zou merken.
-async function stuurKroketFeitje(client, channelId = process.env.SLACK_CHANNEL_ID, { uitVoorraad = false } = {}) {
-  let tekst = null;
-  if (uitVoorraad) {
-    const uitKelder = haalUitVoorraad('feitje');
-    if (uitKelder) {
-      tekst = uitKelder.tekst;
-      if (!uitKelder.vanVandaag) console.log('🧆 Kroketfeitje uit de noodvoorraad (niet van vandaag).');
-    }
-  }
-  if (!tekst) tekst = await maakKroketFeitje();
-  if (!tekst) return;
-  await postToChannel(client, channelId, tekst);
 }
 
 async function stuurMop(client, channelId = process.env.SLACK_CHANNEL_ID) {
@@ -13904,8 +13889,8 @@ const RITUEEL_UITVOERDERS = {
     const v = r.voorspelling;
     const voorspeld = v && v.tekst.replace('{naam}', members[v.doel]?.bijnaam || 'een lid');
     const tekst = await kroketResponseMetVangnet(
-      `${naam} stelt een vraag aan het orakel. ${voorspeld ? `Het orakel voorspelt: "${voorspeld}". Kleed die voorspelling dramatisch in, en verander er niets aan.` : 'Het orakel ziet niemand om over te voorspellen; antwoord vaag.'} Eén tot twee zinnen. Geen inleidingszin.\n\n${wrapOnvertrouwd('De vraag', rest)}`,
-      250, false, `🔮 _De Kroket God tuurt in het vet en spreekt, ${naam}._`);
+      `${naam} stelt een vraag aan het orakel. ${voorspeld ? `Beantwoord eerst de vraag cryptisch in één zin. Noem daarna de voorspelling letterlijk: "${voorspeld}". Kleed ze dramatisch in, maar verander niets aan de voorspelling.` : 'Het orakel ziet niemand om over te voorspellen; beantwoord de vraag cryptisch in één zin.'} Twee tot drie zinnen. Geen inleidingszin.\n\n${wrapOnvertrouwd('De vraag', rest)}`,
+      250, false, `🔮 _${raadpleeg.orakelAntwoord(rng)}, ${naam}._${voorspeld ? ` _${voorspeld}._` : ''}`);
     return { tekst, regel: voorspeld ? `🔮 *Voorspelling:* ${voorspeld}. Komt die uit, dan krijgt *${naam}* 1 kroketpunt.`
       : '🔮 _Er is geen ander lid om over te voorspellen._' };
   },
@@ -13913,12 +13898,15 @@ const RITUEEL_UITVOERDERS = {
     const kandidaat = rest ? getMemberByNaam(rest) : null;
     if (!kandidaat || isVerbannen(kandidaat[0])) return { fout: 'onbekend', melding: '_Wie wilt u heilig laten verklaren? Noem een lid dat niet in ballingschap zit: `/kroketgod raadpleeg canoniseer <naam>`._' };
     const [kandidaatId, lid] = kandidaat;
+    // Meteen reserveren (ts null), vóór de trage LLM-aanroep: zo kan een tweede voordracht er niet tussendoor.
     const toets = raadpleeg.draagVoor(raadpleegStaat(), { voorsteller: userId, kandidaat: kandidaatId, nu: Date.now(), ts: null, kanaal: channelId });
+    if (!toets.fout) bewaarRaadpleeg(toets.staat);
     if (toets.fout) {
       const meldingen = {
         zelf: '_U kunt uzelf niet heilig verklaren. Laat het aan het genootschap over._',
         al_heilige: '_Er is vandaag al een Heilige van de Dag. Morgen weer._',
         open_voordracht: '_Er staat al een voordracht open. Wacht tot die is afgerond._',
+        al_gedaan: '_U heeft vandaag al iemand voorgedragen. Morgen weer._',
       };
       return { fout: toets.fout, melding: meldingen[toets.fout] };
     }
@@ -13929,10 +13917,8 @@ const RITUEEL_UITVOERDERS = {
       tekst,
       regel: `😇 Bevestig met :${raadpleeg.HEILIG.emoji}:. Bij *${raadpleeg.HEILIG.drempel}* bevestigingen van anderen is *${lid.bijnaam}* vandaag heilig (de voordracht staat 2 uur open).`,
       naPost: async (res) => {
-        if (!res?.ts) return;
-        const r = raadpleeg.draagVoor(raadpleegStaat(), { voorsteller: userId, kandidaat: kandidaatId, nu: Date.now(), ts: res.ts, kanaal: channelId });
-        if (r.fout) return;
-        bewaarRaadpleeg(r.staat);
+        if (!res?.ts) { bewaarRaadpleeg(raadpleeg.geefVrij(raadpleegStaat(), userId)); return; }
+        bewaarRaadpleeg(raadpleeg.zetTs(raadpleegStaat(), res.ts));
         await slackLimiter.schedule(() => client.reactions.add({ channel: channelId, timestamp: res.ts, name: raadpleeg.HEILIG.emoji })).catch(() => {});
       },
     };

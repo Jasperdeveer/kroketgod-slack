@@ -32,7 +32,7 @@ harnas(async (h) => {
   // Orakel
   n = h.posts.length;
   await h.commando('UC', 'raadpleeg orakel wordt het wat');
-  h.ok(h.posts.length === n + 1 && /Voorspelling/.test(h.posts[n].text), `orakel post een voorspelling: ${h.posts[n]?.text}`);
+  h.ok(h.posts.length === n + 1 && /Voorspelling/.test(h.posts[n].text) && /^🔮 _[^_]+, /.test(h.posts[n].text), `orakel post een voorspelling: ${h.posts[n]?.text}`);
   const doel = staat().leden?.UC?.orakel?.doel;
   h.ok(doel && doel !== 'UC', `orakel.doel is een ander lid (${doel})`);
 

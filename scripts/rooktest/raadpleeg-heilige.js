@@ -51,4 +51,15 @@ harnas(async (h) => {
   await h.commando('UA', 'raadpleeg canoniseer Charlie');
   h.ok(!staat().heilige, 'balling wordt niet voorgedragen');
   h.schrijf('verbanning.json', {});
+
+  // I3: twee voordrachten vlak na elkaar: alleen de eerste telt.
+  h.schrijf('raadpleeg.json', { datum: vandaag, leden: {}, heilige: null });
+  await Promise.all([h.commando('UA', 'raadpleeg canoniseer Bravo'), h.commando('UC', 'raadpleeg canoniseer Delta')]);
+  const st = staat();
+  h.ok(!!st.heilige && !!st.heilige.ts && Object.values(st.leden).filter((l) => l.voordracht).length === 1, 'twee voordrachten tegelijk: er blijft er één over, met ts');
+
+  // I2: een voordracht is ook vanuit een ander kanaal te bevestigen.
+  h.schrijf('raadpleeg.json', { datum: vandaag, leden: {}, heilige: { kandidaat: 'UB', voorsteller: 'UA', ts: '777.1', kanaal: 'CANDERS', tot: Date.now() + 3_600_000, bevestigers: [], heilig: false } });
+  for (const u of ['UC', 'UD']) await h.gebeurtenis('reaction_added', { user: u, reaction: 'innocent', item: { channel: 'CANDERS', ts: '777.1' }, item_user: 'UBOT', event_ts: `x${u}` });
+  h.ok(staat().heilige.heilig === true, 'voordracht in een ander kanaal is te bevestigen');
 });
