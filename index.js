@@ -140,7 +140,7 @@ const {
   WAPENS, WAPENREK_MAX, KANON_DOEL, KANON_MIN_LEDEN, VETBOM_KETST_BUIT, PEKEL_AANVALLEN,
   zwakTegen, koopWeigering, wapenUithaal, pekelBonus, kanonInleg, kanonTotaal, kanonLeden, kanonVuurt, kanonSchade,
 } = require('./lib/wapens.js');
-const { aanvalFilm, kanonFilm } = require('./lib/vijandbeeld.js');
+const { aanvalFilm, kanonFilm, bliksemFilm } = require('./lib/vijandbeeld.js');
 const { createHash } = require('crypto');
 const {
   VERBOND_MAX, VERZOEK_GELDIG_MS, groepen: verbondGroepen,
@@ -11912,7 +11912,7 @@ async function legInKanon(client, userId, n) {
 }
 
 // `knal: false`: de genadeslag kwam met een Ovenwant of uit het kanon, dus een explosieve vijand knalt niet.
-async function beslechtBamischijfOverwinning(client, channelId, raid, genadeslagId, { knal = true } = {}) {
+async function beslechtBamischijfOverwinning(client, channelId, raid, genadeslagId, { knal = true, genadeslagNaam: naamOverschrijving = null } = {}) {
   const members = loadMembers();
   // Filter strijders die inmiddels geen lid meer zijn — geen punten naar ghost-entries.
   const strijders = Object.entries(raid.strijders || {}).filter(([uid]) => members[uid]);
@@ -11924,7 +11924,7 @@ async function beslechtBamischijfOverwinning(client, channelId, raid, genadeslag
   }
   // Zijn buit keert terug naar wie hem verloor: kale boeking, want het is teruggave, geen verdienste.
   for (const [uid, s] of strijders) if (s.verloren) pasScoreAan(uid, s.verloren);
-  const genadeslagNaam = members[genadeslagId]?.bijnaam || 'een volgeling';
+  const genadeslagNaam = naamOverschrijving || members[genadeslagId]?.bijnaam || 'een volgeling';
   const gave = gaveVan(raid.vijand?.key);
   // Explosief: de knal kost de doder 1 punt van zijn beloning (die is net bijgeschreven, dus er is genoeg).
   const knalt = knal && gave?.soort === 'explosief';
@@ -14262,6 +14262,44 @@ const UITVOERDERS = {
     regieEffect('dubbeleEer', keuze.duurMinuten || 60);
     return { feiten: 'Een uur lang telt elke eer één klasse hoger, voor iedereen.' };
   },
+  extra_aanvalsdag: async (client, keuze, stand, nu) => {
+    const raid = readJSON('bamischijf.json', {});
+    raid.extraAanval = new Intl.DateTimeFormat('nl-NL', { timeZone: 'Europe/Amsterdam' }).format(new Date(nu)); // sleutel zoals de raid hem schrijft
+    writeJSON('bamischijf.json', raid);
+    await updateRaidBericht(client, raid);
+    return { feiten: `Vandaag mag elk lid twee keer aanvallen op de weekvijand (${raid.vijand?.naam || 'de vijand'}), want hij staat nog stevig overeind.` };
+  },
+  // De regisseur valt niet aan voor een lid: geen credit, schade in de strijderlijst of buit. Schicht = 15% van maxHP
+  // (zoals het kanon geboekt), heling = 10% als hij vóór woensdag onder de 30% staat. Een dodelijke schicht is een genadeslag.
+  bliksem: async (client, keuze, stand, nu) => {
+    const raid = readJSON('bamischijf.json', {});
+    if (!raid.actief || !(raid.hp > 0)) return { tekst: null };
+    const naam = raid.vijand?.naam || 'De Bamischijf der Duisternis';
+    const kanaal = raid.kanaal || process.env.SLACK_CHANNEL_ID;
+    const hpVoor = raid.hp;
+    const heling = regie.amsMoment(nu).weekdag < 3 && hpVoor / raid.maxHp < 0.3;
+    const bedrag = Math.max(1, Math.round(raid.maxHp * (heling ? 0.1 : 0.15)));
+    raid.hp = heling ? Math.min(raid.maxHp, hpVoor + bedrag) : Math.max(0, hpVoor - bedrag);
+    raid.log = [...(raid.log || []), (heling ? { beurt: `de Kroket God heelt +${bedrag} HP` } : { naam: 'De Kroket God', schade: Math.min(bedrag, hpVoor) })].slice(-10);
+    logGebeurtenis('bamischijf', null, `De Kroket God ${heling ? 'heelde' : 'trof met de bliksem'} ${naam}: ${heling ? '+' : '−'}${bedrag} HP`);
+    const film = () => bliksemFilm({ vijandKey: raid.vijand?.key, vijandNaam: naam, bedrag, heling, hpVoor, maxHp: raid.maxHp, razend: isRazend(raid, gaveVan(raid.vijand?.key)) });
+    const kop = heling ? `De Kroket God heelt: +${bedrag} HP` : `Een bliksem van de Kroket God: −${Math.min(bedrag, hpVoor)} HP${raid.hp <= 0 ? ', de genadeslag' : ''}`;
+    if (raid.hp <= 0) {
+      raid.actief = false;
+      writeJSON('bamischijf.json', raid);
+      await updateRaidBericht(client, raid);
+      await postToChannel(client, kanaal, `⚡💥 *DE KROKET GOD SLAAT TOE* — −${bedrag} HP. ${naam} valt!`);
+      await vijandGifVoorDeOverwinning(stuurVijandGif(client, raid, film, kop));
+      await beslechtBamischijfOverwinning(client, kanaal, raid, null, { knal: false, genadeslagNaam: 'de Kroket God' });
+      return { tekst: null };
+    }
+    writeJSON('bamischijf.json', raid);
+    await updateRaidBericht(client, raid);
+    stuurVijandGif(client, raid, film, kop);
+    return { feiten: heling
+      ? `De Kroket God heelt ${naam} met ${bedrag} HP (nu ${raid.hp}/${raid.maxHp}): hij viel te snel, de strijd moet nog even duren.`
+      : `Een bliksemschicht van de Kroket God treft ${naam}: −${bedrag} HP (nu ${raid.hp}/${raid.maxHp}). Het telt voor geen enkel lid.` };
+  },
   gunst_stil: async (client, keuze, stand, nu) => {
     const id = zetRegieKnop(`gunst_${keuze.doel}_${nu}`, 'gunst', 60, { doel: keuze.doel }, nu);
     return { tekst: `🔱 <@${keuze.doel}>, de Kroket God dacht aan u. Een kleine gunst: druk binnen een uur op de knop en u krijgt *2 kroketpunten*.`,
@@ -14378,7 +14416,7 @@ planCron('*/20 8-17 * * 1-5', async () => {
 }, { timezone: 'Europe/Amsterdam' });
 
 // De rooktests (scripts/rooktest/) komen zo bij de regisseur.
-if (process.env.KROKET_ROOKTEST) module.exports = { bouwDashboardData, voerDashboardActie, saveInstellingen, casinoOpen, regieTik, bouwRegieStand, voerIngreepUit, UITVOERDERS, regieStaat, bewaarRegie, mogAutonoomPosten, werkdagenStil, casinoToegangReden, casinoMax, casinoPlafond, boekCasinoUitslag, casinoOpen, sluitGeleKaartPoll, voerDuel, voerEer, winkelPrijs, prijsRedenen, prijsToelichting, CRON_LABELS, geplandeCronMeta };
+if (process.env.KROKET_ROOKTEST) module.exports = { voerBamischijfAanval, bouwDashboardData, voerDashboardActie, saveInstellingen, casinoOpen, regieTik, bouwRegieStand, voerIngreepUit, UITVOERDERS, regieStaat, bewaarRegie, mogAutonoomPosten, werkdagenStil, casinoToegangReden, casinoMax, casinoPlafond, boekCasinoUitslag, casinoOpen, sluitGeleKaartPoll, voerDuel, voerEer, winkelPrijs, prijsRedenen, prijsToelichting, CRON_LABELS, geplandeCronMeta };
 
 // Wat het dashboard over het casino laat zien (bouwDashboardData) en kan (/api/casino).
 function casinoDashboardData(naam) {
