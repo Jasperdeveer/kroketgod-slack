@@ -9913,13 +9913,9 @@ const CRON_LABELS = {
   '30 9 * * 5':      { label: 'Grote Veiling (opening)' },
   '45 14 * * 5':     { label: 'Grote Veiling (hamer)' },
   // Kansgebaseerd/willekeurig (komen soms wel, soms niet):
-  '30 7 * * 1-5':    { label: 'Kroketfeitje' },
-  '0 10 * * 2,4':    { label: 'Spontane post' },
-  '0 14 * * 2,4':    { label: 'Spontane post' },
   '30 9 * * 1':      { label: 'Weekvijand (opkomst)' },
   '0 11 * * 3':      { label: 'Premiejacht (kans)' },
   '0 11 * * 4':      { label: 'Het Verhoor' },
-  '30 16 * * 2':     { label: 'Casinoroddel' },
   '*/20 8-17 * * 1-5': { label: 'Regisseur (kans)' },
   '0 16 * * 5':      { label: 'Frituurloterij (trekking)' },
   '20 9 * * 1':      { label: 'Kroketkroniek' },
@@ -10276,10 +10272,10 @@ planCron('2 12 * * *', async () => {
   }
 }, { timezone: 'Europe/Amsterdam' });
 
-// ── Cron: spontane berichten (di/do om 10:00 en 14:00, 50% kans) ─────────────
+// ── Spontane gedachte van de Kroket God (de regisseur-praatje 'gedachte') ─────
+// Geeft de tekst terug en post niets; de kans- en dagregels liggen bij de regisseur.
 
-async function maybeSpontaan() {
-  if (Math.random() > 0.5) return;
+async function maakSpontaan() {
   try {
     // 20% kans: refereer aan een actief verbannen lid als afvallige
     const actiefVerbannen = Object.entries(loadVerbanning())
@@ -10291,14 +10287,13 @@ async function maybeSpontaan() {
       const thema = `Refereer terloops aan de afvallige ${bijnaam} die momenteel verbannen is (nog ${nogDagen} dag(en)). ` +
         `Spreek over hen in de derde persoon — minachtend maar waardig, met een vleugje medelijden. ` +
         `Hint naar mogelijke terugkeer als zij berouw tonen. Geen inleidingszin.`;
-      await postToChannel(app.client, process.env.SLACK_CHANNEL_ID, await kroketResponse(thema, 300, false));
-      return;
+      return await kroketResponse(thema, 300, false);
     }
 
     if (Math.random() < 0.65) {
       const positief = Math.random() < 0.5;
       const uitverkorene = getUitverkorene(positief);
-      if (!uitverkorene) return;
+      if (!uitverkorene) return null;
       const naam = uitverkorene[1].bijnaam;
 
       const positieveThemas = [
@@ -10322,17 +10317,18 @@ async function maybeSpontaan() {
 
       const themas = positief ? positieveThemas : kritiekeThemas;
       const thema = themas[Math.floor(Math.random() * themas.length)];
-      await postToChannel(app.client, process.env.SLACK_CHANNEL_ID, await kroketResponse(thema, 350, false));
+      return await kroketResponse(thema, 350, false);
     } else {
       // Deze tak verwijst naar géén enkel lid en naar geen enkele stand, en mag daarom uit De
       // Voorraadkelder komen (zie maakAlgemeneSpontanePost). De takken hierboven mogen dat
       // uitdrukkelijk niet: die noemen namen en verbanningen, en die zijn vannacht anders.
       const uitKelder = haalUitVoorraad('spontaan');
       const tekst = uitKelder ? uitKelder.tekst : await maakAlgemeneSpontanePost();
-      if (tekst) await postToChannel(app.client, process.env.SLACK_CHANNEL_ID, tekst);
+      return tekst;
     }
   } catch (error) {
     console.error('Fout bij spontaan bericht:', error);
+    return null;
   }
 }
 
@@ -10360,9 +10356,6 @@ async function maakAlgemeneSpontanePost() {
   const thema = SPONTANE_ALGEMENE_THEMAS[Math.floor(Math.random() * SPONTANE_ALGEMENE_THEMAS.length)];
   return await kroketResponse(thema, 350, false);
 }
-
-planCron('0 10 * * 2,4', maybeSpontaan, { timezone: 'Europe/Amsterdam' });
-planCron('0 14 * * 2,4', maybeSpontaan, { timezone: 'Europe/Amsterdam' });
 
 // ── Kroketfeitjes / mopjes / historische weetjes ──────────────────────────────
 
@@ -10465,34 +10458,6 @@ async function stuurMop(client, channelId = process.env.SLACK_CHANNEL_ID) {
     await postToChannel(client, channelId, tekst);
   }
 }
-
-function planKroketFeitje(client) {
-  const nu = new Date();
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'Europe/Amsterdam', hour: 'numeric', minute: 'numeric', second: 'numeric', hour12: false,
-  }).formatToParts(nu);
-  const get = (t) => parseInt(parts.find(p => p.type === t)?.value);
-  const amsUur = get('hour'), amsMin = get('minute'), amsSec = get('second');
-  const nuSec = amsUur * 3600 + amsMin * 60 + amsSec;
-
-  const VROEGST = 7 * 3600 + 30 * 60;  // 07:30
-  const LATEST  = 15 * 3600;            // 15:00
-  const vanafSec = Math.max(nuSec + 60, VROEGST);
-  if (vanafSec >= LATEST) return;
-
-  const doelSec = vanafSec + Math.floor(Math.random() * (LATEST - vanafSec));
-  const delayMs = (doelSec - nuSec) * 1000;
-
-  const dUur = Math.floor(doelSec / 3600);
-  const dMin = String(Math.floor((doelSec % 3600) / 60)).padStart(2, '0');
-  console.log(`🧆 Kroketfeitje gepland voor ~${dUur}:${dMin} AMS`);
-  setTimeout(() => stuurKroketFeitje(client, process.env.SLACK_CHANNEL_ID, { uitVoorraad: true }), delayMs);
-}
-
-// Weekdagen 07:30 — 60% kans op een kroketfeitje die dag
-planCron('30 7 * * 1-5', () => {
-  if (Math.random() < 0.60) planKroketFeitje(app.client);
-}, { timezone: 'Europe/Amsterdam' });
 
 // ── Weekoverzicht: vrijdag 15:00 ──────────────────────────────────────────────
 
@@ -12358,6 +12323,9 @@ async function voerDuel(client, userId, doelId, channelId, wapenId = null) {
   await telActie(client, userId, 'duel', 1, naspel);
   await telActie(client, doelId, 'duel', 1, naspel);
   await telActie(client, winId, 'duel_gewonnen', 1, naspel);
+  // De uitdaging van de regisseur (hekkensluiter wint van de koploper): mag het duel nooit breken.
+  try { const regel = regieUitdagingUitslag(winId, verliesId); if (regel) naspelRegel(naspel, regel); }
+  catch (err) { console.error('Fout bij de uitdaging van de regisseur:', err?.message || err); }
   // Alles wat hierboven iets meldde, in één antwoord in de thread onder het vonnis.
   await postNaspel(client, channelId, hoofd?.ts, naspel);
   return { ok: true, tekst: `⚔️ _Het duel is beslecht: *${winNaam}* won. Zie het kanaal voor het vonnis._` };
@@ -14053,10 +14021,10 @@ function casinoWeekRegel() {
   return `\n\n🎰 _Casino deze week: ${w.spellen} ${w.spellen === 1 ? 'spel' : 'spellen'}, ${huis}${w.netto ? ' kroketpunten' : ''}._${winst}`;
 }
 
-// ── Cron: dinsdag 16:30 — gefluister uit het casino ────────────────────────────
+// ── Gefluister uit het casino (het regisseur-praatje 'casinoroddel') ──────────
 // Vier willekeurige feiten over de afgelopen zeven dagen (lib/casinostats.js), buiten het taalmodel
-// om: de cijfers moeten kloppen en de weekrede zit al tegen Groqs plafond. Dinsdag, want vrijdag
-// heeft het weekoverzicht al zijn vaste casinoregel. Alleen als er genoeg te vertellen is.
+// om: de cijfers moeten kloppen en de weekrede zit al tegen Groqs plafond. Vrijdag heeft het weekoverzicht al
+// zijn vaste casinoregel. Null als er te weinig te vertellen is.
 const CASINO_RODDEL_MIN_SPELLEN = 5;
 function casinoRoddel(rnd = Math.random) {
   const dag = dagSleutel();
@@ -14068,14 +14036,6 @@ function casinoRoddel(rnd = Math.random) {
   const huis = sam.netto < 0 ? `het huis won ${-sam.netto} punten` : sam.netto > 0 ? `het huis verloor ${sam.netto} punten` : 'het huis speelde quitte';
   return `🎰 *Gefluister uit het Casino van de Kroket God*\n_De croupiers praten. Afgelopen zeven dagen: ${sam.spellen} spellen, ${huis}._\n\n${regels.join('\n')}`;
 }
-
-planCron('30 16 * * 2', async () => {
-  try {
-    if (!casinoOpen() || instelling('stilModus') || instelling('alleenTestkanaal')) return;
-    const tekst = casinoRoddel();
-    if (tekst) await postToChannel(app.client, KANAAL(), tekst);
-  } catch (err) { console.error('Fout bij de casinoroddel:', err); }
-}, { timezone: 'Europe/Amsterdam' });
 
 // ── Cron: vrijdag 16:00 — de trekking van de Frituurloterij ───────────────────
 // Na het weekoverzicht van 15:00. Eerst opslaan en uitbetalen, dan posten: een mislukte post mag de
@@ -14194,6 +14154,75 @@ function regieEffect(soort, duurMinuten, data = {}) {
   bewaarRegie(regie.voegEffectToe(regieStaat(), effect));
   return effect;
 }
+
+// Knopstaat van de regisseur (gunst, uitdaging): een effect in regie.json met een eigen `soort` en `data`, dus
+// ook na een herstart nog geldig. `id` staat als waarde op de knop.
+const regieKnop = (id, soort, nu = Date.now()) => regieStaat().effecten.find((e) => e.id === id && e.soort === soort && e.tot > nu) || null;
+function zetRegieKnop(id, soort, duurMinuten, data, nu) {
+  bewaarRegie(regie.voegEffectToe(regieStaat(), { id, soort, tot: nu + duurMinuten * 60_000, data: { ...data, gebruikt: false } }));
+  return id;
+}
+function verbruikRegieKnop(id) {
+  const s = regieStaat();
+  bewaarRegie({ ...s, effecten: s.effecten.map((e) => (e.id === id ? { ...e, data: { ...e.data, gebruikt: true } } : e)) });
+}
+// Een uitbetaling achteraf (regel P16): op het moment van uitbetalen begrensd tegen de ruimte van nu, eerst uit de
+// Schatkist, geboekt als nawerking. Geeft het echt uitbetaalde bedrag terug (0 = geen ruimte).
+function betaalNawerking({ nu = Date.now(), id, doel, punten }) {
+  const n = Math.min(punten, regie.ruimte(regieStaat(), nu).geven);
+  if (n <= 0) return 0;
+  bewaarRegie(regie.boekNawerking(regie.betaal(regieStaat(), n).staat, { nu, id, doel, punten: n }));
+  pasScoreAan(doel, n);
+  return n;
+}
+const REGIE_GEEN_RUIMTE = '_De Kroket God heeft vandaag al genoeg weggegeven. Probeer het later nog eens._';
+const regieKnopTekst = (tekst, action_id, value, style = 'primary') => [{ type: 'button', action_id, value, style, text: { type: 'plain_text', text: tekst } }];
+
+// De duelhaak van de uitdaging: wint de hekkensluiter van de koploper binnen de looptijd, dan 3 punten, één keer.
+// Geeft een regel voor het naspel van het duel, of null.
+function regieUitdagingUitslag(winId, verliesId, nu = Date.now()) {
+  const knop = regieStaat().effecten.find((e) => e.soort === 'uitdaging' && e.tot > nu && !e.data.gebruikt
+    && e.data.hekkensluiter === winId && e.data.koploper === verliesId);
+  if (!knop) return null;
+  const n = betaalNawerking({ nu, id: 'koploper_uitdagen', doel: winId, punten: 3 });
+  if (!n) return REGIE_GEEN_RUIMTE;
+  verbruikRegieKnop(knop.id);
+  logAudit('regie', `koploper_uitdagen: hekkensluiter ${winId} won van de koploper (+${n})`);
+  return `🔱 De hekkensluiter versloeg de koploper binnen de uitdaging: ${n} extra punt${n === 1 ? '' : 'en'} van de Kroket God.`;
+}
+
+app.action('regie_gunst', async ({ ack, body, action, client }) => {
+  await ack();
+  const nu = Date.now();
+  const zeg = (text) => client.chat.postEphemeral({ channel: body.channel?.id || KANAAL(), user: body.user.id, text }).catch(() => {});
+  const knop = regieKnop(action.value, 'gunst', nu);
+  if (!knop) return zeg('_Deze gunst is verlopen: de Kroket God vergeet snel._');
+  if (knop.data.doel !== body.user.id) return zeg('_Deze gunst is voor iemand anders bedoeld._');
+  if (knop.data.gebruikt) return zeg('_U heeft deze gunst al opgeëist._');
+  const n = betaalNawerking({ nu, id: 'gunst_stil', doel: body.user.id, punten: 2 });
+  if (!n) return zeg(REGIE_GEEN_RUIMTE);
+  verbruikRegieKnop(knop.id);
+  logAudit('regie', `gunst_stil: ${body.user.id} eiste de gunst op (+${n})`);
+  return zeg(`🔱 De Kroket God schenkt u *${n} kroketpunt${n === 1 ? '' : 'en'}*. Laat u vaker zien.`);
+});
+
+app.action('regie_uitdaging', async ({ ack, body, action, client }) => {
+  await ack();
+  const nu = Date.now();
+  const zeg = (text) => client.chat.postEphemeral({ channel: body.channel?.id || KANAAL(), user: body.user.id, text }).catch(() => {});
+  const knop = regieKnop(action.value, 'uitdaging', nu);
+  if (!knop) return zeg('_Deze uitdaging is verlopen._');
+  if (knop.data.koploper !== body.user.id) return zeg('_Deze uitdaging is alleen voor de koploper._');
+  if (knop.data.gebruikt) return zeg('_Deze uitdaging is al beslecht._');
+  // Het gewone duelpad: duelverbod, daglimiet en alle andere regels gelden gewoon; de haak in voerDuel betaalt.
+  const uit = await voerDuel(client, body.user.id, knop.data.hekkensluiter, KANAAL());
+  return zeg(uit.tekst);
+});
+
+const praatjeTekst = async (maak) => {
+  try { return { tekst: (await maak()) || null }; }
+  catch (err) { console.error('Fout bij een praatje:', err?.message || err); return { tekst: null }; }
+};
 const UITVOERDERS = {
   huis_geeft: async () => {
     voerCasinoBeheerUit({ soort: 'bonus', aantal: casinoBonusVandaag() + 3 });
@@ -14227,6 +14256,34 @@ const UITVOERDERS = {
     regieEffect('dubbeleEer', keuze.duurMinuten || 60);
     return { feiten: 'Een uur lang telt elke eer één klasse hoger, voor iedereen.' };
   },
+  gunst_stil: async (client, keuze, stand, nu) => {
+    const id = zetRegieKnop(`gunst_${keuze.doel}_${nu}`, 'gunst', 60, { doel: keuze.doel }, nu);
+    return { tekst: `🔱 <@${keuze.doel}>, de Kroket God dacht aan u. Een kleine gunst: druk binnen een uur op de knop en u krijgt *2 kroketpunten*.`,
+      knoppen: regieKnopTekst('Eis de gunst op', 'regie_gunst', id) };
+  },
+  koploper_uitdagen: async (client, keuze, stand, nu) => {
+    const r = stand.leden.filter((l) => !l.gast && !l.verbannen && !l.afwezig).sort((a, b) => b.score - a.score);
+    const [kop, hek] = [r[0].id, r[r.length - 1].id];
+    const duur = keuze.duurMinuten || 120;
+    const id = zetRegieKnop(`uitdaging_${nu}`, 'uitdaging', duur, { koploper: kop, hekkensluiter: hek }, nu);
+    return { tekst: `🔱 <@${kop}>, u staat bovenaan en dat is aan de Kroket God niet ontgaan. Daag <@${hek}> uit voor een duel, binnen ${duur / 60} uur (tot ${hhmmAms(nu + duur * 60_000)}). Wint <@${hek}>, dan krijgt die *3 punten* van de Kroket God.`,
+      knoppen: regieKnopTekst('Daag de hekkensluiter uit', 'regie_uitdaging', id) };
+  },
+  loterij_gevuld: async (client, keuze, stand, nu) => {
+    // Geen lot op naam van een lid (dat vergroot zijn kans): de pot krijgt een bonus (lib/loterij.js).
+    const loterij = loadLoterij();
+    const uit = regie.betaal(regieStaat(), Math.min(keuze.punten, regie.ruimte(regieStaat(), nu).geven));
+    const n = uit.uitSchatkist + uit.geschapen;
+    if (n > 0) {
+      bewaarRegie(uit.staat);
+      writeJSON('loterij.json', { ...loterij, bonus: (loterij.bonus || 0) + n });
+    }
+    return { punten: n, tekst: n > 0 ? `🎟️ De Kroket God gooit ${n} punt${n === 1 ? '' : 'en'} in de pot van de Frituurloterij: die staat nu op *${loterijStand(loadLoterij(), null, dagSleutel()).pot}*. Vrijdag om 16:00 wordt er getrokken.` : null };
+  },
+  // Een praatje dat geen tekst oplevert (LLM-keten plat) post niets maar wordt wel geboekt: anders probeert elke tik opnieuw.
+  casinoroddel: async () => praatjeTekst(async () => casinoRoddel() || haalUitVoorraad('feitje')?.tekst || await maakKroketFeitje()),
+  kroketfeitje: async () => praatjeTekst(async () => haalUitVoorraad('feitje')?.tekst || await maakKroketFeitje()),
+  gedachte: async () => praatjeTekst(maakSpontaan),
   belasting: async (client, keuze, stand, nu) => neemVoorSchatkist(keuze, nu),
   beslag: async (client, keuze, stand, nu) => neemVoorSchatkist(keuze, nu),
   schorsing: async (client, keuze, stand, nu) => {
@@ -14274,9 +14331,10 @@ async function voerIngreepUit(client, keuze, stand, nu = Date.now()) {
     (straf ? 'Dit is een straf: noem de reden uitdrukkelijk.\n' : '') +
     (uit.afgeketst ? 'De straf is niet aangekomen: spot daarmee en noem geen reden alsof het lid gestraft is.\n' : '') +
     'Voeg geen punten, namen of feiten toe die hierboven niet staan.';
-  const tekst = await kroketResponseMetVangnet(prompt, 200, false, vangnet, 'licht');
+  // Een uitvoerder mag `tekst` teruggeven: die staat dan letterlijk in het kanaal, zonder aankondiging (praatjes, knopberichten).
+  const tekst = uit.tekst !== undefined ? uit.tekst : await kroketResponseMetVangnet(prompt, 200, false, vangnet, 'licht');
   // Het effect is al gebeurd: boeken gaat altijd door, ook als de post faalt (anders komt dezelfde ingreep terug).
-  try { await postToChannel(client, KANAAL(), tekst, uit.knoppen ? { knoppen: uit.knoppen } : {}); }
+  try { if (tekst) await postToChannel(client, KANAAL(), tekst, uit.knoppen ? { knoppen: uit.knoppen } : {}); }
   catch (err) { console.error(`Fout bij het aankondigen van ${ingreep.id}:`, err?.message || err); }
   const geboekt = uit.schorsing === false ? { ...keuze, ingreep: { ...ingreep, schorsing: false } } : keuze;
   bewaarRegie(regie.boek(regieStaat(), geboekt, { nu, punten }));
@@ -14304,7 +14362,7 @@ planCron('*/20 8-17 * * 1-5', async () => {
 }, { timezone: 'Europe/Amsterdam' });
 
 // De rooktests (scripts/rooktest/) komen zo bij de regisseur.
-if (process.env.KROKET_ROOKTEST) module.exports = { regieTik, bouwRegieStand, voerIngreepUit, UITVOERDERS, regieStaat, bewaarRegie, mogAutonoomPosten, werkdagenStil, casinoToegangReden, casinoMax, casinoPlafond, boekCasinoUitslag, casinoOpen, sluitGeleKaartPoll, voerDuel, voerEer, winkelPrijs, prijsRedenen, prijsToelichting };
+if (process.env.KROKET_ROOKTEST) module.exports = { regieTik, bouwRegieStand, voerIngreepUit, UITVOERDERS, regieStaat, bewaarRegie, mogAutonoomPosten, werkdagenStil, casinoToegangReden, casinoMax, casinoPlafond, boekCasinoUitslag, casinoOpen, sluitGeleKaartPoll, voerDuel, voerEer, winkelPrijs, prijsRedenen, prijsToelichting, CRON_LABELS, geplandeCronMeta };
 
 // Wat het dashboard over het casino laat zien (bouwDashboardData) en kan (/api/casino).
 function casinoDashboardData(naam) {

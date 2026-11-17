@@ -38,6 +38,7 @@ module.exports = async function harnas(test, { opstartMs = 2500 } = {}) {
 
   const posts = [];
   const updates = [];
+  const ephemeral = []; // chat.postEphemeral: { user, text }
   const views = []; // client.views.* aanroepen: { fn, args }
   const handlers = { action: [], command: {} };
   let tsTeller = 1000;
@@ -46,6 +47,7 @@ module.exports = async function harnas(test, { opstartMs = 2500 } = {}) {
     if (ns === 'chat' && fn === 'postMessage' && schakel.faalPost) throw new Error('nep-429: post mislukt');
     if (ns === 'chat' && fn === 'postMessage') posts.push({ text: args.text, blocks: args.blocks, thread: args.thread_ts || null, ts: String(++tsTeller) });
     if (ns === 'chat' && fn === 'update') updates.push(args);
+    if (ns === 'chat' && fn === 'postEphemeral') ephemeral.push({ user: args.user, text: args.text });
     if (ns === 'views') views.push({ fn, args });
     return { ok: true, ts: String(tsTeller), channel: 'CKANAAL', user_id: 'UBOT', view: { id: 'V1' }, members: ['UA', 'UB', 'UC', 'UD', 'UE', 'UF'], channels: [], user: { profile: {} }, response_metadata: {} };
   } }) });
@@ -78,7 +80,7 @@ module.exports = async function harnas(test, { opstartMs = 2500 } = {}) {
   const index = require(path.join(repo, 'index.js'));
   await wacht(opstartMs);
   try {
-    await test({ klik, commando, lees, schrijf, posts, updates, views, ok, wacht, client, index, state, uitmap, r2, handlers, schakel });
+    await test({ klik, commando, lees, schrijf, posts, updates, ephemeral, views, ok, wacht, client, index, state, uitmap, r2, handlers, schakel });
   } catch (err) { console.error('FOUT', err); process.exitCode = 1; }
   process.exit();
 };
