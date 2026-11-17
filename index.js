@@ -1382,7 +1382,7 @@ function markeerHomeVerouderd(userId) {
   if (!userId || !isReady || homeVerversWachtrij.has(userId)) return;
   homeVerversWachtrij.set(userId, setTimeout(() => {
     homeVerversWachtrij.delete(userId);
-    if (loadMembers()[userId]) publiceerAppHome(app.client, userId).catch(() => {});
+    if (loadMembers()[userId]) publiceerHome(app.client, userId).catch(() => {});
   }, HOME_VERVERS_VERTRAGING_MS));
 }
 
@@ -3797,7 +3797,7 @@ app.view('modal_verborgenhand', async ({ ack, body, view, client }) => {
   try { await spreekVerborgenHand(client, KANAAL(), keuze); }
   catch (err) { console.error('⚠️ Uitspraak van de Verborgen Hand mislukt:', err.message); }
   await sluitUitnodiging(meta.responseUrl);
-  await publiceerAppHome(client, userId, PERKAMENT_VERZEGELD);
+  await publiceerHome(client, userId, PERKAMENT_VERZEGELD);
   updateWereldbord(client).catch(() => {}); // het decreet staat op het bord
 });
 
@@ -8167,13 +8167,13 @@ app.action(/^gast_vasthouden_\d+$/, async ({ ack, body, action, client }) => {
     if (!lid || isVerbannen(userId)) return;
     const personas = loadPersonas();
     const toets = toetsVasthouden({ id: action.value, personas, saldo: loadScores()[userId] || 0 });
-    if (!toets.ok) { await publiceerAppHome(client, userId, `_${ontsnapMrkdwn(toets.reden)}_`); return; }
+    if (!toets.ok) { await publiceerHome(client, userId, `_${ontsnapMrkdwn(toets.reden)}_`); return; }
     const id = action.value;
     pasScoreAan(userId, -GAST_KOSTEN_VASTHOUDEN);
     personas[id] = { ...personas[id], vertrekOp: verlengdVertrek(personas[id]) };
     savePersonas(personas);
     logAudit('persona', `${personas[id].naam} (${id}) een werkdag langer vastgehouden door ${lid.bijnaam}`);
-    await publiceerAppHome(client, userId, `🔒 *${ontsnapMrkdwn(personas[id].naam)} blijft een werkdag langer.* Er gingen ${GAST_KOSTEN_VASTHOUDEN} kroketpunten af.`);
+    await publiceerHome(client, userId, `🔒 *${ontsnapMrkdwn(personas[id].naam)} blijft een werkdag langer.* Er gingen ${GAST_KOSTEN_VASTHOUDEN} kroketpunten af.`);
     await laatGastBlijven(client, { id, ...personas[id] }, lid.bijnaam);
   } catch (err) { console.error('Fout bij gast vasthouden:', err.data?.error || err.message); }
 });
@@ -8195,11 +8195,11 @@ app.action('gast_wens', async ({ ack, body, action, client }) => {
     if (!loadMembers()[userId] || isVerbannen(userId)) return;
     const id = action.selected_option?.value;
     const p = loadPersonas()[id];
-    if (!p || p.actief !== false || p.alleenVoorLid) { await publiceerAppHome(client, userId, '_Die gast is er al, of bestaat niet meer._'); return; }
+    if (!p || p.actief !== false || p.alleenVoorLid) { await publiceerHome(client, userId, '_Die gast is er al, of bestaat niet meer._'); return; }
     daggastenVandaag(); // eerst het lot van vandaag trekken, anders schuift deze wens de oudere een dag op
     const w = readJSON('gastwensen.json', {});
     writeJSON('gastwensen.json', { dag: dagSleutel(), wensen: { ...(w.wensen || {}), [userId]: id } });
-    await publiceerAppHome(client, userId, `🎲 *Genoteerd: u wenst ${ontsnapMrkdwn(p.naam)}.* Het lot van de volgende werkdag weegt uw wens mee, maar beslist zelf.`);
+    await publiceerHome(client, userId, `🎲 *Genoteerd: u wenst ${ontsnapMrkdwn(p.naam)}.* Het lot van de volgende werkdag weegt uw wens mee, maar beslist zelf.`);
   } catch (err) { console.error('Fout bij wens voor het lot:', err.data?.error || err.message); }
 });
 
@@ -13540,7 +13540,7 @@ function voerCasinoZetUit(userId, meta, soort, zet, waarde) {
 // Na het sluiten staan saldo en spellen in de Home-tab weer goed.
 app.view({ callback_id: 'modal_casino', type: 'view_closed' }, async ({ ack, body, client }) => {
   await ack();
-  await publiceerAppHome(client, body.user.id).catch(err => console.warn('⚠️ Home na het casino verversen mislukt:', err.message));
+  await publiceerHome(client, body.user.id).catch(err => console.warn('⚠️ Home na het casino verversen mislukt:', err.message));
 });
 
 // De knop in de Home-tab. Op een rustdag geen venster maar de toespraak, bovenaan de Home.
@@ -13549,8 +13549,8 @@ app.action('open_casino', async ({ ack, body, client }) => {
   const userId = body.user.id;
   try {
     const reden = casinoToegangReden(userId);
-    if (reden) await publiceerAppHome(client, userId, `_${reden}_`);
-    else if (opGokpauze(userId)) await publiceerAppHome(client, userId, await gokpauzeToespraak(userId, 'het casino binnen te lopen'));
+    if (reden) await publiceerHome(client, userId, `_${reden}_`);
+    else if (opGokpauze(userId)) await publiceerHome(client, userId, await gokpauzeToespraak(userId, 'het casino binnen te lopen'));
     else await openCasino(client, body.trigger_id, userId);
   } catch (err) { console.error('Fout bij de casinoknop:', err.data?.error || err.message); }
 });
@@ -14594,7 +14594,7 @@ async function voerRitueelUit(client, { userId, ritueel, rest, channelId, respon
 
 
 // De rooktests (scripts/rooktest/) komen zo bij de regisseur.
-if (process.env.KROKET_ROOKTEST) module.exports = { startStilleMissie, dagSleutel, stadKeuzes, voegToeAanArchief, regieKlok, voerOffer, voerBamischijfAanval, bouwDashboardData, voerDashboardActie, saveInstellingen, casinoOpen, regieTik, bouwRegieStand, voerIngreepUit, UITVOERDERS, regieStaat, bewaarRegie, stemZaak, sluitZaak, mogAutonoomPosten, werkdagenStil, casinoToegangReden, casinoMax, casinoPlafond, boekCasinoUitslag, sluitGeleKaartPoll, startGeleKaartPoll, voerDuel, voerEer, winkelPrijs, prijsRedenen, prijsToelichting, CRON_LABELS, geplandeCronMeta, BINGO_POOL, bouwDossierBlok, voerRitueelUit, raadpleegStaat, bewaarRaadpleeg, bouwAppHomeBlocks, bouwNaslagVenster, kapHomeBlocks, stemTribunaal, vollooiMissie, telActie, getMondayOfWeek, kiesOpdrachten, opdrachtHaalbaar, opdrachtTekst, opdrachtPool, alleOpdrachten, kenAlliantiePuntenBonus, draagBijAanSeizoen, bedelUitkomst, legDagstandVast };
+if (process.env.KROKET_ROOKTEST) module.exports = { startStilleMissie, dagSleutel, stadKeuzes, voegToeAanArchief, regieKlok, voerOffer, voerBamischijfAanval, bouwDashboardData, voerDashboardActie, saveInstellingen, casinoOpen, regieTik, bouwRegieStand, voerIngreepUit, UITVOERDERS, regieStaat, bewaarRegie, stemZaak, sluitZaak, mogAutonoomPosten, werkdagenStil, casinoToegangReden, casinoMax, casinoPlafond, boekCasinoUitslag, sluitGeleKaartPoll, startGeleKaartPoll, voerDuel, voerEer, winkelPrijs, prijsRedenen, prijsToelichting, CRON_LABELS, geplandeCronMeta, BINGO_POOL, bouwDossierBlok, voerRitueelUit, raadpleegStaat, bewaarRaadpleeg, bouwAppHomeBlocks, bouwNaslagVenster, kapHomeBlocks, stemTribunaal, vollooiMissie, telActie, getMondayOfWeek, kiesOpdrachten, opdrachtHaalbaar, opdrachtTekst, opdrachtPool, alleOpdrachten, kenAlliantiePuntenBonus, draagBijAanSeizoen, bedelUitkomst, legDagstandVast, bouwAppHome2Blocks, publiceerHome, homeKrijgt2, homeKaart };
 
 // Wat het dashboard over het casino laat zien (bouwDashboardData) en kan (/api/casino).
 function casinoDashboardData(naam) {
@@ -15613,7 +15613,7 @@ app.view('modal_gunst', async ({ ack, body, view, client }) => {
   try {
     const doelId = view.state.values.doelwit?.keuze?.selected_option?.value;
     const uitkomst = await voerGunst(client, body.user.id, doelId, KANAAL());
-    await publiceerAppHome(client, body.user.id, uitkomst.tekst);
+    await publiceerHome(client, body.user.id, uitkomst.tekst);
   } catch (err) { console.error('Fout bij gunst-modal:', err); }
 });
 
@@ -15624,7 +15624,7 @@ registreerFeature({
   homeOrde: 7,
   home: ({ userId, members }) => {
     const rijen = bladzijdenVan(loadPaarboek(), userId, Object.keys(members));
-    if (!rijen.length) return []; // open claims staan in UW BEURT (claimBlokken)
+    if (!rijen.length) return []; // open claims staan in UW BEURT (claimItem)
 
     const blocks = [...homeKaartKop('📖 DE BLADZIJDE')];
     blocks.push({ type: 'section', text: { type: 'mrkdwn', text:
@@ -15665,7 +15665,7 @@ app.action(/^claim_(vergeven|vergelden|laten)_/, async ({ ack, body, client }) =
     // daglimiet, waar de teller ná de Slack-I/O stond.
     const r = sluitClaim(loadClaims(), userId, daderId, keuze, Date.now());
     if (!r.gewijzigd) {
-      await publiceerAppHome(client, userId, '_Die keuze is al gemaakt, of de termijn is verstreken._');
+      await publiceerHome(client, userId, '_Die keuze is al gemaakt, of de termijn is verstreken._');
       return;
     }
     saveClaims(r.claims);
@@ -15687,7 +15687,7 @@ app.action(/^claim_(vergeven|vergelden|laten)_/, async ({ ack, body, client }) =
       melding = `_U laat het liggen. De bladzijde slijt vanzelf._`;
     }
     logGebeurtenis('claim', userId, `${members[userId]?.bijnaam || userId} koos "${keuze}" tegenover ${daderNaam}`, null, daderId);
-    await publiceerAppHome(client, userId, melding);
+    await publiceerHome(client, userId, melding);
   } catch (err) { console.error('Fout bij claim-knop:', err.data?.error || err.message); }
 });
 
@@ -15771,7 +15771,7 @@ app.action(/^handdruk_/, async ({ ack, body, client }) => {
   try {
     const doelId = body.actions[0].action_id.replace(/^handdruk_/, '');
     const uitkomst = legHanddruk(body.user.id, doelId);
-    await publiceerAppHome(client, body.user.id, uitkomst.tekst);
+    await publiceerHome(client, body.user.id, uitkomst.tekst);
   } catch (err) { console.error('Fout bij handdruk:', err.data?.error || err.message); }
 });
 
@@ -18668,31 +18668,26 @@ function opdrachtRegelsCompact(userId) {
 }
 
 // De knoppen van een open claim op de bladzijde (zelfde action_id's als voorheen).
-function claimBlokken(c, members, nu) {
+function claimItem(c, members, nu) {
   const urenOver = Math.max(1, Math.round((CLAIM_GELDIG_MS - (nu - c.ts)) / 3_600_000));
-  return [
-    { type: 'section', text: { type: 'mrkdwn', text: `📖 *${members[c.dader]?.bijnaam || 'een volgeling'}* deed u iets aan (${CLAIM_AANLEIDING[c.soort] || c.soort}). Nog ${urenOver} uur om te kiezen.` } },
-    { type: 'actions', elements: [
-      { type: 'button', text: { type: 'plain_text', text: '🕊️ Vergeven', emoji: true }, action_id: `claim_vergeven_${c.dader}`, style: 'primary' },
-      { type: 'button', text: { type: 'plain_text', text: '⚔️ Vergelden', emoji: true }, action_id: `claim_vergelden_${c.dader}` },
-      { type: 'button', text: { type: 'plain_text', text: '🤷 Laten liggen', emoji: true }, action_id: `claim_laten_${c.dader}` },
-    ] },
-  ];
+  const knop = (tekst, action_id, extra = {}) => ({ type: 'button', text: { type: 'plain_text', text: tekst, emoji: true }, action_id, ...extra });
+  return { tekst: `📖 *${members[c.dader]?.bijnaam || 'een volgeling'}* deed u iets aan (${CLAIM_AANLEIDING[c.soort] || c.soort}). Nog ${urenOver} uur om te kiezen.`, knoppen: [
+    knop('🕊️ Vergeven', `claim_vergeven_${c.dader}`, { style: 'primary' }),
+    knop('⚔️ Vergelden', `claim_vergelden_${c.dader}`),
+    knop('🤷 Laten liggen', `claim_laten_${c.dader}`),
+  ] };
 }
 
-// UW BEURT: opdrachten, wat op is, de actieknoppen, en elke actie met een deadline als regel met knop.
-// Niet voor verbannen leden: zij lezen alleen.
-function uwBeurtBlokken(userId, nu = Date.now()) {
-  if (isVerbannen(userId)) return [];
+// UW BEURT in delen: de opdrachtregels, de infoblokregels, de actieknoppen (met een statusregel per
+// action_id, voor de kaarten van Home 2.0) en de acties met een deadline als { tekst, knoppen, accessory }.
+// De klassieke Home (uwBeurtBlokken) en Home 2.0 tonen dezelfde delen, dus nooit een verschillende regel.
+function uwBeurtDelen(userId, nu = Date.now()) {
   const members = loadMembers();
   const eigenScore = loadScores()[userId] || 0;
   const vandaagKey = new Intl.DateTimeFormat('nl-NL', { timeZone: 'Europe/Amsterdam' }).format(new Date(nu));
   const week = getMondayOfWeek();
   const naam = (id) => members[id]?.bijnaam || 'een volgeling';
   const knop = (tekst, action_id, extra = {}) => ({ type: 'button', text: { type: 'plain_text', text: tekst.slice(0, 75), emoji: true }, action_id, ...extra });
-  const regel = (tekst, accessory) => ({ type: 'section', text: { type: 'mrkdwn', text: kapTekst(tekst, 3000) }, ...(accessory ? { accessory } : {}) });
-  const blocks = [{ type: 'divider' },
-    regel(`*UW BEURT*\n${opdrachtRegelsCompact(userId).join('\n')}`)];
 
   // Wat op is en wat nog open staat bij de raadpleging: één grijze regel per soort.
   const statusNu = persoonlijkeStatus(userId);
@@ -18706,8 +18701,8 @@ function uwBeurtBlokken(userId, nu = Date.now()) {
     `🔱 *Raadpleeg de Kroket God* · _versie ${KROKETGOD_VERSIE}_ — ` +
       (openR.length ? `Vandaag nog: ${openR.join(' · ')}` : '_U heeft vandaag alles gevraagd. Morgen spreekt hij weer._'),
   ].filter(Boolean);
-  blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: info.join('\n') }] });
 
+  // De actieknoppen: dezelfde voorwaarden als voorheen.
   // De actieknoppen: dezelfde voorwaarden als voorheen, alleen in één rij samen.
   const cooldowns = readJSON('cooldowns.json', {});
   const duels = readJSON('duels.json', {});
@@ -18742,21 +18737,30 @@ function uwBeurtBlokken(userId, nu = Date.now()) {
   if (kvddNu?.ts && kvddNu.datum === new Date(nu).toISOString().slice(0, 10) && !(gokNu.ts === kvddNu.ts && gokNu.gokken?.[userId])) {
     acties.push(knop('🔮 Gokken', 'open_gok'));
   }
-  // Slack staat 25 elementen per actions-blok toe; de handdrukknoppen kunnen daar overheen.
-  for (let i = 0; i < acties.length; i += 25) blocks.push({ type: 'actions', elements: acties.slice(i, i + 25) });
+  const status = {
+    open_raadpleeg: openR.length ? `Vandaag nog: ${openR.join(' · ')}` : '',
+    open_duel: `Nog ${duelLimiet(userId) - duelsVandaag} duel${duelLimiet(userId) - duelsVandaag === 1 ? '' : 'len'} vandaag`,
+    open_roof: 'Eén roof per week',
+    open_offer: `Nog ${offerLimiet(userId) - offersVandaag} offer${offerLimiet(userId) - offersVandaag === 1 ? '' : 's'} vandaag`,
+    open_casino: 'Het casino is open',
+    open_eer: `Nog ${eerLimiet(userId) - telEerVandaag(userId)} keer eer geven vandaag`,
+    open_gunst: 'Een gunst naar keuze, op uw kosten',
+    open_visioen: 'Een visioen uit het Grote Vetbad',
+    open_bingo: 'Claim een vakje van de weekbingo',
+    open_gok: 'Gok op de Kroket van de Dag',
+  };
 
-  // ── Acties met een deadline: een regel met zijn bestaande knop(pen) ──
+  const items = [];
   const s = regieStaat();
   const v = s.verrassing;
   if (v?.id === 'hete_kroket' && v.data?.houder === userId && nu < v.data.deadline) {
-    blocks.push(regel(`🔥 *Hete Kroket:* u houdt hem vast. Geef hem door vóór ${hhmmAms(v.data.deadline)}, anders ontploft hij.`,
-      knop('Geef door', 'regie_hete_kroket', { style: 'danger', value: 'hete' })));
+    items.push({ tekst: `🔥 *Hete Kroket:* u houdt hem vast. Geef hem door vóór ${hhmmAms(v.data.deadline)}, anders ontploft hij.`, accessory: true,
+      knoppen: [knop('Geef door', 'regie_hete_kroket', { style: 'danger', value: 'hete' })] });
   }
   if (s.zaak && nu < s.zaak.sluitTs && s.zaak.doel !== userId) {
     const eigen = s.zaak.stemmen?.[userId];
-    blocks.push(regel(`⚖️ *Licht tribunaal* over ${naam(s.zaak.doel)} (${s.zaak.grond === 'ketterij' ? 'ketterij' : 'twee gele kaarten in dertig dagen'}), stem vóór ${hhmmAms(s.zaak.sluitTs)}.` +
-      `${eigen ? ` U stemde *${eigen === 'vrij' ? 'vrijspraak' : eigen}*, wijzigen kan.` : ''}`),
-    { type: 'actions', elements: [
+    items.push({ tekst: `⚖️ *Licht tribunaal* over ${naam(s.zaak.doel)} (${s.zaak.grond === 'ketterij' ? 'ketterij' : 'twee gele kaarten in dertig dagen'}), stem vóór ${hhmmAms(s.zaak.sluitTs)}.` +
+      `${eigen ? ` U stemde *${eigen === 'vrij' ? 'vrijspraak' : eigen}*, wijzigen kan.` : ''}`, knoppen: [
       knop('Boete', 'regie_zaak_boete', { value: s.zaak.id, style: 'danger' }),
       knop('Schandtitel', 'regie_zaak_titel', { value: s.zaak.id }),
       knop('Vrijspraak', 'regie_zaak_vrij', { value: s.zaak.id, style: 'primary' }),
@@ -18765,9 +18769,8 @@ function uwBeurtBlokken(userId, nu = Date.now()) {
   const tribunaal = readJSON('tribunaal.json', null);
   if (tribunaal && tribunaal.fase === 'stemming' && tribunaal.doelwitId !== userId) {
     const eigenStem = tribunaal.stemmen?.[userId];
-    blocks.push(regel(`⚖️ *Tribunaal der Vergetelheid:* beschuldigde ${naam(tribunaal.doelwitId)}. ` +
-      `${eigenStem ? `U stemde *${eigenStem}* (wijzigbaar, en geheim).` : 'U heeft nog niet gestemd.'}`),
-    { type: 'actions', elements: [
+    items.push({ tekst: `⚖️ *Tribunaal der Vergetelheid:* beschuldigde ${naam(tribunaal.doelwitId)}. ` +
+      `${eigenStem ? `U stemde *${eigenStem}* (wijzigbaar, en geheim).` : 'U heeft nog niet gestemd.'}`, knoppen: [
       knop('⚖️ Vóór verwijdering', 'tribunaal_voor', { style: 'danger' }),
       knop('🛡️ Tegen', 'tribunaal_tegen', { style: 'primary' }),
     ] });
@@ -18775,56 +18778,87 @@ function uwBeurtBlokken(userId, nu = Date.now()) {
   const poll = loadGeleKaartPoll();
   if (poll?.actief && poll.doelwitId !== userId) {
     // De stemming loopt met emoji-reacties op het bericht in het kanaal: er zijn geen knoppen.
-    blocks.push(regel(`🟨 *Gele-kaartstemming* over ${naam(poll.doelwitId)}, ${totTijd(poll.sluitTs)}. Stem met een reactie op het bericht in het kanaal.`));
+    items.push({ tekst: `🟨 *Gele-kaartstemming* over ${naam(poll.doelwitId)}, ${totTijd(poll.sluitTs)}. Stem met een reactie op het bericht in het kanaal.`, knoppen: [] });
   }
-  for (const c of openClaimsVan(loadClaims(), userId, nu)) blocks.push(...claimBlokken(c, members, nu));
+  for (const c of openClaimsVan(loadClaims(), userId, nu)) items.push(claimItem(c, members, nu));
   const vertrekkers = gastenVandaag().filter((g) => g.afscheid).slice(0, 4);
   if (vertrekkers.length) {
-    blocks.push(regel(`🚪 *Een gast neemt afscheid:* ${vertrekkers.map((g) => ontsnapMrkdwn(g.naam)).join(' · ')}. Houd hem een werkdag langer vast.`),
-      { type: 'actions', elements: vertrekkers.map((g, i) => knop(`🔒 Houd ${g.naam} vast (${GAST_KOSTEN_VASTHOUDEN} pt)`, `gast_vasthouden_${i}`, { value: g.id })) });
+    items.push({ tekst: `🚪 *Een gast neemt afscheid:* ${vertrekkers.map((g) => ontsnapMrkdwn(g.naam)).join(' · ')}. Houd hem een werkdag langer vast.`,
+      knoppen: vertrekkers.map((g, i) => knop(`🔒 Houd ${g.naam} vast (${GAST_KOSTEN_VASTHOUDEN} pt)`, `gast_vasthouden_${i}`, { value: g.id })) });
   }
   const veilingNu = readJSON('veiling.json', {});
   if (veilingNu.status === 'open' && veilingNu.weekStart === week && (!veilingNu.sluitTs || nu < veilingNu.sluitTs)) {
     const hoogste = [...(veilingNu.biedingen || [])].sort((a, b) => b.bod - a.bod)[0];
-    blocks.push(regel(`🔨 *Grote Veiling:* *${veilingNu.artefact?.naam || 'artefact'}* — ` +
-      (hoogste ? `hoogste bod *${hoogste.bod}* door ${naam(hoogste.userId)}${hoogste.userId === userId ? ' (u!)' : ''}` : 'nog geen biedingen')),
-    { type: 'actions', elements: [knop('💰 Bied +1', 'veiling_bied_1', { style: 'primary' }), knop('💎 Bied +3', 'veiling_bied_3')] });
+    items.push({ tekst: `🔨 *Grote Veiling:* *${veilingNu.artefact?.naam || 'artefact'}* — ` +
+      (hoogste ? `hoogste bod *${hoogste.bod}* door ${naam(hoogste.userId)}${hoogste.userId === userId ? ' (u!)' : ''}` : 'nog geen biedingen'),
+    knoppen: [knop('💰 Bied +1', 'veiling_bied_1', { style: 'primary' }), knop('💎 Bied +3', 'veiling_bied_3')] });
   }
   const uitdaging = s.effecten.find((e) => e.soort === 'uitdaging' && e.tot > nu && !e.data?.gebruikt && e.data?.koploper === userId);
   if (uitdaging) {
-    blocks.push(regel(`🔱 *Uitdaging:* daag ${naam(uitdaging.data.hekkensluiter)} uit voor een duel, ${totTijd(uitdaging.tot)}.`,
-      knop('Daag de hekkensluiter uit', 'regie_uitdaging', { style: 'primary', value: uitdaging.id })));
+    items.push({ tekst: `🔱 *Uitdaging:* daag ${naam(uitdaging.data.hekkensluiter)} uit voor een duel, ${totTijd(uitdaging.tot)}.`, accessory: true,
+      knoppen: [knop('Daag de hekkensluiter uit', 'regie_uitdaging', { style: 'primary', value: uitdaging.id })] });
   }
   const gunst = s.effecten.find((e) => e.soort === 'gunst' && e.tot > nu && !e.data?.gebruikt && e.data?.doel === userId);
   if (gunst) {
-    blocks.push(regel(`🔱 *Een gunst van de Kroket God:* eis hem op ${totTijd(gunst.tot)}.`,
-      knop('Eis de gunst op', 'regie_gunst', { style: 'primary', value: gunst.id })));
+    items.push({ tekst: `🔱 *Een gunst van de Kroket God:* eis hem op ${totTijd(gunst.tot)}.`, accessory: true,
+      knoppen: [knop('Eis de gunst op', 'regie_gunst', { style: 'primary', value: gunst.id })] });
   }
+  return { opdrachten: opdrachtRegelsCompact(userId), info, acties, status, deadlines: items };
+}
+
+// UW BEURT: opdrachten, wat op is, de actieknoppen, en elke actie met een deadline als regel met knop.
+// Niet voor verbannen leden: zij lezen alleen.
+function uwBeurtBlokken(userId, nu = Date.now()) {
+  if (isVerbannen(userId)) return [];
+  const d = uwBeurtDelen(userId, nu);
+  const blocks = [{ type: 'divider' },
+    { type: 'section', text: { type: 'mrkdwn', text: kapTekst(`*UW BEURT*\n${d.opdrachten.join('\n')}`, 3000) } },
+    { type: 'context', elements: [{ type: 'mrkdwn', text: d.info.join('\n') }] }];
+  // Slack staat 25 elementen per actions-blok toe; de handdrukknoppen kunnen daar overheen.
+  for (let i = 0; i < d.acties.length; i += 25) blocks.push({ type: 'actions', elements: d.acties.slice(i, i + 25) });
+  for (const x of d.deadlines) blocks.push(...deadlineBlokken(x));
   return blocks;
 }
 
-// WEEKVIJAND (alleen als er een is): naam, HP, eigen schade en de aanvalsknoppen.
-function weekvijandBlokken(userId, verbannen) {
+// Een deadline-regel als klassieke blokken: een section, met de knop als accessory of een actions-blok eronder.
+function deadlineBlokken(x) {
+  const regel = { type: 'section', text: { type: 'mrkdwn', text: kapTekst(x.tekst, 3000) }, ...(x.accessory ? { accessory: x.knoppen[0] } : {}) };
+  return [regel, ...(!x.accessory && x.knoppen.length ? [{ type: 'actions', elements: x.knoppen }] : [])];
+}
+
+// WEEKVIJAND (alleen als er een is) in delen: naam, HP, eigen schade en de aanvalsknoppen.
+// De klassieke Home zet ze in een section + actions, Home 2.0 in een kaart.
+function weekvijandDelen(userId, verbannen) {
   const raid = readJSON('bamischijf.json', {});
-  if (!(raid.actief && raid.hp > 0)) return [];
+  if (!(raid.actief && raid.hp > 0)) return null;
   const vandaagKey = new Intl.DateTimeFormat('nl-NL', { timeZone: 'Europe/Amsterdam' }).format(new Date());
   const strijder = raid.strijders?.[userId];
   const gave = gaveVan(raid.vijand?.key);
   const rest = aanvalsLimiet(raid, vandaagKey) - aanvallenGedaan(strijder, vandaagKey);
+  const knop = (tekst, action_id, extra = {}) => ({ type: 'button', text: { type: 'plain_text', text: tekst, emoji: true }, action_id, ...extra });
+  return {
+    kop: `${raid.vijand?.emoji || '🐉'} ${(raid.vijand?.naam || 'De Bamischijf der Duisternis').toUpperCase()}`,
+    balk: hpBalk(raid.hp, raid.maxHp), hp: `${Math.max(0, raid.hp)}/${raid.maxHp}`, key: raid.vijand?.key,
+    stats: `uw schade: *${strijder?.schade || 0}* · ${Object.keys(raid.strijders || {}).length} strijders · ` +
+      `${rest > 0 ? `nog ${rest} aanval${rest === 1 ? '' : 'len'} vandaag` : 'vandaag aangevallen'}` + (isRazend(raid, gave) ? ' · 😡 razend' : ''),
+    extra: [
+      gave && `✨ _${gave.naam}: ${gave.regel}_`,
+      strijder?.verloren && `_In zijn buit: ${strijder.verloren} kroketpunt(en) van u, terug als hij valt._`,
+      raid.wrok && `_Voor de ${raid.wrok + 1}e week terug: hij is niet vergeten dat u faalde._`,
+    ].filter(Boolean),
+    knoppen: !verbannen && rest > 0 ? [
+      knop('⚔️ Val aan', 'bamischijf_aanval', { style: 'primary' }),
+      ...(gave?.soort === 'offerdoof' ? [] : [knop('🔥 Offer-aanval (1 pt)', 'bamischijf_offer')]),
+    ] : [],
+  };
+}
+
+function weekvijandBlokken(userId, verbannen) {
+  const w = weekvijandDelen(userId, verbannen);
+  if (!w) return [];
   const blocks = [{ type: 'divider' }, { type: 'section', text: { type: 'mrkdwn', text:
-    `*${raid.vijand?.emoji || '🐉'} ${(raid.vijand?.naam || 'De Bamischijf der Duisternis').toUpperCase()}*\n` +
-    `${hpBalk(raid.hp, raid.maxHp)}  *${Math.max(0, raid.hp)}/${raid.maxHp}* HP · uw schade: *${strijder?.schade || 0}* · ` +
-    `${Object.keys(raid.strijders || {}).length} strijders · ${rest > 0 ? `nog ${rest} aanval${rest === 1 ? '' : 'len'} vandaag` : 'vandaag aangevallen'}` +
-    (isRazend(raid, gave) ? ' · 😡 razend' : '') +
-    (gave ? `\n✨ _${gave.naam}: ${gave.regel}_` : '') +
-    (strijder?.verloren ? `\n_In zijn buit: ${strijder.verloren} kroketpunt(en) van u, terug als hij valt._` : '') +
-    (raid.wrok ? `\n_Voor de ${raid.wrok + 1}e week terug: hij is niet vergeten dat u faalde._` : '') } }];
-  if (!verbannen && rest > 0) {
-    blocks.push({ type: 'actions', elements: [
-      { type: 'button', text: { type: 'plain_text', text: '⚔️ Val aan', emoji: true }, action_id: 'bamischijf_aanval', style: 'primary' },
-      ...(gave?.soort === 'offerdoof' ? [] : [{ type: 'button', text: { type: 'plain_text', text: '🔥 Offer-aanval (1 pt)', emoji: true }, action_id: 'bamischijf_offer' }]),
-    ] });
-  }
+    `*${w.kop}*\n${w.balk}  *${w.hp}* HP · ${w.stats}${w.extra.map((e) => `\n${e}`).join('')}` } }];
+  if (w.knoppen.length) blocks.push({ type: 'actions', elements: w.knoppen });
   return blocks;
 }
 
@@ -18920,6 +18954,139 @@ function kapHomeBlocks(blocks) {
   return [...kop, ...midden, { type: 'context', elements: [{ type: 'mrkdwn', text: '_(De Home-tab is te vol; een deel is weggelaten.)_' }] }, ...staart];
 }
 
+// ══════════════════════════════════════════════════════════════════════════════
+// APP HOME 2.0: kaarten, carrousel, inklapbare secties en een weekgrafiek (Block Kit 2026)
+// ══════════════════════════════════════════════════════════════════════════════
+// Naast de klassieke Home; publiceerHome valt terug op die klassieke als Slack deze view weigert.
+// Zelfde bronnen als de klassieke Home (uwBeurtDelen, vandaagBlokken, weekvijandDelen, NASLAG), dus
+// elke action_id blijft werken. Limieten: container hoogstens 10 kindblokken, carrousel 1-10 kaarten,
+// hoogstens 2 grafieken, hoogstens 100 blokken (kinderen tellen mee).
+
+const HOME2_FOUT = { laatst: 0 }; // hoogstens één foutregel per uur in het logboek
+
+// 'klassiek' voor niemand, 'beta' alleen voor de eigenaar, 'iedereen' voor alle leden.
+function homeKrijgt2(userId) {
+  const v = instelling('homeVersie');
+  return v === 'iedereen' || (v === 'beta' && userId === OPPERKROKET_ID);
+}
+
+const plain = (text, n) => ({ type: 'plain_text', text: kapTekst(String(text), n), emoji: true });
+const zonderOpmaak = (t) => String(t).replace(/[*_~`]/g, '');
+
+// Eén kaart. `beeld` (https-URL, optioneel) wordt de hero_image: K3 geeft hem per kaart mee.
+// knoppen: 1-3 knoppen met hun bestaande action_id.
+function homeKaart({ titel, subtitel, tekst, knoppen = [], beeld }) {
+  return {
+    type: 'card',
+    ...(beeld ? { hero_image: { type: 'image', image_url: beeld, alt_text: kapTekst(zonderOpmaak(titel), 200) } } : {}),
+    title: plain(titel, 150),
+    ...(subtitel ? { subtitle: plain(subtitel, 150) } : {}),
+    ...(tekst ? { body: { type: 'mrkdwn', text: kapTekst(tekst, 200) } } : {}),
+    ...(knoppen.length ? { actions: knoppen.slice(0, 3) } : {}),
+  };
+}
+
+const homeContainer = (titel, kinderen, open = true) => ({
+  type: 'container', title: plain(titel, 75), child_blocks: kinderen.slice(0, 10), is_collapsible: true, default_collapsed: !open,
+});
+
+// Blokken tellen zoals Slack: kinderen van containers en kaarten van een carrousel tellen mee.
+const telHomeBlokken = (bl) => bl.reduce((n, b) => n + 1 + (b.child_blocks?.length || 0) + (b.elements?.filter?.((e) => e.type === 'card').length || 0), 0);
+
+// Ranglijst als tabel (kop + hoogstens 10 rijen), de eigen rij gemarkeerd.
+function ranglijstTabel(userId) {
+  const members = loadMembers();
+  const rijen = Object.entries(loadScores()).filter(([id]) => members[id]).sort((a, b) => b[1] - a[1]).slice(0, 10);
+  const cel = (t) => ({ type: 'raw_text', text: kapTekst(String(t), 60) });
+  return { type: 'table', rows: [['#', 'Lid', 'Punten'].map(cel), ...rijen.map(([id, sc], i) => [`${i + 1}`, `${members[id].bijnaam}${id === userId ? ' (u)' : ''}`, `${sc}`].map(cel))] };
+}
+
+// Uw week: uw weekscore per dag tegen het gemiddelde van het genootschap, tot en met de laatste dag met een stand.
+function weekGrafiek(userId) {
+  const staat = readJSON('puntenhistorie.json', {});
+  const maandag = getMondayOfWeek();
+  const eigen = puntenhistorie.weekReeks(staat, maandag, userId);
+  const gem = puntenhistorie.gemiddeldeReeks(staat, maandag);
+  const n = eigen.reduce((m, v, i) => (v === null ? m : i + 1), 0);
+  if (n < 2) return null; // een lijn heeft twee punten nodig
+  return { type: 'data_visualization', title: 'Uw week', chart: {
+    type: 'line',
+    axis_config: { categories: ['ma', 'di', 'wo', 'do', 'vr', 'za', 'zo'].slice(0, n) },
+    series: [{ name: 'U', data: eigen.slice(0, n).map((v) => v ?? 0) }, { name: 'Gemiddelde', data: gem.slice(0, n).map((v) => v ?? 0) }],
+  } };
+}
+
+// De Home 2.0 van één lid. `opties.beelden`: { [action_id | 'weekvijand']: https-URL } voor de kaarten (K3).
+function bouwAppHome2Blocks(userId, melding = '', extraBlocks = [], opties = {}) {
+  const beelden = opties.beelden || {};
+  const klassiek = bouwAppHomeBlocks(userId, melding, extraBlocks);
+  if (!loadMembers()[userId]) return klassiek; // geen lid: het korte bericht van de klassieke Home
+  const nu = Date.now();
+  const verbannen = isVerbannen(userId);
+  const bovenkant = klassiek.filter((b) => /^top_(kop|melding|extra|wie|voortgang|perkament)_/.test(b.block_id || ''));
+  const d = verbannen ? { opdrachten: [], info: [], acties: [], status: {}, deadlines: [] } : uwBeurtDelen(userId, nu);
+
+  // Waarschuwingen: hoogstens 3 (verbannen eerst); de knoppen staan in de sectie UW BEURT eronder.
+  const alerts = [
+    ...(verbannen ? [{ type: 'alert', level: 'error', text: kapTekst('U bent verbannen. Spelacties zijn geblokkeerd tot de poorten heropenen. Toon berouw met /kroketgod beroep.', 200) }] : []),
+    ...d.deadlines.map((x) => ({ type: 'alert', level: 'warning', text: kapTekst(zonderOpmaak(x.tekst), 200) })),
+  ].slice(0, 3);
+
+  const blocks = [...bovenkant, ...alerts];
+  // Een container neemt 10 kindblokken: verdeel de deadlines over containers zonder een regel van zijn knoppen te scheiden.
+  const dlGroepen = [[]];
+  for (const x of d.deadlines) {
+    const bl = deadlineBlokken(x);
+    if (dlGroepen.at(-1).length + bl.length > 10) dlGroepen.push([]);
+    dlGroepen.at(-1).push(...bl);
+  }
+  if (d.deadlines.length) dlGroepen.forEach((g, i) => blocks.push(homeContainer(`⏰ UW BEURT: deadlines${dlGroepen.length > 1 ? ` (${i + 1}/${dlGroepen.length})` : ''}`, g)));
+
+  const vandaag = vandaagBlokken(userId, nu).filter((b) => b.type === 'section')
+    .map((b) => ({ ...b, text: { ...b.text, text: b.text.text.replace(/^\*VANDAAG\*\n/, '') } }));
+  blocks.push(homeContainer('VANDAAG', vandaag));
+
+  // Actiekaarten: een kaart per actie met een statusregel, hoogstens 10; de rest als knop in UW OPDRACHTEN.
+  const kaarten = [];
+  const overig = [];
+  for (const knop of d.acties) {
+    const status = d.status[knop.action_id];
+    if (status !== undefined && kaarten.length < 10) {
+      kaarten.push(homeKaart({ titel: knop.text.text, tekst: status, knoppen: [knop], beeld: beelden[knop.action_id] }));
+    } else overig.push(knop);
+  }
+  if (kaarten.length) blocks.push({ type: 'carousel', elements: kaarten });
+
+  if (!verbannen) {
+    const kinderen = [{ type: 'section', text: { type: 'mrkdwn', text: kapTekst(d.opdrachten.join('\n'), 3000) } }];
+    if (d.info.length) kinderen.push({ type: 'context', elements: [{ type: 'mrkdwn', text: kapTekst(d.info.join('\n'), 3000) }] });
+    for (let i = 0; i < overig.length; i += 25) kinderen.push({ type: 'actions', elements: overig.slice(i, i + 25) });
+    blocks.push(homeContainer('UW OPDRACHTEN', kinderen));
+  }
+
+  const grafiek = weekGrafiek(userId);
+  if (grafiek) blocks.push(grafiek);
+
+  const w = weekvijandDelen(userId, verbannen);
+  if (w) {
+    blocks.push(homeKaart({ titel: w.kop, subtitel: `${w.hp} HP`, tekst: [w.stats, ...w.extra].join('\n'), knoppen: w.knoppen, beeld: beelden.weekvijand }));
+  }
+
+  // Inklapbare secties (standaard dicht): elke naslag een regel met een knop die het venster opent.
+  const voet = klassiek.slice(-2);
+  const secties = [homeContainer('📊 Ranglijst', [ranglijstTabel(userId),
+    { type: 'section', text: { type: 'mrkdwn', text: '_Volledige ranglijst en uitdagen_' }, accessory: { type: 'button', text: plain('Open', 75), action_id: 'naslag_ranglijst' } }], false)];
+  for (const m of Object.values(MENU_VENSTERS)) {
+    const rijen = m.opties.filter((sl) => sl !== 'ranglijst' && naslagIngang(sl)).map((sl) => ({ type: 'section',
+      text: { type: 'mrkdwn', text: kapTekst(String(naslagIngang(sl).knop), 3000) },
+      accessory: { type: 'button', text: plain('Open', 75), action_id: `naslag_${sl}` } }));
+    if (rijen.length) secties.push(homeContainer(m.plek, rijen, false));
+  }
+  // Slack weigert meer dan 100 blokken: liever een sectie kwijt dan de hele Home.
+  while (secties.length && telHomeBlokken([...blocks, ...secties, ...voet]) > 100) secties.pop();
+  return [...blocks, ...secties, ...voet];
+}
+
 // Noodschakelaar voor het beeld in de galerij-kaart. Een image-block met een slack_file-id is geldig
 // in een Home-tab, maar als dát ene bestand verdwijnt (handmatig verwijderd, of opgeruimd) weigert
 // Slack de héle view — en dan zou één weggegooid plaatje de Home van iedereen platleggen. Faalt het
@@ -18932,7 +19099,7 @@ const GALERIJ_BEELD_UIT = { aan: false };
 const HOME_MELDING_BLIJFT_MS = 60_000;
 const laatsteHomeMelding = new Map(); // userId → { melding, extraBlocks, tot }
 
-async function publiceerAppHome(client, userId, melding = '', extraBlocks = []) {
+async function publiceerHome(client, userId, melding = '', extraBlocks = []) {
   if (melding || extraBlocks.length) {
     laatsteHomeMelding.set(userId, { melding, extraBlocks, tot: Date.now() + HOME_MELDING_BLIJFT_MS });
   } else {
@@ -18950,6 +19117,22 @@ async function publiceerAppHome(client, userId, melding = '', extraBlocks = []) 
       console.error(`⚠️ App Home publiceren voor ${userId} mislukt:`, err.data?.error || err.message);
     }
     return;
+  }
+  // Home 2.0 voor wie hem krijgt; weigert Slack hem (of faalt het bouwen), dan krijgt dit lid de klassieke Home.
+  if (homeKrijgt2(userId)) {
+    try {
+      await slackLimiter.schedule(() => client.views.publish({
+        user_id: userId,
+        view: { type: 'home', blocks: bouwAppHome2Blocks(userId, melding, extraBlocks) },
+      }));
+      return;
+    } catch (err) {
+      const nu = Date.now();
+      if (nu - HOME2_FOUT.laatst > 3_600_000) {
+        HOME2_FOUT.laatst = nu;
+        console.error(`⚠️ Home 2.0 voor ${userId} mislukt, klassieke Home gepubliceerd:`, err.data?.error || err.message, JSON.stringify(err.data?.response_metadata || '').slice(0, 300));
+      }
+    }
   }
   try {
     await slackLimiter.schedule(() => client.views.publish({
@@ -18980,7 +19163,7 @@ app.event('app_home_opened', async ({ event, client }) => {
   if (event.tab !== 'home') return; // 'messages'-tab negeren
   const naam = loadMembers()[event.user]?.bijnaam || event.user;
   console.log(`🏠 App Home geopend door ${naam}`);
-  await publiceerAppHome(client, event.user);
+  await publiceerHome(client, event.user);
 });
 
 // ── V2: knop-handlers (Block Kit block_actions, via Socket Mode) ───────────────
@@ -19011,18 +19194,18 @@ async function meldKnopUitkomst(client, body, tekst) {
       }
     }
     // De Home-tab eronder ook bijwerken: het saldo en de knoppenrij zijn nu verouderd.
-    await publiceerAppHome(client, body.user.id);
+    await publiceerHome(client, body.user.id);
     return;
   }
   const uitAppHome = body.container?.type === 'view' || body.view?.type === 'home';
   console.log(`🔘 Knop "${body.actions?.[0]?.action_id}" ingedrukt door ${naam} (${uitAppHome ? 'App Home' : 'kanaal'})`);
   if (uitAppHome) {
-    await publiceerAppHome(client, body.user.id, tekst);
+    await publiceerHome(client, body.user.id, tekst);
     return;
   }
   await postEphemeral(client, body.channel?.id || process.env.SLACK_CHANNEL_ID, body.user.id, tekst);
   // Home-tab ook bijwerken, zodat die niet achterloopt als de gebruiker er straks kijkt.
-  await publiceerAppHome(client, body.user.id);
+  await publiceerHome(client, body.user.id);
 }
 
 // Eén handler voor élk naslag-venster: de sleutel zit in de action_id. Zo hoeft een nieuwe
@@ -19063,7 +19246,7 @@ app.action(/^home_menu_(spel|recht|status|rijk|commandos)$/, async ({ ack, body,
   if (!MENU_VENSTERS[menu]?.opties.includes(sleutel)) return;
   await openNaslag(client, body, sleutel);
   // Menu's terugzetten: een menu dat op "casino" blijft staan, vuurt geen actie meer af bij dezelfde keuze.
-  await publiceerAppHome(client, body.user.id);
+  await publiceerHome(client, body.user.id);
 });
 
 const raidKnop = (metOffer) => async ({ ack, body, client }) => {
@@ -19421,7 +19604,7 @@ app.view('modal_duel', async ({ ack, body, view, client }) => {
   const doelId = view.state.values.doelwit?.keuze?.selected_option?.value;
   const wapenId = view.state.values.wapen?.keuze?.selected_option?.value;
   const uitkomst = await voerDuel(client, body.user.id, doelId, KANAAL(), wapenId);
-  await publiceerAppHome(client, body.user.id, uitkomst.tekst);
+  await publiceerHome(client, body.user.id, uitkomst.tekst);
 });
 
 app.view('modal_eer', async ({ ack, body, view, client }) => {
@@ -19455,17 +19638,17 @@ app.view('modal_eer', async ({ ack, body, view, client }) => {
     // Limiet hier, want de aanroeper weet hoeveel eerbewijzen er worden uitgedeeld.
     const resterend = eerLimiet(body.user.id) - telEerVandaag(body.user.id);
     if (resterend <= 0) {
-      await publiceerAppHome(client, body.user.id, `_Uw dagelijkse eerlimiet (${eerLimiet(body.user.id)}) is bereikt. Morgen hervat de vrijgevigheid._`);
+      await publiceerHome(client, body.user.id, `_Uw dagelijkse eerlimiet (${eerLimiet(body.user.id)}) is bereikt. Morgen hervat de vrijgevigheid._`);
       return;
     }
     if (isVerbannen(body.user.id)) {
-      await publiceerAppHome(client, body.user.id, '_Een balling deelt geen eer uit. Toon eerst berouw._');
+      await publiceerHome(client, body.user.id, '_Een balling deelt geen eer uit. Toon eerst berouw._');
       return;
     }
     // De modal kan verouderd zijn (limiet elders verbruikt): kap af, net als het commando.
     const teVeel = doelIds.length > resterend;
     const uitkomst = await voerEer(client, body.user.id, doelIds.slice(0, resterend), reden, KANAAL(), { bron: 'app-home' });
-    await publiceerAppHome(client, body.user.id,
+    await publiceerHome(client, body.user.id,
       uitkomst.tekst + (teVeel ? `\n_U had nog ${resterend} eerbewijs/-bewijzen over; de overige namen zijn genegeerd._` : ''));
   } catch (err) { console.error('Fout bij eer-modal:', err); }
 });
@@ -19476,7 +19659,7 @@ app.view('modal_bingo', async ({ ack, body, view, client }) => {
     const nr = parseInt(view.state.values.nummer?.keuze?.selected_option?.value, 10);
     const bewijs = (view.state.values.bewijs?.tekst?.value || '').trim();
     const uitkomst = await verwerkBingoClaim(client, body.user.id, nr, bewijs, KANAAL());
-    await publiceerAppHome(client, body.user.id, uitkomst.tekst);
+    await publiceerHome(client, body.user.id, uitkomst.tekst);
   } catch (err) { console.error('Fout bij bingo-modal:', err); }
 });
 app.view('modal_visioen', async ({ ack, body, view, client }) => {
@@ -19490,9 +19673,9 @@ app.view('modal_visioen', async ({ ack, body, view, client }) => {
   const wens = [portretNaam ? `portret van ${portretNaam}` : wensVeld, stijl].filter(Boolean).join(' | ');
   // Beeldgeneratie duurt tien tot dertig seconden. Zonder tussenmelding lijkt de knop niets te doen
   // en gaat iemand nog een keer klikken — vandaar dat de Home meteen bijgewerkt wordt.
-  await publiceerAppHome(client, body.user.id, '⚜️ _De Kroket God roept een visioen op uit het Grote Vetbad — dit duurt even._');
+  await publiceerHome(client, body.user.id, '⚜️ _De Kroket God roept een visioen op uit het Grote Vetbad — dit duurt even._');
   const uitkomst = await voerVisioen(client, body.user.id, wens, KANAAL());
-  await publiceerAppHome(client, body.user.id, uitkomst.tekst);
+  await publiceerHome(client, body.user.id, uitkomst.tekst);
 });
 
 // Her-worp: dezelfde wens, gegarandeerd een ándere stijl, hoogstens één keer per visioen en alleen
@@ -19504,30 +19687,30 @@ app.action('visioen_herworp', async ({ ack, body, client }) => {
   const userId = body.user.id;
   const vorig = herworpbaarVisioen(userId);
   if (!vorig) {
-    await publiceerAppHome(client, userId, '_Er is niets meer om te herwerpen. Het vet laat zich niet twee keer op dezelfde wens betrappen._');
+    await publiceerHome(client, userId, '_Er is niets meer om te herwerpen. Het vet laat zich niet twee keer op dezelfde wens betrappen._');
     return;
   }
   // Meteen als gebruikt markeren, vóór de generatie: twee snelle kliks zouden anders beide door de
   // controle glippen — dezelfde reden als de cooldown-claim vooraf in voerVisioen.
   markeerHerworpGebruikt(userId);
-  await publiceerAppHome(client, userId, `⚜️ _De Kroket God kijkt opnieuw naar «${vorig.titel}», nu met een ander oog — dit duurt even._`);
+  await publiceerHome(client, userId, `⚜️ _De Kroket God kijkt opnieuw naar «${vorig.titel}», nu met een ander oog — dit duurt even._`);
   const wens = [vorig.portretVan ? `portret van ${loadMembers()[vorig.portretVan]?.bijnaam || ''}` : vorig.beschrijving]
     .filter(Boolean).join('');
   const uitkomst = await voerVisioen(client, userId, wens, KANAAL(),
     { negeerCooldown: true, stijlUitsluiten: vorig.stijl });
-  await publiceerAppHome(client, userId, uitkomst.tekst);
+  await publiceerHome(client, userId, uitkomst.tekst);
 });
 app.view('modal_roof', async ({ ack, body, view, client }) => {
   await ack();
   const doelId = view.state.values.doelwit?.keuze?.selected_option?.value;
   const uitkomst = await voerRoof(client, body.user.id, doelId, KANAAL());
-  await publiceerAppHome(client, body.user.id, uitkomst.tekst);
+  await publiceerHome(client, body.user.id, uitkomst.tekst);
 });
 app.view('modal_vloek', async ({ ack, body, view, client }) => {
   await ack();
   const doelId = view.state.values.doelwit?.keuze?.selected_option?.value;
   const uitkomst = await koopWinkelItem(client, body.user.id, 'vloek', doelId, KANAAL());
-  await publiceerAppHome(client, body.user.id, uitkomst.tekst);
+  await publiceerHome(client, body.user.id, uitkomst.tekst);
 });
 // De gok-knop: twee keuzes, geen doelwit. Bewust een modal en niet twee losse knoppen, zodat
 // de inzet één handeling blijft en de hulptekst meekomt.
@@ -19567,7 +19750,7 @@ app.action('open_gok', async ({ ack, body, client }) => {
 app.view('modal_gok', async ({ ack, body, view, client }) => {
   await ack();
   const uitkomst = await plaatsKroketGok(body.user.id, view.state.values.keuze?.keuze?.selected_option?.value);
-  await publiceerAppHome(client, body.user.id, uitkomst.tekst);
+  await publiceerHome(client, body.user.id, uitkomst.tekst);
 });
 
 // Gedeelde gok-logica: één implementatie voor het slash-commando en de App Home-knop, hetzelfde
@@ -19633,7 +19816,7 @@ app.action('open_bede', async ({ ack, body, client }) => {
 app.view('modal_bede', async ({ ack, body, view, client }) => {
   await ack();
   const uitkomst = await legBede(client, body.user.id, view.state.values.soort?.keuze?.selected_option?.value);
-  await publiceerAppHome(client, body.user.id, uitkomst.tekst);
+  await publiceerHome(client, body.user.id, uitkomst.tekst);
 });
 
 // De dader antwoordt met één klik. Twee knoppen op het bede-bericht zelf.
@@ -19650,7 +19833,7 @@ app.view('modal_offer', async ({ ack, body, view, client }) => {
   await ack();
   const inzet = parseInt(view.state.values.inzet?.aantal?.value, 10);
   const uitkomst = await voerOffer(client, body.user.id, Number.isNaN(inzet) ? 0 : inzet, KANAAL());
-  await publiceerAppHome(client, body.user.id, uitkomst.tekst);
+  await publiceerHome(client, body.user.id, uitkomst.tekst);
 });
 
 // Winkelknoppen (behalve de vloek, die opent hierboven een modal met doelwit).
@@ -19696,7 +19879,7 @@ app.action('home_verversen', async ({ ack, body, client }) => {
   try {
     const naam = loadMembers()[body.user?.id]?.bijnaam || body.user?.id;
     console.log(`🔘 Knop "home_verversen" ingedrukt door ${naam} (App Home)`);
-    await publiceerAppHome(client, body.user.id);
+    await publiceerHome(client, body.user.id);
   } catch (err) { console.error('Fout bij home-verversen:', err); }
 });
 
@@ -19739,7 +19922,7 @@ async function voerHomeCommandoUit(client, userId, tekst, triggerId, sjabloon = 
   const melding = antwoorden.length
     ? antwoorden.join('\n\n')
     : (blokken.length ? '' : `_\`${tekst}\` is uitgevoerd. Het antwoord van de Kroket God staat in het kanaal._`);
-  await publiceerAppHome(client, userId, melding, blokken);
+  await publiceerHome(client, userId, melding, blokken);
   // Vanuit het commandovenster: het venster zelf wordt het antwoord, want de Home eronder ziet de gebruiker niet.
   if (viewId) {
     try {
@@ -19759,7 +19942,7 @@ app.action(/^home_cmd_kies_\d+$/, async ({ ack, body, client }) => {
     const sjabloon = body.actions?.[0]?.selected_option?.value;
     const optie = homeCommandoMenus(userId).flatMap(m => m.opties).find(o => o.sjabloon === sjabloon);
     if (!optie) {
-      await publiceerAppHome(client, userId, '_Dit commando bestaat niet meer. De Home-tab is ververst._');
+      await publiceerHome(client, userId, '_Dit commando bestaat niet meer. De Home-tab is ververst._');
       return;
     }
     if (!heeftVelden(sjabloon)) {
@@ -19774,7 +19957,7 @@ app.action(/^home_cmd_kies_\d+$/, async ({ ack, body, client }) => {
     });
     // Menu's terugzetten: een menu dat op "dossier" blijft staan, vuurt geen actie meer af als
     // iemand na het sluiten van het formulier opnieuw "dossier" kiest.
-    await publiceerAppHome(client, userId);
+    await publiceerHome(client, userId);
   } catch (err) { console.error('Fout bij Home-commandomenu:', err.data?.error || err.message); }
 });
 
@@ -21892,7 +22075,7 @@ async function voerDashboardActie(actie, body = {}) {
       const leden = Object.keys(loadMembers());
       let gelukt = 0, mislukt = 0;
       for (const id of leden) {
-        try { await publiceerAppHome(app.client, id); gelukt++; } catch (_) { mislukt++; }
+        try { await publiceerHome(app.client, id); gelukt++; } catch (_) { mislukt++; }
       }
       return `App Home bijgewerkt voor ${gelukt} lid/leden${mislukt ? ` (${mislukt} mislukt)` : ''}.`;
     }
@@ -22099,7 +22282,7 @@ process.on('SIGINT',  () => gracefulShutdown('SIGINT'));
   setTimeout(() => {
     const leden = Object.keys(loadMembers());
     console.log(`🏠 App Home verversen voor ${leden.length} leden na opstart`);
-    for (const id of leden) publiceerAppHome(app.client, id).catch(() => {});
+    for (const id of leden) publiceerHome(app.client, id).catch(() => {});
   }, 15_000);
   if (TEST_KANAAL_IDS.size > 0) console.log(`🧪 Testkanaal-ID's bekend: ${[...TEST_KANAAL_IDS].join(', ')}`);
   await laadTestKanaalIds(app.client); // aanvulling via API (kan op missing_scope falen — niet erg)
