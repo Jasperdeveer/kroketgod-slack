@@ -175,7 +175,6 @@ harnas(async (h) => {
   const na = alleIds(bl);
   h.ok(!na.some((i) => /^naslag_|^home_cmd_kies_/.test(i)), 'geen naslagknoppen of losse commandoselects meer op de Home');
   const t11 = tekst(bl);
-  for (const r of ['ACTIEF OP U', 'DE GASTEN VAN VANDAAG', 'DE ZEGEZAAL', 'DE BLADZIJDE', 'WAT ER TUSSEN U EN DE ANDEREN', 'SINDS UW LAATSTE BEZOEK', 'TRIBUNAAL DER VERGETELHEID']) if (t11.includes(r)) console.log('  nog aanwezig:', r);
   h.ok(!/ACTIEF OP U|DE GASTEN VAN VANDAAG|DE ZEGEZAAL|DE BLADZIJDE|WAT ER TUSSEN U EN DE ANDEREN|SINDS UW LAATSTE BEZOEK|TRIBUNAAL DER VERGETELHEID/.test(t11), 'de oude kaarten staan niet meer op de Home');
   const opties = (menu) => (menuBlok.elements.find((e) => e.action_id === `home_menu_${menu}`)?.options || []).map((o) => o.value);
 
@@ -200,20 +199,21 @@ harnas(async (h) => {
     ['premie-kaart', 'recht', 'premie', /Premiejacht/],
     ['verbonden (uit de kop)', 'recht', 'verbonden', /bondgenoten/i],
     ['ACTIEF OP U', 'status', 'actief', /Horoscoop/],
-    ['feature statusmeldingen', 'status', 'sinds', /./],
+    ['feature statusmeldingen', 'status', 'sinds', /Sinds uw laatste bezoek is er niets veranderd/],
     ['naslag Voorrechten', 'status', 'voorrechten', /roem/],
     ['naslag Relikwieën', 'status', 'relikwieen', /verworven/],
-    ['naslag/feature Titels', 'status', 'titels', /./],
+    ['naslag/feature Titels', 'status', 'titels', /DE TITELS VAN HET RIJK[\s\S]*Kampioen van het Frituurduel/],
     ['naslag Ranglijst', 'rijk', 'ranglijst', /kroketpunten resetten/],
-    ['feature seizoenen', 'rijk', 'seizoen', /./],
+    ['feature seizoenen', 'rijk', 'seizoen', /SEIZOEN 1: DE GROTE VERKILLING[\s\S]*Uw bijdrage/],
     ['Zegezaal-kaart en -naslag', 'rijk', 'zegezaal', /Voorgoed gevallen/],
     ['naslag Galerij', 'rijk', 'galerij', /galerij/i],
-    ['naslag/feature Weefsel', 'rijk', 'weefsel', /./],
+    ['naslag/feature Weefsel', 'rijk', 'weefsel', /UW DRADEN[\s\S]*u eerde 2×/],
     ['losse commando-selects', 'commandos', 'commandos', /home_cmd_kies_0/],
   ];
   schoon();
   h.schrijf('veiling.json', { status: 'open', weekStart: getMondayOfWeek(), artefact: { naam: 'Gouden Spatel', uitleg: 'glanst' }, biedingen: [] });
   h.schrijf('personas.json', { g1: { naam: 'Gast Een', actief: true, vertrekOp: nu + 3_600_000 } });
+  h.schrijf('weefsel.json', { randen: { 'UA>UB': { eer: 2 } } });
   h.schrijf('kerfstok.json', { 'UB>UA': { kerven: 2 } });
   h.schrijf('tribunaal.json', { fase: 'stemming', doelwitId: 'UE', stemmen: {}, dossier: { dagenStil: 9 }, sluitTs: nu + 3_600_000 });
   h.schrijf('premie.json', { weekStart: getMondayOfWeek(), doelwitId: 'UB', bonus: 3 });
@@ -254,9 +254,10 @@ harnas(async (h) => {
   const metVeld = cmdMenus.flatMap((e) => e.options).find((o) => /\[/.test(o.value));
   h.views.length = 0;
   const kiesIdx = cmdMenus.findIndex((e) => e.options.includes(metVeld));
-  await h.klik(`home_cmd_kies_${kiesIdx}`, 'UA', {}, { trigger_id: 'TR', view: { type: 'modal', id: 'VCMD' }, actions: [{ action_id: `home_cmd_kies_${kiesIdx}`, selected_option: { value: metVeld.value } }] });
+  await h.klik(`home_cmd_kies_${kiesIdx}`, 'UA', {}, { trigger_id: 'TR', view: { type: 'modal', id: 'VCMD', callback_id: 'naslag_commandos', private_metadata: 'commandos' }, actions: [{ action_id: `home_cmd_kies_${kiesIdx}`, selected_option: { value: metVeld.value } }] });
   const push = h.views.find((v) => v.fn === 'push');
   h.ok(push && push.args.view.callback_id === 'home_cmd_modal', 'commandovenster: formulier schuift erbovenop (views.push)');
+  h.ok(h.views.some((v) => v.fn === 'update' && v.args.view_id === 'VCMD'), 'commandovenster: na de push wordt het venster opnieuw getekend (select teruggezet)');
   h.views.length = 0;
   await h.klik(`home_cmd_kies_${kiesIdx}`, 'UA', {}, { trigger_id: 'TR', actions: [{ action_id: `home_cmd_kies_${kiesIdx}`, selected_option: { value: metVeld.value } }] });
   h.ok(h.views.some((v) => v.fn === 'open' && v.args.view.callback_id === 'home_cmd_modal'), 'vanuit de Home opent het formulier nog gewoon (views.open)');

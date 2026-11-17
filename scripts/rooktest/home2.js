@@ -64,13 +64,16 @@ harnas(async (h) => {
   const dicht = containers.filter((c) => c.default_collapsed);
   h.ok(dicht.length >= 4 && ['Ranglijst', 'Spellen', 'Recht', 'status', 'Rijk'].every((t) => dicht.some((c) => c.title.text.includes(t))), `inklapbare secties staan dicht (${dicht.map((c) => c.title.text).join(' | ')})`);
   const alerts = bl.filter((b) => b.type === 'alert');
-  h.ok(alerts.length >= 1 && alerts.length <= 3 && alerts.every((a) => ['info', 'warning', 'error', 'success'].includes(a.level) && typeof a.text === 'string' && a.text.length <= 200), `alerts: hoogstens 3, level + tekst <= 200 (${alerts.length})`);
+  h.ok(alerts.length >= 1 && alerts.length <= 3 && alerts.every((a) => ['info', 'warning', 'error', 'success'].includes(a.level) && a.text?.type === 'plain_text' && typeof a.text.text === 'string' && a.text.text.length <= 200), `alerts: hoogstens 3, level + tekst als plain_text-object <= 200 (${alerts.length})`);
   const tabel = kinderen(bl).find((b) => b.type === 'table');
   h.ok(tabel && Array.isArray(tabel.rows) && tabel.rows.length >= 2 && tabel.rows.every((r) => r.every((c) => c.type === 'raw_text' && typeof c.text === 'string')), 'ranglijst als table met raw_text-cellen');
   const grafieken = bl.filter((b) => b.type === 'data_visualization');
   const g = grafieken[0];
   h.ok(grafieken.length === 1 && typeof g.title === 'string' && g.title.length <= 50 && g.chart.type === 'line', 'weekgrafiek: lijn, titel als string <= 50');
   h.ok(g.chart.series.length <= 12 && g.chart.series.every((s) => s.data.length === g.chart.axis_config.categories.length) && g.chart.axis_config.categories.length === 2, 'grafiek: elke reeks één punt per categorie');
+  const cats = g.chart.axis_config.categories;
+  h.ok(g.chart.series.every((s) => s.data.every((p) => p && typeof p === 'object' && cats.includes(p.label) && typeof p.value === 'number')) && g.chart.series.every((s) => s.data.map((p) => p.label).join() === cats.join()), 'grafiek: elk punt is { label, value } met label uit categories');
+  h.ok(tabel.rows.every((r) => r.every((c) => c.type === 'raw_text')) && !tekst(bl).includes('"data_table"'), 'table-cellen raw_text; geen data_table');
   h.ok(tel(bl) < 100, `volle dag: ${tel(bl)} blokken incl. kinderen en kaarten (< 100)`);
   h.ok(carrousel.elements.length + 1 <= 10 + 1 && bl.filter((b) => b.type === 'carousel').length === 1, 'hoogstens 10 kaarten in de carrousel');
 
@@ -86,7 +89,7 @@ harnas(async (h) => {
   const iVandaag = idx(bl, (b) => b.type === 'container' && b.title.text === 'VANDAAG');
   const iKaarten = idx(bl, (b) => b.type === 'carousel');
   h.ok(iAlert >= 0 && iAlert < iDeadline && iDeadline < iVandaag && iVandaag < iKaarten, `volgorde alert < deadlines < VANDAAG < kaarten (${iAlert},${iDeadline},${iVandaag},${iKaarten})`);
-  h.ok(/Hete Kroket/.test(alerts.map((a) => a.text).join(' ')), 'alert noemt de Hete Kroket');
+  h.ok(/Hete Kroket/.test(alerts.map((a) => a.text.text).join(' ')), 'alert noemt de Hete Kroket');
   const dl = ids(dlContainers);
   h.ok(['regie_hete_kroket', 'regie_zaak_boete', 'regie_uitdaging', 'veiling_bied_1', 'tribunaal_voor', 'claim_vergeven_UB'].every((k) => dl.includes(k)), `deadline-knoppen bereikbaar in de sectie (${dl.join(',')})`);
 
@@ -112,7 +115,7 @@ harnas(async (h) => {
   schoon(); vol();
   h.schrijf('verbanning.json', { UA: { tot: new Date(nu + 3_600_000).toISOString() } });
   bl = bouwAppHome2Blocks('UA');
-  h.ok(bl[0].type === 'header' && bl.some((b) => b.type === 'alert' && b.level === 'error' && /verbannen/.test(b.text)), 'verbannen: kop en alert "verbannen"');
+  h.ok(bl[0].type === 'header' && bl.some((b) => b.type === 'alert' && b.level === 'error' && /verbannen/.test(b.text.text)), 'verbannen: kop en alert "verbannen"');
   h.ok(!bl.some((b) => b.type === 'carousel') && !bl.some((b) => b.type === 'container' && b.title.text === 'UW OPDRACHTEN'), 'verbannen: geen kaarten en geen UW OPDRACHTEN');
   h.ok(bl.some((b) => b.type === 'container' && b.title.text === 'VANDAAG') && bl.filter((b) => b.type === 'container' && b.default_collapsed).length >= 4, 'verbannen: wel VANDAAG en de secties');
   h.ok(!ids(bl).some((i) => /^(open_|regie_|veiling_bied|claim_|tribunaal_|gast_vasthouden|handdruk_|bamischijf_)/.test(i)), 'verbannen: geen actieknoppen');

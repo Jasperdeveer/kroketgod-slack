@@ -47,7 +47,6 @@ if (ontbrekendeVars.length) {
 //   state     ['x.json']              → gaat mee in de backup
 //   help      [{gebruik, verwacht}]   → verschijnt in /kroketgod help
 //   home      (ctx) => blocks[]       → sectie in de App Home; ctx = { userId, members, ... }
-//   homeOrde  lager = hoger in de App Home (standaard 50)
 // ── Interne modules (zie lib/) ────────────────────────────────────────────────
 const { FEATURES, registreerFeature } = require('./lib/registry.js');
 const { backupBestanden, controleerBackupDekking, maakBackup } = require('./lib/backup.js');
@@ -1229,7 +1228,6 @@ registreerFeature({
   naam: 'weefsel',
   state: ['weefsel.json'],
   help: [{ gebruik: '/kroketgod weefsel', verwacht: 'het sociale weefsel: wie u eert, wie u eert, met wie u botst — en de spil van het genootschap' }],
-  homeOrde: 35,
   homeKnop: '🕸️ Weefsel',
   homeVenster: ({ userId, members }) => {
     const leden = weefselLeden();
@@ -8195,11 +8193,13 @@ app.action('gast_wens', async ({ ack, body, action, client }) => {
     if (!loadMembers()[userId] || isVerbannen(userId)) return;
     const id = action.selected_option?.value;
     const p = loadPersonas()[id];
-    if (!p || p.actief !== false || p.alleenVoorLid) { await publiceerHome(client, userId, '_Die gast is er al, of bestaat niet meer._'); return; }
+    // Vanuit het Gasten-venster verversen we dat venster (en de Home eronder), anders alleen de Home.
+    const meld = (t) => (body.view?.type === 'modal' && String(body.view.callback_id || '').startsWith('naslag_') ? meldKnopUitkomst(client, body, t) : publiceerHome(client, userId, t));
+    if (!p || p.actief !== false || p.alleenVoorLid) { await meld('_Die gast is er al, of bestaat niet meer._'); return; }
     daggastenVandaag(); // eerst het lot van vandaag trekken, anders schuift deze wens de oudere een dag op
     const w = readJSON('gastwensen.json', {});
     writeJSON('gastwensen.json', { dag: dagSleutel(), wensen: { ...(w.wensen || {}), [userId]: id } });
-    await publiceerHome(client, userId, `🎲 *Genoteerd: u wenst ${ontsnapMrkdwn(p.naam)}.* Het lot van de volgende werkdag weegt uw wens mee, maar beslist zelf.`);
+    await meld(`🎲 *Genoteerd: u wenst ${ontsnapMrkdwn(p.naam)}.* Het lot van de volgende werkdag weegt uw wens mee, maar beslist zelf.`);
   } catch (err) { console.error('Fout bij wens voor het lot:', err.data?.error || err.message); }
 });
 
@@ -15621,7 +15621,6 @@ registreerFeature({
   naam: 'paarboek',
   state: ['paarboek.json', 'claims.json'],
   help: [{ gebruik: '/kroketgod bladzijde', verwacht: 'wat er tussen u en elk ander lid staat, en wat er voor u openstaat' }],
-  homeOrde: 7,
   home: ({ userId, members }) => {
     const rijen = bladzijdenVan(loadPaarboek(), userId, Object.keys(members));
     if (!rijen.length) return []; // open claims staan in UW BEURT (claimItem)
@@ -15701,7 +15700,6 @@ registreerFeature({
     { gebruik: '/kroketgod sus', verwacht: 'sticht vrede in de vete van het Rijk — kost 1 eigen punt, levert 2 roem op (alleen als u geen partij bent)' },
     { gebruik: '/kroketgod bede', verwacht: 'als drager van de Zwarte Korst: leg één bede bij wie u het zwaarst trof' },
   ],
-  homeOrde: 8, // dit is de as waarop u met mensen te maken heeft
   home: ({ userId, members }) => {
     const stok = readJSON('kerfstok.json', {});
     const eigen = kerfstokVan(stok, userId);
@@ -15937,7 +15935,6 @@ registreerFeature({
   naam: 'titels',
   state: ['titels.json', 'duelhistorie.json'],
   help: [{ gebruik: '/kroketgod titels', verwacht: 'wie draagt welke titel — en hoe u die afpakt' }],
-  homeOrde: 25,
   homeKnop: '👑 Titels',
   homeVenster: ({ userId, members }) => {
     const regels = Object.entries(TITELS).map(([key, def]) => {
@@ -16226,7 +16223,6 @@ registreerFeature({
   naam: 'seizoenen',
   state: ['seizoen.json', 'wereld.json'],
   help: [{ gebruik: '/kroketgod seizoen', verwacht: 'de stand van de strijd tegen de dreiging van dit seizoen, en uw eigen bijdrage' }],
-  homeOrde: 15, // bovenaan: dit is de overkoepelende boog waar de rest in hangt
   home: ({ userId, members }) => {
     const s = loadSeizoen();
     if (!s || s.status !== 'actief') return [];
@@ -16687,7 +16683,6 @@ function recenteStatusmeldingen(userId, maxLeeftijdUren = 48) {
 registreerFeature({
   naam: 'statusmeldingen',
   state: ['statusvorig.json'],
-  homeOrde: 12, // vlak onder de statuskaart: dit is wat er sinds uw laatste bezoek veranderde
   home: ({ userId }) => {
     const recent = recenteStatusmeldingen(userId);
     if (!recent.length) return [];
@@ -18162,7 +18157,6 @@ registreerFeature({
     { gebruik: '/kroketgod tribunaal [naam]', verwacht: `draag een lid voor dat ${TRIBUNAAL_DREMPEL_DAGEN}+ dagen volledig stil is, óf ${TRIBUNAAL_WOORD_DAGEN}+ dagen geen woord zei; de Raad stemt daarna geheim` },
     { gebruik: '/kroketgod afwezig [dagen]', verwacht: 'meld dat u weg bent — geen tribunaal, duel, roof, overval of troonstrijd (ook niet door u), geen zakgeld, en de Kroket God wenst u in het kanaal veel kampeerplezier (`afwezig 0` of `aanwezig` zet het uit)' },
   ],
-  homeOrde: 30,
   home: ({ userId, members }) => {
     const t = readJSON('tribunaal.json', null);
     const blocks = [];
@@ -19009,10 +19003,12 @@ function weekGrafiek(userId) {
   const gem = puntenhistorie.gemiddeldeReeks(staat, maandag);
   const n = eigen.reduce((m, v, i) => (v === null ? m : i + 1), 0);
   if (n < 2) return null; // een lijn heeft twee punten nodig
+  const categories = ['ma', 'di', 'wo', 'do', 'vr', 'za', 'zo'].slice(0, n);
+  const reeks = (naam, waarden) => ({ name: naam, data: waarden.slice(0, n).map((v, i) => ({ label: categories[i], value: v ?? 0 })) });
   return { type: 'data_visualization', title: 'Uw week', chart: {
     type: 'line',
-    axis_config: { categories: ['ma', 'di', 'wo', 'do', 'vr', 'za', 'zo'].slice(0, n) },
-    series: [{ name: 'U', data: eigen.slice(0, n).map((v) => v ?? 0) }, { name: 'Gemiddelde', data: gem.slice(0, n).map((v) => v ?? 0) }],
+    axis_config: { categories },
+    series: [reeks('U', eigen), reeks('Gemiddelde', gem)],
   } };
 }
 
@@ -19028,8 +19024,8 @@ function bouwAppHome2Blocks(userId, melding = '', extraBlocks = [], opties = {})
 
   // Waarschuwingen: hoogstens 3 (verbannen eerst); de knoppen staan in de sectie UW BEURT eronder.
   const alerts = [
-    ...(verbannen ? [{ type: 'alert', level: 'error', text: kapTekst('U bent verbannen. Spelacties zijn geblokkeerd tot de poorten heropenen. Toon berouw met /kroketgod beroep.', 200) }] : []),
-    ...d.deadlines.map((x) => ({ type: 'alert', level: 'warning', text: kapTekst(zonderOpmaak(x.tekst), 200) })),
+    ...(verbannen ? [{ type: 'alert', level: 'error', text: plain('U bent verbannen. Spelacties zijn geblokkeerd tot de poorten heropenen. Toon berouw met /kroketgod beroep.', 200) }] : []),
+    ...d.deadlines.map((x) => ({ type: 'alert', level: 'warning', text: plain(zonderOpmaak(x.tekst), 200) })),
   ].slice(0, 3);
 
   const blocks = [...bovenkant, ...alerts];
@@ -19814,7 +19810,8 @@ app.action('open_bede', async ({ ack, body, client }) => {
 });
 
 app.view('modal_bede', async ({ ack, body, view, client }) => {
-  await ack();
+  // Gepusht vanuit het wrokvenster: sluit de hele stapel, anders blijft dat venster verouderd staan.
+  await ack(view.root_view_id && view.root_view_id !== view.id ? { response_action: 'clear' } : undefined);
   const uitkomst = await legBede(client, body.user.id, view.state.values.soort?.keuze?.selected_option?.value);
   await publiceerHome(client, body.user.id, uitkomst.tekst);
 });
@@ -19956,8 +19953,10 @@ app.action(/^home_cmd_kies_\d+$/, async ({ ack, body, client }) => {
       view: bouwCommandoModal(sjabloon, optie.uitleg, medeledenOpties(userId), maxLeden),
     });
     // Menu's terugzetten: een menu dat op "dossier" blijft staan, vuurt geen actie meer af als
-    // iemand na het sluiten van het formulier opnieuw "dossier" kiest.
-    await publiceerHome(client, userId);
+    // iemand na het sluiten van het formulier opnieuw "dossier" kiest. Staat het menu in het
+    // commandovenster, dan is dát venster het menu: opnieuw tekenen (meldKnopUitkomst doet ook de Home).
+    if (body.view?.type === 'modal' && String(body.view.callback_id || '').startsWith('naslag_')) await meldKnopUitkomst(client, body, '');
+    else await publiceerHome(client, userId);
   } catch (err) { console.error('Fout bij Home-commandomenu:', err.data?.error || err.message); }
 });
 
