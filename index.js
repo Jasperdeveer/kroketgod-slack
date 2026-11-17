@@ -63,15 +63,6 @@ const { ARCHIEF_BESTAND, laadArchief, voegToeAanArchief, zoekArchief, entriesTus
 // Een anoniem gelegde vloek blijft anoniem, ook in het archief en de kroniek.
 const { vloekGelegdTekst, anonimiseerVloekRegel, anonimiseerKroniek } = require('./lib/anoniem.js');
 const { VOORRAAD_BESTAND, ruimVoorraadOp, haalUitVoorraad, vulVoorraad, voorraadStand } = require('./lib/voorraad.js');
-// koers/verkoopprijs krijgen een beurs-prefix: "koers" alleen is in dit bestand te weinig
-// zeggend tussen de tientallen andere spellen.
-const {
-  MAX_AANDELEN_TOTAAL, MAX_PER_DOELWIT, DIVIDEND_PER_PLEK,
-  MIN_KOERS, KOERS_DELER, VERKOOP_FACTOR,
-  koers: beursKoers, verkoopprijs: beursVerkoopprijs,
-  dividendVoorPlek, totaalAandelen, toetsAankoop, toetsVerkoop, berekenAfrekening,
-  vergrendeldVandaag, naAankoopVandaag, teTellenAankopen,
-} = require('./lib/beurs.js');
 const {
   SOORTEN, randSleutel, warmte: weefselWarmte, wrijving: weefselWrijving,
   graadPerLid, sterksteBand, grootsteVete, meestScheef, spil, eenlingen, relatiesVan,
@@ -4328,8 +4319,8 @@ function vervangNamen(tekst) {
 const VERZONNEN_TOKEN = /[ \t]*\[[A-Z][A-Z _]{1,24}:[^\]\n]*\]/g;
 // Haalt een ondertekening onder een TEKSTFRAGMENT weg. normaliseerOndertekening maakt de
 // handtekening uniform maar verwijdert hem niet — en wordt zo'n fragment daarna in een groter
-// bericht gezet dat zelf ondertekent, dan staat hij er twee keer in. Precies wat er in het eerste
-// beursdecreet gebeurde: aanhef, handtekening, regels, handtekening.
+// bericht gezet dat zelf ondertekent, dan staat hij er twee keer in. Precies wat er ooit in een
+// decreet gebeurde: aanhef, handtekening, regels, handtekening.
 // Alleen aan het EIND en alleen een echte handtekeningregel, zodat lopende tekst als "de tempel van
 // de Kroket God" intact blijft.
 function stripOndertekening(tekst) {
@@ -7798,42 +7789,6 @@ async function voerKroketCommandoUit({ command, respond, client }) {
       return;
     }
 
-
-    // ── De Frituurbeurs ───────────────────────────────────────────────────────
-    // Alles ephemeral: posities zijn geheim, dus zelfs de bevestiging hoort niet in het kanaal.
-    if (input === 'beurs' || input.startsWith('beurs ')) {
-      if (!members[command.user_id]) {
-        await respond({ text: '_Alleen leden van de Kroket Illuminati worden op de beurs toegelaten._', response_type: 'ephemeral' });
-        return;
-      }
-      const rest = input.replace(/^beurs\s*/, '').trim();
-      const handel = rest.match(/^(koop|verkoop)\s+(.+)$/i);
-      if (!handel) {
-        if (rest) {
-          await respond({ text: '_Gebruik: `beurs` voor het koersenbord, `beurs koop [naam] [aantal]` of `beurs verkoop [naam] [aantal]`._', response_type: 'ephemeral' });
-          return;
-        }
-        await respond({ text: beursOverzichtTekst(command.user_id), response_type: 'ephemeral' });
-        return;
-      }
-      const soort = handel[1].toLowerCase();
-      // Het aantal staat achteraan en is optioneel; de rest is de naam. Zo werkt "beurs koop
-      // mr kroketpet 2" én "beurs koop mr kroketpet".
-      const argRest = handel[2].trim();
-      const metAantal = argRest.match(/^(.*?)\s+(\d+)$/);
-      const naamDeel = (metAantal ? metAantal[1] : argRest).trim();
-      const aantal = metAantal ? parseInt(metAantal[2], 10) : 1;
-      const gevonden = getMemberByNaam(naamDeel);
-      if (!gevonden) {
-        await respond({ text: `_De beurs kent geen lid genaamd "${naamDeel}"._`, response_type: 'ephemeral' });
-        return;
-      }
-      const uitkomst = soort === 'koop'
-        ? await koopAandeel(client, command.user_id, gevonden[0], aantal)
-        : await verkoopAandeel(client, command.user_id, gevonden[0], aantal);
-      await respond({ text: uitkomst.tekst, response_type: 'ephemeral' });
-      return;
-    }
 
     // ── Het Sociale Weefsel ───────────────────────────────────────────────────
     // Ephemeral, en de eigen draden staan erbij: het groepsrapport alleen zou de vraag
@@ -14520,353 +14475,6 @@ async function koopWinkelItem(client, userId, itemKey, doelId, channelId) {
   return { ok: true, tekst: `_${item.naam} is verworven. Nieuw saldo: ${saldo - prijs} kroketpunten._` };
 }
 
-// ══════════════════════════════════════════════════════════════════════════════
-// DE FRITUURBEURS
-// ══════════════════════════════════════════════════════════════════════════════
-// Leden kopen met kroketpunten aandelen in een medelid. De rekenregels (koers, verkoopmarge,
-// grenzen, dividend) staan in lib/beurs.js; hier staan de posities, de berichten en de afrekening.
-//
-// WAAROM. Vanaf woensdag weet je vaak al dat je de week niet meer wint. Vanaf dat moment valt er
-// niets meer te doen — behalve andermans week bekijken. Op de beurs kun je daar dan nog steeds
-// aan verdienen: door vroeg te zien wie gaat winnen (dividend) of door te zien wie gaat klimmen
-// (koerswinst). Het is de eerste spelvorm hier die belónt dat je op de anderen let.
-//
-// POSITIES ZIJN GEHEIM. Een aankoop levert alleen een ephemeral bevestiging op, geen kanaalbericht.
-// Twee redenen. Ten eerste ruis: het kanaal heeft al genoeg te verstouwen, en de codebase heeft die
-// strijd eerder gevoerd (zie de naspel-bundel). Ten tweede, en belangrijker: een voorspellingsmarkt
-// waarin ieders inzet zichtbaar is, is geen voorspellingsmarkt meer maar een kudde. Alleen de
-// afrekening op zondagnacht is openbaar — dán pas blijkt wie het zag aankomen.
-//
-// DE AFREKENING HANGT ÍN DE WEEKRESET, niet in een eigen cron. voerWeekkampioenUit() heeft al een
-// inhaalslag bij opstarten voor als de bot zondagnacht stillag; door daar aan te haken erft de
-// beurs die inhaalslag. Een eigen cron zou een tweede ding zijn dat gemist kan worden — en de
-// afrekening MOET vóór de puntenreset gebeuren, want daarna is de eindstand weg.
-
-const loadBeurs = () => readJSON('beurs.json', {});
-const saveBeurs = (data) => writeJSON('beurs.json', data);
-
-// De beurs is een WEEKmarkt. Deze functie geeft de stand van de HUIDIGE week; hoort de opslag bij
-// een andere week, dan is het mandje leeg. Dat opschonen gebeurt lui bij het lezen en niet met een
-// cron: er is geen moment waarop het moet gebeuren, en zo kan een gemiste cron de markt niet in
-// een halve staat achterlaten.
-//
-// Geeft een KOPIE terug, niet het object uit de readJSON-cache. Die cache wordt gedeeld met elke
-// andere lezer (zie lib/state.js), en de handelspaden hieronder muteren de posities voordat ze
-// opslaan — zonder kopie zou een afgebroken transactie de stand in het geheugen al hebben
-// veranderd zonder dat er iets op schijf staat.
-//
-// Naast de posities: `vandaag` (wat er vandaag per lid gekocht is — dat mag pas morgen weer weg) en
-// `geteld` (hoeveel aankopen deze week als daad telden). Zie DE DRAAIDEUR in lib/beurs.js.
-function beursDezeWeek() {
-  const week = getMondayOfWeek();
-  const b = loadBeurs();
-  if (b.weekStart !== week) return { weekStart: week, posities: {}, inzet: {}, vandaag: null, geteld: {} };
-  const posities = {};
-  for (const [koper, bezit] of Object.entries(b.posities || {})) posities[koper] = { ...bezit };
-  return {
-    weekStart: week, posities, inzet: { ...(b.inzet || {}) },
-    vandaag: b.vandaag ? JSON.parse(JSON.stringify(b.vandaag)) : null,
-    geteld: { ...(b.geteld || {}) },
-  };
-}
-
-// Ligt er een portefeuille van een eerdere week die nog niet is afgerekend? Dan mag er niet
-// gehandeld worden: de schrijfactie zou die posities overschrijven vóór de eigenaar zijn dividend
-// heeft gehad. In de praktijk is dit een venster van seconden — de bot start op maandag op, de
-// inhaalslag van de weekreset rekent de beurs af — maar geld dat verdampt omdat twee dingen elkaar
-// net misten, is precies het soort bug dat niemand ooit terugvindt.
-function beursWachtOpAfrekening() {
-  const b = loadBeurs();
-  return !!(b.weekStart && b.weekStart !== getMondayOfWeek() && Object.keys(b.posities || {}).length);
-}
-
-// Het koersenbord: elk lid met zijn stand, koers en verkoopprijs. Ballingen gaan mee met een
-// markering — hun aandeel is geschorst, en dat is informatie die een handelaar wil zien.
-function beursKoersen() {
-  const members = loadMembers();
-  const scores = loadScores();
-  return Object.entries(members)
-    .map(([id, lid]) => ({
-      id,
-      bijnaam: lid.bijnaam,
-      score: scores[id] || 0,
-      koers: beursKoers(scores[id] || 0),
-      verkoop: beursVerkoopprijs(scores[id] || 0),
-      verbannen: !!isVerbannen(id),
-    }))
-    .sort((a, b) => b.score - a.score || a.bijnaam.localeCompare(b.bijnaam));
-}
-
-async function koopAandeel(client, koperId, doelId, aantal = 1) {
-  const members = loadMembers();
-  if (!members[koperId]) return { ok: false, tekst: '_Alleen leden van de Kroket Illuminati worden op de beurs toegelaten._' };
-  if (isVerbannen(koperId)) return { ok: false, tekst: '_Een balling heeft geen handelsrecht. Toon eerst berouw met `/kroketgod beroep`._' };
-  const pauze = await gokpauzeWeigering(koperId, 'aandelen te kopen op de Frituurbeurs');
-  if (pauze) return { ok: false, tekst: pauze };
-  if (beursWachtOpAfrekening()) return { ok: false, tekst: '_De beurs van vorige week is nog niet afgerekend. Zodra dat gebeurd is, opent de handel weer._' };
-
-  const { posities, inzet, vandaag, geteld } = beursDezeWeek();
-  const scores = loadScores();
-  const toets = toetsAankoop({
-    koperId, doelId, aantal,
-    doelScore: scores[doelId] || 0,
-    punten: scores[koperId] || 0,
-    posities,
-    doelIsLid: !!members[doelId],
-    doelVerbannen: !!isVerbannen(doelId),
-  });
-  if (!toets.ok) return { ok: false, tekst: `_${toets.reden}_` };
-
-  const n = Math.floor(aantal);
-  const koersNu = beursKoers(scores[doelId] || 0);
-  pasScoreAan(koperId, -toets.kosten);
-  posities[koperId] = { ...(posities[koperId] || {}), [doelId]: (posities[koperId]?.[doelId] || 0) + n };
-  inzet[koperId] = (inzet[koperId] || 0) + toets.kosten;
-  // Telt als daad tot de portefeuille één keer vol is geweest; daarna is opnieuw kopen gewoon
-  // handel. Zonder dit plafond was kopen-en-verkopen bij koers 1 een gratis daad-knop.
-  const telt = teTellenAankopen(geteld[koperId], n);
-  geteld[koperId] = (geteld[koperId] || 0) + telt;
-  saveBeurs({
-    weekStart: getMondayOfWeek(), posities, inzet, geteld,
-    vandaag: naAankoopVandaag(vandaag, koperId, doelId, n, dagSleutel()),
-  });
-
-  const doelNaam = members[doelId].bijnaam;
-  // Bewust in de audit-log en NIET in logGebeurtenis: dat laatste voedt de week-samenvatting en
-  // het activiteitenlog in het kanaal, en daarmee zou de geheime positie alsnog uitlekken. De
-  // audit-log is alleen te zien op het dashboard achter Tailscale én een token — een papieren
-  // spoor voor als er ooit over een transactie gesteggeld wordt.
-  logAudit('beurs_koop', `${members[koperId].bijnaam} kocht ${n}× ${doelNaam} à ${koersNu}`);
-  if (telt) await telActie(client, koperId, 'beurs_koop', telt);
-  const bezitNa = posities[koperId][doelId];
-  return { ok: true, tekst:
-    `📈 _${n} aandeel${n > 1 ? 'en' : ''} *${doelNaam}* gekocht à ${koersNu} — ${toets.kosten} kroketpunten betaald._\n` +
-    `_U bezit er nu ${bezitNa}. Saldo: ${loadScores()[koperId] || 0}. Niemand anders ziet deze aankoop._` };
-}
-
-async function verkoopAandeel(client, koperId, doelId, aantal = 1) {
-  const members = loadMembers();
-  if (!members[koperId]) return { ok: false, tekst: '_Alleen leden van de Kroket Illuminati worden op de beurs toegelaten._' };
-  const pauze = await gokpauzeWeigering(koperId, 'aandelen te verkopen op de Frituurbeurs');
-  if (pauze) return { ok: false, tekst: pauze };
-  if (beursWachtOpAfrekening()) return { ok: false, tekst: '_De beurs van vorige week is nog niet afgerekend. Zodra dat gebeurd is, opent de handel weer._' };
-
-  const { posities, inzet, vandaag, geteld } = beursDezeWeek();
-  const scores = loadScores();
-  // Wat vandaag gekocht is, mag pas morgen weer weg: anders was kopen-en-verkopen bij koers 1
-  // gratis, en telde elke ronde als daad.
-  const toets = toetsVerkoop({ koperId, doelId, aantal, doelScore: scores[doelId] || 0, posities,
-    vergrendeld: vergrendeldVandaag(vandaag, koperId, doelId, dagSleutel()) });
-  if (!toets.ok) return { ok: false, tekst: `_${toets.reden}_` };
-
-  const n = Math.floor(aantal);
-  const prijs = beursVerkoopprijs(scores[doelId] || 0);
-  posities[koperId][doelId] -= n;
-  if (posities[koperId][doelId] <= 0) delete posities[koperId][doelId];
-  if (!Object.keys(posities[koperId]).length) delete posities[koperId];
-  // Netto-inzet, dus nooit onder nul: wie met winst verkocht heeft niets meer uitstaan.
-  inzet[koperId] = Math.max(0, (inzet[koperId] || 0) - toets.opbrengst);
-  saveBeurs({ weekStart: getMondayOfWeek(), posities, inzet, vandaag, geteld });
-  // Verkopen boekt punten bij zonder dat er iets verdienstelijks gebeurde, dus expres met de
-  // rauwe pasScoreAan: geen roem, geen relikwieën, geen verbondszegen. De beurs is een markt,
-  // geen eerbewijs.
-  pasScoreAan(koperId, toets.opbrengst);
-
-  const doelNaam = members[doelId]?.bijnaam || 'een onbekende';
-  logAudit('beurs_verkoop', `${members[koperId].bijnaam} verkocht ${n}× ${doelNaam} à ${prijs}`);
-  return { ok: true, tekst:
-    `📉 _${n} aandeel${n > 1 ? 'en' : ''} *${doelNaam}* verkocht à ${prijs} — ${toets.opbrengst} kroketpunten ontvangen._\n` +
-    `_Saldo: ${loadScores()[koperId] || 0}._` };
-}
-
-// Het beursoverzicht voor één lid: koersenbord plus de eigen (geheime) portefeuille.
-function beursOverzichtTekst(userId) {
-  const koersen = beursKoersen();
-  const { posities, inzet } = beursDezeWeek();
-  const eigen = posities[userId] || {};
-  const members = loadMembers();
-
-  const bord = homeTabel([
-    ['LID', 'STAND  KOOP  VERKOOP'],
-    ...koersen.map(k => [
-      `${k.bijnaam}${k.id === userId ? ' <' : ''}${k.verbannen ? ' (geschorst)' : ''}`,
-      `${String(k.score).padStart(5)}  ${String(k.koers).padStart(4)}  ${String(k.verkoop).padStart(7)}`,
-    ]),
-  ]);
-
-  const bezit = Object.entries(eigen);
-  const portefeuille = bezit.length
-    ? bezit.map(([id, n]) => {
-        const plek = handelbaarPlek(koersen, id);
-        const zouOpbrengen = dividendVoorPlek(plek) * n;
-        return `> *${n}×* ${members[id]?.bijnaam || id} — nu plek ${plek}` +
-          (zouOpbrengen ? `, levert bij deze stand *${zouOpbrengen} roem* op` : ', levert bij deze stand *niets* op');
-      }).join('\n')
-    : '> _U bezit nog geen aandelen._';
-
-  const uitstaand = inzet[userId] || 0;
-  return `📈 *DE FRITUURBEURS* 📈\n\n${bord}\n*Uw portefeuille* (${totaalAandelen(posities, userId)}/${MAX_AANDELEN_TOTAAL} aandelen` +
-    `${uitstaand ? `, ${uitstaand} punten uitstaand` : ''})\n${portefeuille}\n\n` +
-    `_Kopen:_ \`/kroketgod beurs koop [naam] [aantal]\` · _verkopen:_ \`/kroketgod beurs verkoop [naam] [aantal]\`\n` +
-    `_Zondagnacht keert elk aandeel roem uit naar de eindstand: plek 1 = ${DIVIDEND_PER_PLEK[0]}, plek 2 = ${DIVIDEND_PER_PLEK[1]}, plek 3 = ${DIVIDEND_PER_PLEK[2]} roem per aandeel. ` +
-    `Daarna vervallen alle aandelen. Hoogstens ${MAX_PER_DOELWIT} per lid, niemand handelt in zichzelf, en wat u vandaag koopt verkoopt u op zijn vroegst morgen._`;
-}
-
-// Rekent de beurs af tegen de eindstand van de week. Wordt aangeroepen door voerWeekkampioenUit,
-// VÓÓR de puntenreset — daarna bestaat de eindstand niet meer.
-//
-// Leest de posities RAUW uit het bestand en niet via beursDezeWeek(): bij een inhaalslag op maandag
-// is de opgeslagen week al "vorige week", en juist die posities moeten worden uitbetaald.
-// Uitbetaling in ROEM, want kroketpunten worden een seconde later gewist (zie de kop hierboven).
-async function rekenBeursAf(client, eindstand) {
-  const b = loadBeurs();
-  const posities = b.posities || {};
-  if (!Object.keys(posities).length) return null; // niets uitstaand → stil blijven
-  const members = loadMembers();
-  const uitkomsten = berekenAfrekening({ posities, eindstand });
-
-  // Altijd leegmaken, óók als niemand iets ophaalde: de aandelen van deze week zijn verlopen.
-  // Dit is tevens de dubbel-uitbetaling-beveiliging — een tweede aanroep vindt niets meer.
-  saveBeurs({ weekStart: getMondayOfWeek(), posities: {}, inzet: {} });
-
-  if (!uitkomsten.length) {
-    await postToChannel(client, process.env.SLACK_CHANNEL_ID,
-      '📉 *DE FRITUURBEURS SLUIT* 📉\n\n> De hamer valt op de kroketweek. Niemand had een aandeel in de top drie: ' +
-      'alle posities verdampen in het vet.\n\n_Maandag opent de beurs opnieuw._\n\n— De Hoge Frituurraad');
-    return { uitgekeerd: 0 };
-  }
-
-  const regels = uitkomsten.map(u => {
-    const naam = members[u.koperId]?.bijnaam || u.koperId;
-    const detail = u.regels
-      .map(r => `${r.aantal}× ${members[r.doelId]?.bijnaam || r.doelId} (plek ${r.plek})`)
-      .join(', ');
-    return `> *${naam}* — ${detail}: *+${u.roem} roem*`;
-  }).join('\n');
-
-  await postToChannel(client, process.env.SLACK_CHANNEL_ID,
-    `📈 *DE FRITUURBEURS SLUIT* 📈\n\n> De hamer valt op de kroketweek. Wie vroeg durfde te geloven, oogst nu.\n${regels}\n\n` +
-    '_Alle aandelen zijn hiermee vervallen; maandag opent de beurs opnieuw. Kroketpunten gaan op nul, deze roem blijft eeuwig._\n\n— De Hoge Frituurraad');
-
-  // Ná het bericht: pasRoemAan kan een rangverheffing aankondigen, en die hoort ná de uitslag
-  // te komen waar hij uit volgt.
-  let totaal = 0;
-  for (const u of uitkomsten) {
-    if (!members[u.koperId]) continue;
-    await pasRoemAan(client, u.koperId, u.roem);
-    logGebeurtenis('beurs', u.koperId, `${members[u.koperId].bijnaam} haalde ${u.roem} roem op de Frituurbeurs`);
-    totaal += u.roem;
-  }
-  console.log(`📈 Frituurbeurs afgerekend: ${totaal} roem over ${uitkomsten.length} handelaar(s).`);
-  return { uitgekeerd: totaal };
-}
-
-// Het openingsdecreet. De beurs is er stil bij gekomen, en dat is precies waarom niemand hem
-// begreep: leden zagen hun saldo instorten na een aankoop zonder te weten wat ze gekocht hadden.
-//
-// De REGELS zijn getemplateerd uit de constanten hierboven en gaan NIET door de LLM. Dat is dezelfde
-// regel als bij de standenblokken en de cooldowns: het model levert de stem, de code levert de
-// cijfers. Een decreet dat een verkeerd dividend belooft is erger dan geen decreet.
-async function verkondigBeursDecreet(client, channelId = process.env.SLACK_CHANNEL_ID) {
-  const aanhef = await kroketResponseMetVangnet(
-    `Kondig plechtig aan dat DE FRITUURBEURS open is: de Kroket Illuminati kan vanaf nu aandelen kopen in ELKAAR. ` +
-    `Wie gelooft dat een medelid gaat klimmen, koopt zich in en deelt in diens glorie. ` +
-    `Wie ernaast zit, is zijn inzet kwijt. Speel op de gedachte dat je nu op je vrienden kunt WEDDEN. ` +
-    `Drie tot vier zinnen, dreigend en verlekkerd. Noem GEEN getallen, GEEN regels en GEEN namen — die volgen hieronder. ` +
-    `Geen inleidingszin en GEEN ondertekening: het decreet wordt onderaan al ondertekend.`,
-    350, false,
-    '📈 *DE FRITUURBEURS OPENT* 📈\n\n> Heren. De Raad heeft een markt geopend in uw onderlinge glorie. ' +
-    'Wie stijgt, maakt zijn aandeelhouders rijk; wie faalt, sleept ze mee in het vet.');
-
-  const laagste = `${MIN_KOERS} kroketpunt`;
-  const startKoers = beursKoers(ZAKGELD);
-  const startPrijs = `${startKoers} kroketpunt${startKoers === 1 ? '' : 'en'}`;
-  const regels = [
-    stripOndertekening(schoonOutput(aanhef)), // de code ondertekent zelf, onderaan
-    '',
-    '⚖️ *DE REGELS, IN GEWONE TAAL*',
-    '',
-    `> *Wat kost een aandeel?* De weekstand van dat lid gedeeld door ${KOERS_DELER}, naar boven afgerond. ` +
-      `Minimaal ${laagste}.`,
-    `> *Waarom maandag?* Dan staat iedereen gelijk op zijn zakgeld en kost élk aandeel ${startPrijs}. Wie pas donderdag instapt ` +
-      `betaalt de volle prijs voor iemand die al bovenaan staat. Vroege overtuiging is goedkoop; meelopen is duur.`,
-    `> *Wat levert het op?* Zondagnacht keert elk aandeel *roem* uit naar de eindstand: ` +
-      DIVIDEND_PER_PLEK.map((r, i) => `plek ${i + 1} = ${r}`).join(', ') + ` roem per aandeel. Daarbuiten: niets.`,
-    `> *Waarom roem en geen punten?* Omdat de afrekening samenvalt met de weekreset, die alle kroketpunten ` +
-      `op nul zet. U ruilt vergankelijke weekpunten voor blijvend aanzien.`,
-    `> *Kan ik eerder eruit?* Verkopen kan altijd, maar levert ${Math.round(VERKOOP_FACTOR * 100)}% van de koers op. ` +
-      `Winst pakken lukt dus alleen als uw aandeel écht geklommen is.`,
-    `> *Grenzen.* Hoogstens ${MAX_PER_DOELWIT} aandelen in één lid en ${MAX_AANDELEN_TOTAAL} in totaal. ` +
-      `Handel in uzelf is insiderhandel. Een balling is geschorst.`,
-    `> *Geheim.* Niemand ziet wat u bezit. Uw vastgezette punten staan in \`/kroketgod status\`.`,
-    '',
-    '📈 *Koersenbord en kopen:* `/kroketgod beurs` — of gebruik de knoppen in de Home-tab.',
-    '',
-    '— De Almachtige Kroket God :illuminati-kroket:',
-  ];
-  await postToChannel(client, channelId, regels.join('\n'));
-  console.log('📈 Beursdecreet verkondigd.');
-  return 'Beursdecreet verkondigd.';
-}
-
-registreerFeature({
-  naam: 'frituurbeurs',
-  state: ['beurs.json'],
-  help: [
-    { gebruik: '/kroketgod beurs', verwacht: 'het koersenbord en uw eigen portefeuille — koersen volgen de weekstand' },
-    { gebruik: '/kroketgod beurs koop [naam] [aantal]', verwacht: `koop aandelen in een medelid (max ${MAX_PER_DOELWIT} per lid, ${MAX_AANDELEN_TOTAAL} in totaal); zondagnacht keert elk aandeel roem uit naar de eindstand` },
-    { gebruik: '/kroketgod beurs verkoop [naam] [aantal]', verwacht: 'verkoop aandelen tegen de huidige koers (met marge) — winst pakken vóór de afrekening' },
-  ],
-  homeOrde: 22, // net onder de opdrachten: dit is de tweede as waarop je je week speelt
-  homeKnop: '💹 Beurs',
-  homeVenster: ({ userId, verbannen }) => {
-    if (verbannen) return [];
-    const koersen = beursKoersen();
-    if (koersen.length < 2) return []; // een markt van één lid is geen markt
-    const { posities, inzet } = beursDezeWeek();
-    const eigen = posities[userId] || {};
-    const members = loadMembers();
-    const bezit = Object.entries(eigen);
-    const handelbaar = koersen.filter(k => k.id !== userId && !k.verbannen);
-
-    const blocks = [...homeKaartKop('📈 DE FRITUURBEURS')];
-    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: homeTabel([
-      ['LID', 'STAND  KOOP  VERKOOP'],
-      ...koersen.map(k => [
-        `${k.bijnaam}${k.id === userId ? ' <' : ''}${k.verbannen ? ' (geschorst)' : ''}`,
-        `${String(k.score).padStart(5)}  ${String(k.koers).padStart(4)}  ${String(k.verkoop).padStart(7)}`,
-      ]),
-    ]) } });
-    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: bezit.length
-      ? `*Uw portefeuille* (${totaalAandelen(posities, userId)}/${MAX_AANDELEN_TOTAAL}${inzet[userId] ? `, ${inzet[userId]} punten uitstaand` : ''})\n` +
-        bezit.map(([id, n]) => {
-          const plek = handelbaarPlek(koersen, id);
-          const opbrengst = dividendVoorPlek(plek) * n;
-          return `> *${n}×* ${members[id]?.bijnaam || id} — plek ${plek}, nu *${opbrengst} roem* waard`;
-        }).join('\n')
-      : '_U bezit nog geen aandelen. Koop vroeg in wie u ziet klimmen — wie al bovenaan staat is duur._' } });
-    // Eén knop per handelbaar lid: één aandeel kopen tegen de huidige koers. Slack staat 25
-    // elementen toe, maar meer dan vier wordt een muur; de rest gaat via het commando.
-    if (handelbaar.length) {
-      blocks.push({ type: 'actions', elements: handelbaar.slice(0, 4).map(k => ({
-        type: 'button',
-        text: { type: 'plain_text', text: `📈 ${k.bijnaam.slice(0, 40)} (${k.koers})`, emoji: true },
-        action_id: `beurs_koop_${k.id}`,
-        value: k.id,
-      })) });
-    }
-    blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text:
-      `Zondagnacht: plek 1 = ${DIVIDEND_PER_PLEK[0]} roem per aandeel, plek 2 = ${DIVIDEND_PER_PLEK[1]}, plek 3 = ${DIVIDEND_PER_PLEK[2]} · ` +
-      'posities zijn geheim · verkopen kan met `/kroketgod beurs verkoop [naam]`' }] });
-    return blocks;
-  },
-});
-
-// Plek in de ranglijst zoals de afrekening hem ziet: ballingen doen niet mee aan de eindstand.
-function handelbaarPlek(koersen, id) {
-  return koersen.filter(k => !k.verbannen).findIndex(k => k.id === id) + 1;
-}
-
 // ── Opdracht-engine: dagelijkse en wekelijkse opdrachten ───────────────────────
 // Eén engine voor alle opdrachten. Voorheen waren bingo, stille missies en de premiejacht
 // drie losse implementaties van hetzelfde idee (voorwaarde → voortgang → beloning); nieuwe
@@ -14899,7 +14507,6 @@ const OPDRACHTEN = [
   { id: 'w-veiling',  soort: 'week', actie: 'veiling_bod',    doel: 1, beloning: 3, tekst: 'Bied op de Grote Veiling' },
   { id: 'w-roof',     soort: 'week', actie: 'roof_poging',    doel: 1, beloning: 3, tekst: 'Waag een Grote Kroketroof' },
   { id: 'w-goud',     soort: 'week', actie: 'gouden_kroket',  doel: 1, beloning: 5, tekst: 'Grijp de Gouden Kroket' },
-  { id: 'w-beurs',    soort: 'week', actie: 'beurs_koop',     doel: 2, beloning: 3, tekst: 'Koop twee aandelen op de Frituurbeurs' },
 ];
 
 const OPDRACHTEN_PER_DAG = 3;
@@ -16615,29 +16222,7 @@ function persoonlijkeStatus(userId) {
     });
   }
 
-  // Beurspositie. Staat hier omdat vastgezette punten anders lijken te VERDWIJNEN: wie 22 punten in
-  // aandelen zet ziet zijn saldo instorten en heeft geen enkele plek waar staat waar ze heen zijn.
-  // De aankoop zelf is geheim en komt bewust niet in het kanaallog, dus dit is de enige plaats waar
-  // een lid zijn eigen inzet kan terugvinden.
-  let beurs = null;
-  try {
-    const b = readJSON('beurs.json', {});
-    if (b.weekStart === weekNu) {
-      const eigen = b.posities?.[userId] || {};
-      const aandelen = Object.values(eigen).reduce((t, n) => t + (Number(n) || 0), 0);
-      if (aandelen > 0) {
-        const stand = Object.entries(loadMembers())
-          .map(([id]) => [id, loadScores()[id] || 0])
-          .sort((a, b2) => b2[1] - a[1]);
-        const plekVan = new Map(stand.map(([id], i) => [id, i + 1]));
-        const roemNu = Object.entries(eigen)
-          .reduce((t, [doelId, n]) => t + dividendVoorPlek(plekVan.get(doelId) || 99) * (Number(n) || 0), 0);
-        beurs = { aandelen, uitstaand: b.inzet?.[userId] || 0, roemNu };
-      }
-    }
-  } catch (_) {}
-
-  return { powerups, titels, cooldowns, beurs, dagreset: msTotDagreset(), weekreset: msTotWeekreset() };
+  return { powerups, titels, cooldowns, dagreset: msTotDagreset(), weekreset: msTotWeekreset() };
 }
 
 // ── Cooldowns leesbaar maken ──────────────────────────────────────────────────
@@ -16812,15 +16397,7 @@ function statusBlokTekst(userId) {
       regels.push(`> ${t.icoon} ${t.naam} — geen einddatum${t.verdedigingen ? `, ${t.verdedigingen}× verdedigd` : ''} _(${t.voorrecht})_`);
     }
   }
-  if (st.beurs) {
-    if (!st.powerups.length && !st.titels.length) { regels.push('*⏳ ACTIEF OP U*'); regels.push(''); }
-    // Expliciet "vastgezet, niet verdwenen": dit is precies de regel die iemand mist die zijn saldo
-    // ziet instorten na een beursaankoop.
-    regels.push(`> 📈 Beurs — *${st.beurs.aandelen}* aandeel${st.beurs.aandelen === 1 ? '' : 'en'}, ` +
-      `*${st.beurs.uitstaand}* punt${st.beurs.uitstaand === 1 ? '' : 'en'} vastgezet _(niet verdwenen — ` +
-      `levert bij deze stand ${st.beurs.roemNu} roem op zondagnacht)_`);
-  }
-  if (!st.powerups.length && !st.titels.length && !st.beurs) {
+  if (!st.powerups.length && !st.titels.length) {
     regels.push('*⏳ ACTIEF OP U*');
     regels.push('');
     regels.push('> _Niets. Geen zegen, geen artefact, geen titel._');
@@ -18161,7 +17738,7 @@ const NASLAG = {
 };
 
 // Features mogen hun eigen naslag-venster meebrengen: `homeKnop` + `homeVenster(ctx)` in
-// registreerFeature. Zo hoeft een feature die alleen naslag is (de beurskoersen) geen ruimte
+// registreerFeature. Zo hoeft een feature die alleen naslag is (het wereldbord) geen ruimte
 // meer op het overzicht te kosten, en hoeft deze lijst hierboven niet te
 // weten dat die features bestaan.
 function naslagIngang(sleutel) {
@@ -18203,7 +17780,7 @@ function bouwNaslagVenster(sleutel, userId, melding = '') {
   // herhaalt de kop de titel — dus die twee gaan eraf.
   while (inhoud.length && inhoud[0].type === 'divider') inhoud.shift();
   // Een modal zonder blokken weigert Slack met een invalid_blocks-fout. Features geven een lege
-  // lijst terug als er niets te melden is (een balling op de beurs, een weefsel met te weinig
+  // lijst terug als er niets te melden is (een balling, een weefsel met te weinig
   // leden), en dat mag geen kapot venster opleveren.
   if (!inhoud.length) inhoud = [{ type: 'section', text: { type: 'mrkdwn', text: '_Hier valt nu niets te zien._' } }];
   return {
@@ -19262,19 +18839,6 @@ app.action('kanon_inleg', async ({ ack, body, action, client }) => {
   } catch (err) { console.error('Fout bij kanoninleg:', err); }
 });
 
-// Beursknop in de App Home: één aandeel kopen tegen de huidige koers. Regex-actie omdat het
-// doelwit-id in de action_id zit (zelfde patroon als de duel-uitdaagknoppen), en één aandeel
-// omdat een knop geen aantal kan vragen — meer koopt u met `/kroketgod beurs koop [naam] [n]`.
-app.action(/^beurs_koop_/, async ({ ack, body, client }) => {
-  await ack();
-  try {
-    const doelId = body.actions?.[0]?.value;
-    if (!doelId) return;
-    const uitkomst = await koopAandeel(client, body.user.id, doelId, 1);
-    await meldKnopUitkomst(client, body, uitkomst.tekst);
-  } catch (err) { console.error('Fout bij beursknop:', err); }
-});
-
 // Verversknop in de App Home.
 app.action('home_verversen', async ({ ack, body, client }) => {
   await ack();
@@ -20102,19 +19666,6 @@ planCron('0 8 * * 1', async () => {
 async function voerWeekkampioenUit(client) {
   const scores = loadScores();
   const gesorteerd = Object.entries(scores).sort((a, b) => b[1] - a[1]);
-  // De Frituurbeurs rekent hier af en niet in een eigen cron: het moet vóór de puntenreset
-  // hieronder gebeuren (daarna is de eindstand weg), en zo erft de beurs de inhaalslag die deze
-  // functie bij opstarten al heeft. Alleen leden tellen mee voor de eindstand — een oud-lid in
-  // scores.json is geen plek in de ranglijst. Ballingen doen niet mee (zie handelbaarPlek).
-  //
-  // Dezelfde ordening als het koersenbord (stand aflopend, dan op bijnaam), zodat de plek die een
-  // handelaar de hele week in zijn portefeuille zag, ook de plek is waarop hij wordt afgerekend.
-  // Zonder die gelijke tie-break kon een gelijke stand bovenaan hier anders vallen dan daar.
-  const beursLeden = loadMembers();
-  const beursEindstand = gesorteerd
-    .filter(([id]) => beursLeden[id] && !isVerbannen(id))
-    .sort((a, b) => b[1] - a[1] || beursLeden[a[0]].bijnaam.localeCompare(beursLeden[b[0]].bijnaam));
-
   // Alleen een kampioen kronen als er deze week überhaupt punten zijn verdiend — dus als iemand
   // boven het zakgeld uitkwam. Anders kroonde een week zonder spel wie niets uitgaf.
   const heeftPunten = gesorteerd.length > 0 && kampioenWaardig(gesorteerd[0][1]);
@@ -20143,13 +19694,6 @@ async function voerWeekkampioenUit(client) {
       `👑 *DE WEEKKAMPIOEN* 👑\n\n> *${kampioenBijnaam}* wint de kroketweek met *${kampioenScore} kroketpunten* en is komende week DE PROFEET VAN DE FRITUUR (één zegen te vergeven via \`/kroketgod zegen [naam]\`).\n> De kroketpunten gaan op nul (maandag 08:00 volgt het zakgeld); de roem blijft eeuwig.\n\n— De Almachtige Kroket God`
     );
     await postMetStem(client, process.env.SLACK_CHANNEL_ID, tekst);
-  }
-
-  // De beurs ná de kroning en vóór de reset: de kampioen is het nieuws, de beurs is het naspel.
-  try {
-    await rekenBeursAf(client, beursEindstand);
-  } catch (err) {
-    console.error('⚠️ Beursafrekening mislukt:', err.message);
   }
 
   // Reset ALLEEN de kroketpunten (scores) naar 0 — roem blijft permanent staan.
@@ -21329,8 +20873,6 @@ async function voerDashboardActie(actie) {
       return (await weekvijandBeurt(app.client)) || 'Geen beurt: geen actieve vijand, al gedaan vandaag, of niets te doen.';
     case 'veilingOpen':
       return await openGroteVeiling(4);
-    case 'beursDecreet':
-      return await verkondigBeursDecreet(app.client);
     case 'veilingHamer':
       return await laatVeilingHamerVallen();
     // Seizoen-testacties. `seizoenSync` doet wat de maandag-cron doet (fase aankondigen, of een
