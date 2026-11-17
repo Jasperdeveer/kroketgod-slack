@@ -298,11 +298,14 @@ const app = new App({
           const patch = await leesBody(req);
           const bordVelden = () => ['decreetVanDeDag', 'decreetIntensiteit', 'stemmingOverride'].map(k => instelling(k)).join('|');
           const bordVoor = bordVelden();
+          const homeVoor = instelling('homeVersie');
           const nieuw = saveInstellingen(patch);
           logAudit('instellingen', Object.keys(patch || {}).join(', '));
           // Decreet of stemming gewijzigd? Dan meteen het wereldbord bij (het dashboard stuurt altijd
           // alle velden mee, dus vergelijken en niet naar de sleutels in de patch kijken).
           if (bordVelden() !== bordVoor) updateWereldbord(app.client, true).catch(() => {});
+          // Andere Home-versie? Dan krijgt iedereen die meteen, niet pas bij het openen van de tab.
+          if (instelling('homeVersie') !== homeVoor) voerDashboardActie('appHomeVerversen', {}).catch(() => {});
           res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
           res.end(JSON.stringify({ ok: true, instellingen: nieuw }));
         } catch (err) {
@@ -3456,6 +3459,7 @@ function getDagelijkseStemming() {
 registreerFeature({ naam: 'verborgen hand', state: ['verborgenhand.json'] });
 const loadVerborgenHand = () => readJSON('verborgenhand.json', {});
 const BEHEERDER_ID = 'U08ALFNQB1V';
+const OPPERKROKET_ID = BEHEERDER_ID; // de eigenaar: admin-checks en de Home 2.0-beta
 // Vaste dagen waarop een lid nooit aan de beurt is (0 = zondag … 6 = zaterdag).
 const VERBORGEN_HAND_NIET_OP = {
   U08PWNK9V7H: [1, 5], // De Groene Kroket werkt niet op maandag en vrijdag
@@ -10241,10 +10245,15 @@ planCron('45 23 * * 0', async () => {
 }, { timezone: 'Europe/Amsterdam' });
 
 // Dagstanden: elke dag 23:55 (Amsterdam) de weekscore per lid vastleggen, ook zondag (vóór de reset van 23:59).
+// Scores van alleen de huidige leden: ex-leden horen niet in het gemiddelde of de dashboardreeksen.
+function ledenScores() {
+  const leden = loadMembers();
+  return Object.fromEntries(Object.entries(loadScores()).filter(([id]) => leden[id]));
+}
 function legDagstandVast() {
   const raid = readJSON('bamischijf.json', {});
   const raidStand = raid.actief && Number.isFinite(raid.hp) ? { key: raid.weekStart || raid.vijand?.key, hp: raid.hp, maxHp: raid.maxHp } : null;
-  const staat = puntenhistorie.legDagstandVast(readJSON('puntenhistorie.json', {}), dagSleutel(), loadScores(), { schatkist: regieStaat().schatkist, raid: raidStand });
+  const staat = puntenhistorie.legDagstandVast(readJSON('puntenhistorie.json', {}), dagSleutel(), ledenScores(), { schatkist: regieStaat().schatkist, raid: raidStand });
   writeJSON('puntenhistorie.json', puntenhistorie.ruimOp(staat, Date.now()));
 }
 planCron('55 23 * * *', () => {
@@ -13791,7 +13800,7 @@ function regieUitdagingUitslag(winId, verliesId, nu = Date.now()) {
 app.action('regie_gunst', async ({ ack, body, action, client }) => {
   await ack();
   const nu = Date.now();
-  const zeg = (text) => client.chat.postEphemeral({ channel: body.channel?.id || KANAAL(), user: body.user.id, text }).catch(() => {});
+  const zeg = (text) => zegKnop(client, body, text);
   const knop = regieKnop(action.value, 'gunst', nu);
   if (!knop) return zeg('_Deze gunst is verlopen: de Kroket God vergeet snel._');
   if (knop.data.doel !== body.user.id) return zeg('_Deze gunst is voor iemand anders bedoeld._');
@@ -13806,7 +13815,7 @@ app.action('regie_gunst', async ({ ack, body, action, client }) => {
 app.action('regie_uitdaging', async ({ ack, body, action, client }) => {
   await ack();
   const nu = Date.now();
-  const zeg = (text) => client.chat.postEphemeral({ channel: body.channel?.id || KANAAL(), user: body.user.id, text }).catch(() => {});
+  const zeg = (text) => zegKnop(client, body, text);
   const knop = regieKnop(action.value, 'uitdaging', nu);
   if (!knop) return zeg('_Deze uitdaging is verlopen._');
   if (knop.data.koploper !== body.user.id) return zeg('_Deze uitdaging is alleen voor de koploper._');
@@ -14128,7 +14137,7 @@ async function heteKroketOntplof(client, nu = Date.now()) {
 
 app.action('regie_hete_kroket', async ({ ack, body, client }) => {
   await ack();
-  const zeg = (text, blocks) => client.chat.postEphemeral({ channel: body.channel?.id || KANAAL(), user: body.user.id, text, ...(blocks ? { blocks } : {}) }).catch(() => {});
+  const zeg = (text, blocks) => zegKnop(client, body, text, blocks);
   const v = verrassingStaat('hete_kroket');
   if (!v) return zeg('_De kroket is al ontploft of koud._');
   if (v.data.houder !== body.user.id) return zeg('_U houdt de kroket niet vast._');
@@ -14140,7 +14149,7 @@ app.action('regie_hete_kroket', async ({ ack, body, client }) => {
 
 app.action('regie_hete_kroket_kies', async ({ ack, body, action, client }) => {
   await ack();
-  const zeg = (text) => client.chat.postEphemeral({ channel: body.channel?.id || KANAAL(), user: body.user.id, text }).catch(() => {});
+  const zeg = (text) => zegKnop(client, body, text);
   const nu = Date.now();
   const v = verrassingStaat('hete_kroket');
   if (!v) return zeg('_De kroket is al ontploft of koud._');
@@ -14332,7 +14341,7 @@ const stadKeuzes = {
 for (const soort of Object.keys(stadKeuzes)) {
   app.action(`regie_stad_${soort}`, async ({ ack, body, client }) => {
     await ack();
-    const zeg = (text) => client.chat.postEphemeral({ channel: body.channel?.id || KANAAL(), user: body.user.id, text }).catch(() => {});
+    const zeg = (text) => zegKnop(client, body, text);
     const nu = Date.now();
     const v = verrassingStaat('stadhouder');
     if (!v || nu >= v.tot) return zeg('_Het besluit is al genomen of de macht is verlopen._');
@@ -14431,7 +14440,7 @@ async function stemZaak(client, userId, zaakId, keuze, nu = Date.now()) {
 app.action(/^regie_zaak_(boete|titel|vrij)$/, async ({ ack, body, action, client }) => {
   await ack();
   const uit = await stemZaak(client, body.user.id, action.value, action.action_id.replace('regie_zaak_', ''));
-  await client.chat.postEphemeral({ channel: body.channel?.id || KANAAL(), user: body.user.id, text: uit.tekst }).catch(() => {});
+  await zegKnop(client, body, uit.tekst);
 });
 
 // Sluit een verlopen zaak, hoogstens één keer: eerst `zaak: null`, dan pas uitvoeren en aankondigen.
@@ -14598,7 +14607,7 @@ async function voerRitueelUit(client, { userId, ritueel, rest, channelId, respon
 
 
 // De rooktests (scripts/rooktest/) komen zo bij de regisseur.
-if (process.env.KROKET_ROOKTEST) module.exports = { startStilleMissie, dagSleutel, stadKeuzes, voegToeAanArchief, regieKlok, voerOffer, voerBamischijfAanval, bouwDashboardData, voerDashboardActie, saveInstellingen, casinoOpen, regieTik, bouwRegieStand, voerIngreepUit, UITVOERDERS, regieStaat, bewaarRegie, stemZaak, sluitZaak, mogAutonoomPosten, werkdagenStil, casinoToegangReden, casinoMax, casinoPlafond, boekCasinoUitslag, sluitGeleKaartPoll, startGeleKaartPoll, voerDuel, voerEer, winkelPrijs, prijsRedenen, prijsToelichting, CRON_LABELS, geplandeCronMeta, BINGO_POOL, bouwDossierBlok, voerRitueelUit, raadpleegStaat, bewaarRaadpleeg, bouwAppHomeBlocks, bouwNaslagVenster, kapHomeBlocks, stemTribunaal, vollooiMissie, telActie, getMondayOfWeek, kiesOpdrachten, opdrachtHaalbaar, opdrachtTekst, opdrachtPool, alleOpdrachten, kenAlliantiePuntenBonus, draagBijAanSeizoen, bedelUitkomst, legDagstandVast, bouwAppHome2Blocks, publiceerHome, homeKrijgt2, homeKaart, homeBeelden, zorgVoorKaartbeelden };
+if (process.env.KROKET_ROOKTEST) module.exports = { startStilleMissie, dagSleutel, stadKeuzes, voegToeAanArchief, regieKlok, voerOffer, voerBamischijfAanval, bouwDashboardData, voerDashboardActie, saveInstellingen, casinoOpen, regieTik, bouwRegieStand, voerIngreepUit, UITVOERDERS, regieStaat, bewaarRegie, stemZaak, sluitZaak, mogAutonoomPosten, werkdagenStil, casinoToegangReden, casinoMax, casinoPlafond, boekCasinoUitslag, sluitGeleKaartPoll, startGeleKaartPoll, voerDuel, voerEer, winkelPrijs, prijsRedenen, prijsToelichting, CRON_LABELS, geplandeCronMeta, BINGO_POOL, bouwDossierBlok, voerRitueelUit, raadpleegStaat, bewaarRaadpleeg, bouwAppHomeBlocks, bouwNaslagVenster, kapHomeBlocks, stemTribunaal, vollooiMissie, telActie, getMondayOfWeek, kiesOpdrachten, opdrachtHaalbaar, opdrachtTekst, opdrachtPool, alleOpdrachten, kenAlliantiePuntenBonus, draagBijAanSeizoen, bedelUitkomst, legDagstandVast, OPPERKROKET_ID, bouwAppHome2Blocks, publiceerHome, homeKrijgt2, homeKaart, homeBeelden, zorgVoorKaartbeelden };
 
 // Wat het dashboard over het casino laat zien (bouwDashboardData) en kan (/api/casino).
 function casinoDashboardData(naam) {
@@ -18700,7 +18709,6 @@ function uwBeurtDelen(userId, nu = Date.now()) {
       (openR.length ? `Vandaag nog: ${openR.join(' · ')}` : '_U heeft vandaag alles gevraagd. Morgen spreekt hij weer._'),
   ].filter(Boolean);
 
-  // De actieknoppen: dezelfde voorwaarden als voorheen.
   // De actieknoppen: dezelfde voorwaarden als voorheen, alleen in één rij samen.
   const cooldowns = readJSON('cooldowns.json', {});
   const duels = readJSON('duels.json', {});
@@ -18772,6 +18780,9 @@ function uwBeurtDelen(userId, nu = Date.now()) {
       knop('⚖️ Vóór verwijdering', 'tribunaal_voor', { style: 'danger' }),
       knop('🛡️ Tegen', 'tribunaal_tegen', { style: 'primary' }),
     ] });
+  }
+  if (tribunaal && tribunaal.fase !== 'afgerond' && tribunaal.doelwitId === userId) {
+    items.push({ tekst: `⚖️ *Er loopt een tribunaal tegen u.* ${tribunaal.dossier?.dagenStil ?? 'Veel'} dagen stilte. Eén bericht in het kanaal blaast het onmiddellijk af, ook nu nog.`, knoppen: [] });
   }
   const poll = loadGeleKaartPoll();
   if (poll?.actief && poll.doelwitId !== userId) {
@@ -18999,19 +19010,19 @@ function ranglijstTabel(userId) {
   return { type: 'table', rows: [['#', 'Lid', 'Punten'].map(cel), ...rijen.map(([id, sc], i) => [`${i + 1}`, `${members[id].bijnaam}${id === userId ? ' (u)' : ''}`, `${sc}`].map(cel))] };
 }
 
-// Uw week: uw weekscore per dag tegen het gemiddelde van het genootschap, tot en met de laatste dag met een stand.
+// Uw week: uw weekscore per dag tegen het gemiddelde van het genootschap. Vandaag telt live mee
+// (de dagstand van 23:55 is er dan nog niet); alleen dagen met een stand komen erin, nooit als 0.
 function weekGrafiek(userId) {
-  const staat = readJSON('puntenhistorie.json', {});
   const maandag = getMondayOfWeek();
+  const staat = puntenhistorie.legDagstandVast(readJSON('puntenhistorie.json', {}), dagSleutel(), ledenScores());
   const eigen = puntenhistorie.weekReeks(staat, maandag, userId);
   const gem = puntenhistorie.gemiddeldeReeks(staat, maandag);
-  const n = eigen.reduce((m, v, i) => (v === null ? m : i + 1), 0);
-  if (n < 2) return null; // een lijn heeft twee punten nodig
-  const categories = ['ma', 'di', 'wo', 'do', 'vr', 'za', 'zo'].slice(0, n);
-  const reeks = (naam, waarden) => ({ name: naam, data: waarden.slice(0, n).map((v, i) => ({ label: categories[i], value: v ?? 0 })) });
+  const dagen = ['ma', 'di', 'wo', 'do', 'vr', 'za', 'zo'].map((label, i) => ({ label, i })).filter(({ i }) => eigen[i] !== null && gem[i] !== null);
+  if (dagen.length < 2) return null; // een lijn heeft twee punten nodig
+  const reeks = (naam, waarden) => ({ name: naam, data: dagen.map(({ label, i }) => ({ label, value: waarden[i] })) });
   return { type: 'data_visualization', title: 'Uw week', chart: {
     type: 'line',
-    axis_config: { categories },
+    axis_config: { categories: dagen.map((d) => d.label) },
     series: [reeks('U', eigen), reeks('Gemiddelde', gem)],
   } };
 }
@@ -19168,17 +19179,23 @@ async function publiceerHome(client, userId, melding = '', extraBlocks = []) {
   // Home 2.0 voor wie hem krijgt; weigert Slack hem (of faalt het bouwen), dan krijgt dit lid de klassieke Home.
   if (homeKrijgt2(userId)) {
     kaartbeeldenOpAchtergrond(); // ontbrekende beelden komen bij de volgende publicatie
-    try {
-      await slackLimiter.schedule(() => client.views.publish({
-        user_id: userId,
-        view: { type: 'home', blocks: bouwAppHome2Blocks(userId, melding, extraBlocks, { beelden: homeBeelden() }) },
-      }));
-      return;
-    } catch (err) {
-      const nu = Date.now();
-      if (nu - HOME2_FOUT.laatst > 3_600_000) {
-        HOME2_FOUT.laatst = nu;
-        console.error(`⚠️ Home 2.0 voor ${userId} mislukt, klassieke Home gepubliceerd:`, err.data?.error || err.message, JSON.stringify(err.data?.response_metadata || '').slice(0, 300));
+    // Eerst met beelden; weigert Slack dat, dan 2.0 nog eens zonder beelden, en pas daarna de klassieke Home.
+    const beeldenPogingen = [homeBeelden(), {}];
+    for (let i = 0; i < beeldenPogingen.length; i++) {
+      try {
+        await slackLimiter.schedule(() => client.views.publish({
+          user_id: userId,
+          view: { type: 'home', blocks: bouwAppHome2Blocks(userId, melding, extraBlocks, { beelden: beeldenPogingen[i] }) },
+        }));
+        return;
+      } catch (err) {
+        const fout = err.data?.error || err.message;
+        const nu = Date.now();
+        if (nu - HOME2_FOUT.laatst > 3_600_000) {
+          HOME2_FOUT.laatst = nu;
+          console.error(`⚠️ Home 2.0 voor ${userId} mislukt${i === 0 ? ' (met beelden)' : ', klassieke Home gepubliceerd'}:`, fout, JSON.stringify(err.data?.response_metadata || '').slice(0, 300));
+          logAudit('home', `Home 2.0 ${i === 0 ? 'met beelden' : 'zonder beelden'} mislukt: ${fout}`);
+        }
       }
     }
   }
@@ -19218,6 +19235,12 @@ app.event('app_home_opened', async ({ event, client }) => {
 // Feedback op een knopklik komt via twee wegen: klikte iemand op een bord ín het kanaal, dan
 // een ephemeral daar; klikte iemand in de App Home (container 'view', géén response_url en een
 // ephemeral zou onzichtbaar zijn), dan de melding bovenaan de ververste Home-view.
+// Antwoord op een regie-knop: in het kanaal een ephemeral, vanuit de Home (geen body.channel) de Home
+// opnieuw met de melding; `blocks` (bv. de ledenkeuze van de Hete Kroket) komen dan onder de melding.
+async function zegKnop(client, body, text, blocks) {
+  if (body.channel) return client.chat.postEphemeral({ channel: body.channel.id, user: body.user.id, text, ...(blocks ? { blocks } : {}) }).catch(() => {});
+  return blocks ? publiceerHome(client, body.user.id, text, blocks) : meldKnopUitkomst(client, body, text);
+}
 async function meldKnopUitkomst(client, body, tekst) {
   // Een knop IN een naslag-venster moet dat venster verversen, niet de Home-tab eronder: die
   // ziet de gebruiker niet, en het venster zou de oude prijzen en het oude saldo blijven tonen.
@@ -19936,8 +19959,6 @@ app.action('home_verversen', async ({ ack, body, client }) => {
 // De menu's komen uit hetzelfde register als `kroketprompts` en `help`, dus een nieuw commando
 // staat vanzelf in de Home. Uitvoeren gaat via voerKroketCommandoUit — exact dezelfde regels,
 // limieten en ban-checks als het slash-commando.
-const OPPERKROKET_ID = 'U08ALFNQB1V'; // dezelfde ID als de admin-checks in de commando-handler
-
 const kapTekst = (s, n) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 
 function homeCommandoMenus(userId) {
@@ -19962,18 +19983,23 @@ async function voerHomeCommandoUit(client, userId, tekst, triggerId, sjabloon = 
   // niet in te zitten. Waar dat verschil telt (aanmelden), kijkt de handler hiernaar.
   const command = { text: tekst, user_id: userId, channel_id: KANAAL(), channel_name: ALLOWED_CHANNELS[0], trigger_id: triggerId, bron: 'home' };
   console.log(`🏠 Home-commando van ${loadMembers()[userId]?.bijnaam || userId}: "${sjabloon || '(formulier)'}"`);
+  // Vanuit het commandovenster opent een commando dat zelf een venster wil (casino, invite) dat erbovenop:
+  // views.open zou Slack weigeren zolang dit venster openstaat. Dan blijft het commandovenster ook staan.
+  let geduwd = false;
+  const uitvoerClient = !viewId ? client : new Proxy(client, { get: (c, ns) => (ns !== 'views' ? c[ns] : new Proxy(c.views, {
+    get: (v, fn) => (fn === 'open' ? (a) => { geduwd = true; return v.push(a); } : (typeof v[fn] === 'function' ? v[fn].bind(v) : v[fn])) })) });
   try {
-    await voerKroketCommandoUit({ command, respond, client });
+    await voerKroketCommandoUit({ command, respond, client: uitvoerClient });
   } catch (err) {
     console.error('Fout bij Home-commando:', err);
     antwoorden.push('_De frituurinstallatie hapert. Probeer het later opnieuw._');
   }
   const melding = antwoorden.length
     ? antwoorden.join('\n\n')
-    : (blokken.length ? '' : `_\`${tekst}\` is uitgevoerd. Het antwoord van de Kroket God staat in het kanaal._`);
+    : (blokken.length || geduwd ? '' : `_\`${tekst}\` is uitgevoerd. Het antwoord van de Kroket God staat in het kanaal._`);
   await publiceerHome(client, userId, melding, blokken);
   // Vanuit het commandovenster: het venster zelf wordt het antwoord, want de Home eronder ziet de gebruiker niet.
-  if (viewId) {
+  if (viewId && !geduwd) {
     try {
       await client.views.update({ view_id: viewId, view: {
         type: 'modal', title: { type: 'plain_text', text: 'De Kroket God antwoordt' }, close: { type: 'plain_text', text: 'Sluiten' },
@@ -21518,7 +21544,7 @@ function bouwNuBezig(nu, regieData, gokpauzes) {
   return {
     regie: { niveau: regieData.niveau, schatkist: regieData.schatkist, ingrepenVandaag: regieData.vandaag.length, effecten: regieData.effecten, verrassing: regieData.verrassing, zaak: regieData.zaak },
     raid: { actief: raidActief, naam: raidActief ? (raid.vijand?.naam || 'de weekvijand') : null, hp: raidActief ? raid.hp : 0, maxHp: raidActief ? raid.maxHp : 0 },
-    veiling: { open: veiling.status === 'open' && (!veiling.sluitTs || veiling.sluitTs > nu) },
+    veiling: { open: veiling.status === 'open' && veiling.weekStart === getMondayOfWeek() && (!veiling.sluitTs || veiling.sluitTs > nu) },
     tribunaal: { fase: trib && trib.fase !== 'afgerond' ? trib.fase : null },
     gelekaart: { actief: !!kaart?.actief, sluitTs: kaart?.actief ? kaart.sluitTs : null },
     gokpauzes,

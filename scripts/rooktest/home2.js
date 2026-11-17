@@ -5,9 +5,9 @@ const harnas = require('./harnas.js');
 const { getMondayOfWeek } = require('../../lib/tijd.js');
 
 const MIN = 60_000;
-const OWNER = 'U08ALFNQB1V'; // OPPERKROKET_ID
 
 harnas(async (h) => {
+  const OWNER = h.index.OPPERKROKET_ID;
   const { bouwAppHome2Blocks, bouwAppHomeBlocks, publiceerHome, homeKaart, saveInstellingen } = h.index;
   const nu = Date.now();
   const vandaagIso = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Amsterdam' }).format(new Date());
@@ -70,12 +70,29 @@ harnas(async (h) => {
   const grafieken = bl.filter((b) => b.type === 'data_visualization');
   const g = grafieken[0];
   h.ok(grafieken.length === 1 && typeof g.title === 'string' && g.title.length <= 50 && g.chart.type === 'line', 'weekgrafiek: lijn, titel als string <= 50');
-  h.ok(g.chart.series.length <= 12 && g.chart.series.every((s) => s.data.length === g.chart.axis_config.categories.length) && g.chart.axis_config.categories.length === 2, 'grafiek: elke reeks één punt per categorie');
+  h.ok(g.chart.series.length <= 12 && g.chart.series.every((s) => s.data.length === g.chart.axis_config.categories.length) && g.chart.axis_config.categories.length === 3 && g.chart.axis_config.categories.at(-1) === ['ma', 'di', 'wo', 'do', 'vr', 'za', 'zo'][(new Date(`${vandaagIso}T12:00:00Z`).getUTCDay() + 6) % 7], 'grafiek: elke reeks één punt per categorie, vandaag live als laatste punt');
   const cats = g.chart.axis_config.categories;
   h.ok(g.chart.series.every((s) => s.data.every((p) => p && typeof p === 'object' && cats.includes(p.label) && typeof p.value === 'number')) && g.chart.series.every((s) => s.data.map((p) => p.label).join() === cats.join()), 'grafiek: elk punt is { label, value } met label uit categories');
   h.ok(tabel.rows.every((r) => r.every((c) => c.type === 'raw_text')) && !tekst(bl).includes('"data_table"'), 'table-cellen raw_text; geen data_table');
   h.ok(tel(bl) < 100, `volle dag: ${tel(bl)} blokken incl. kinderen en kaarten (< 100)`);
   h.ok(carrousel.elements.length + 1 <= 10 + 1 && bl.filter((b) => b.type === 'carousel').length === 1, 'hoogstens 10 kaarten in de carrousel');
+
+  // 1b. Vandaag live; ontbrekende dagen worden overgeslagen, niet als 0 getekend; tribunaal tegen het lid staat als alert.
+  const liveScore = h.lees('scores.json').UA;
+  h.ok(g.chart.series[0].data.at(-1).value === liveScore, `laatste punt is de live score van vandaag (${liveScore})`);
+  h.schrijf('tribunaal.json', { fase: 'stemming', doelwitId: 'UA', stemmen: {}, dossier: { dagenStil: 9 }, sluitTs: nu + 3_600_000 });
+  h.ok(/tribunaal tegen u/.test(tekst(bouwAppHome2Blocks('UA').filter((b) => b.type === 'alert'))) && /tribunaal tegen u/.test(tekst(bouwAppHomeBlocks('UA'))), 'tribunaal tegen het lid: regel op de klassieke Home en alert in 2.0');
+  h.schrijf('tribunaal.json', { fase: 'stemming', doelwitId: 'UE', stemmen: {}, dossier: { dagenStil: 9 }, sluitTs: nu + 3_600_000 });
+
+  // 1c. Een dag zonder stand (di) valt weg in plaats van als 0 te worden getekend; ex-leden tellen niet mee in de dagstand.
+  const maandag0 = getMondayOfWeek();
+  const wo = new Date(Date.parse(`${maandag0}T12:00:00Z`) + 2 * 86_400_000).toISOString().slice(0, 10);
+  h.schrijf('puntenhistorie.json', { dagen: { [maandag0]: { UA: 2, UB: 4 }, [wo]: { UA: 5, UB: 4 } } });
+  const gat = bouwAppHome2Blocks('UA').find((b) => b.type === 'data_visualization');
+  h.ok(gat && !gat.chart.axis_config.categories.includes('di') && gat.chart.series.every((sr) => sr.data.length === gat.chart.axis_config.categories.length && sr.data.every((p) => typeof p.value === 'number')), 'dag zonder stand: geen categorie en geen 0');
+  h.schrijf('scores.json', { ...h.lees('scores.json'), UEXLID: 500 });
+  h.index.legDagstandVast();
+  h.ok(h.lees('puntenhistorie.json').dagen[h.index.dagSleutel()].UEXLID === undefined, 'dagstand bevat geen ex-leden');
 
   // 2. Geen grafiek zonder twee dagen stand; nooit meer dan twee grafieken.
   h.schrijf('puntenhistorie.json', { dagen: {} });
@@ -175,11 +192,62 @@ harnas(async (h) => {
   console.error = (...a) => fouten.push(a.join(' '));
   weiger = true; geplaatst.length = 0;
   await publiceerHome(client, 'UA');
-  h.ok(geplaatst.length === 2 && heeft2(geplaatst[0]) && !heeft2(geplaatst[1]) && geplaatst[1].view.blocks.length > 5, 'terugval: 2.0 geweigerd, daarna de klassieke Home');
+  h.ok(geplaatst.length === 3 && heeft2(geplaatst[0]) && heeft2(geplaatst[1]) && !heeft2(geplaatst[2]) && geplaatst[2].view.blocks.length > 5, 'terugval: 2.0 geweigerd, 2.0 zonder beelden geweigerd, daarna de klassieke Home');
   geplaatst.length = 0;
   await publiceerHome(client, 'UB');
   console.error = echt;
-  h.ok(geplaatst.length === 2 && !heeft2(geplaatst[1]), 'terugval werkt voor elk lid, ook bij herhaling');
+  h.ok(geplaatst.length === 3 && !heeft2(geplaatst[2]), 'terugval werkt voor elk lid, ook bij herhaling');
   h.ok(fouten.filter((f) => /Home 2\.0/.test(f)).length === 1, `de terugvalfout wordt hoogstens één keer per uur gelogd (${fouten.length})`);
   weiger = false;
+
+  // 10. Regie-knoppen vanuit de Home (geen body.channel): de Home wordt opnieuw gepubliceerd met de melding, niets gaat als ephemeral naar het kanaal.
+  const thuis = { channel: undefined, container: { type: 'view' }, view: { type: 'home' } };
+  const homeMelding = (n0) => h.views.slice(n0).filter((v) => v.fn === 'publish').map((v) => tekst(v.args.view.blocks)).join('\n');
+  schoon();
+  h.schrijf('regie.json', { ...leeg(), effecten: [{ id: 'gunst_1', soort: 'gunst', tot: nu + 60 * MIN, data: { doel: 'UA', gebruikt: false } }] });
+  h.ephemeral.length = 0; let v0 = h.views.length;
+  await h.klik('regie_gunst', 'UA', { value: 'gunst_1' }, thuis);
+  h.ok(h.ephemeral.length === 0 && /kroketpunt/.test(homeMelding(v0)), 'Home-klik gunst: melding op de Home, geen ephemeral in het kanaal');
+  h.schrijf('regie.json', { ...leeg(), effecten: [{ id: 'u_1', soort: 'uitdaging', tot: nu + 60 * MIN, data: { koploper: 'UB', hekkensluiter: 'UC', gebruikt: false } }] });
+  h.ephemeral.length = 0; v0 = h.views.length;
+  await h.klik('regie_uitdaging', 'UA', { value: 'u_1' }, thuis);
+  h.ok(h.ephemeral.length === 0 && /alleen voor de koploper/.test(homeMelding(v0)), 'Home-klik uitdaging: weigering op de Home');
+  h.schrijf('regie.json', { ...leeg(), verrassing: { id: 'hete_kroket', start: nu, tot: nu + 90 * MIN, kanaal: 'CKANAAL', ts: null, data: { houder: 'UA', deadline: nu + 30 * MIN, einde: nu + 90 * MIN, doorgaven: [] } } });
+  h.ephemeral.length = 0; v0 = h.views.length;
+  await h.klik('regie_hete_kroket', 'UA', { value: 'hete' }, thuis);
+  h.ok(h.ephemeral.length === 0 && /regie_hete_kroket_kies/.test(homeMelding(v0)), 'Home-klik Hete Kroket: ledenkeuze onder de melding op de Home');
+  h.ephemeral.length = 0; v0 = h.views.length;
+  await h.klik('regie_hete_kroket_kies', 'UA', { selected_user: 'UB' }, thuis);
+  h.ok(h.ephemeral.length === 0 && /gaf de kroket door/.test(homeMelding(v0)) && h.lees('regie.json').verrassing.data.houder === 'UB', 'Home-keuze Hete Kroket: doorgegeven, melding op de Home');
+  h.schrijf('regie.json', { ...leeg(), zaak: { id: 'z1', doel: 'UB', grond: 'kaarten', stemmen: {}, sluitTs: nu + 30 * MIN } });
+  h.ephemeral.length = 0; v0 = h.views.length;
+  await h.klik('regie_zaak_boete', 'UA', { value: 'z1' }, thuis);
+  h.ok(h.ephemeral.length === 0 && /stem/.test(homeMelding(v0)), 'Home-klik tribunaalzaak: stem bevestigd op de Home');
+  h.ephemeral.length = 0;
+  await h.klik('regie_zaak_vrij', 'UA', { value: 'z1' });
+  h.ok(h.ephemeral.length === 1, 'klik in het kanaal blijft een ephemeral');
+
+  // 11. Commando's uit het commandovenster die zelf een venster openen: views.push, venster niet overschreven.
+  for (const cmd of ['casino', 'invite', 'invite bekend']) {
+    schoon();
+    h.views.length = 0;
+    await h.klik('home_cmd_kies_0', 'UA', {}, { ...thuis, trigger_id: 'T1', actions: [{ selected_option: { value: cmd } }], view: { type: 'modal', id: 'V9', callback_id: 'naslag_commando', private_metadata: 'commando' } });
+    const fns = h.views.map((v) => v.fn);
+    h.ok(fns.includes('push') && !fns.includes('open'), `commando "${cmd}" vanuit het venster: views.push, geen views.open (${fns})`);
+    h.ok(!h.views.some((v) => v.fn === 'update' && v.args.view_id === 'V9' && /De Kroket God antwoordt/.test(tekst(v.args.view))), `commando "${cmd}": venster niet overschreven met het antwoord`);
+  }
+
+  // 12. Terugval: faalt 2.0 met beelden, dan 2.0 zonder beelden, dan pas klassiek; de fout staat in het auditlog.
+  schoon(); saveInstellingen({ homeVersie: 'iedereen' });
+  h.schrijf('kaartbeelden.json', { duel: `https://beeld.voorbeeld.nl/home/${'a'.repeat(40)}.png` });
+  const echt2 = console.error; console.error = () => {};
+  const pogingen = [];
+  const client2 = new Proxy(h.client, { get: (t, ns) => (ns === 'conversations' ? { members: async () => ({ members: ['UA', OWNER] }) } : ns === 'views'
+    ? { publish: async (a) => { const t2 = tekst(a.view.blocks); pogingen.push({ twee: /"type":"(carousel|container)"/.test(t2), beeld: /hero_image/.test(t2) });
+      if (/hero_image/.test(t2)) throw Object.assign(new Error('invalid_blocks'), { data: { error: 'invalid_blocks' } }); return { ok: true }; } }
+    : t[ns]) });
+  await publiceerHome(client2, 'UA');
+  console.error = echt2;
+  h.ok(pogingen.length === 2 && pogingen[0].beeld && pogingen[1].twee && !pogingen[1].beeld, `2.0 faalt met beelden: tweede poging 2.0 zonder beelden (${JSON.stringify(pogingen)})`);
+  h.ok((h.lees('auditlog.json').items || []).some((e) => e.endpoint === 'home'), 'fout staat in het auditlog (endpoint home)');
 });

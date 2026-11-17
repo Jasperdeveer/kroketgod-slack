@@ -8,7 +8,7 @@ const vm = require('vm');
 const assert = require('assert');
 
 const repo = path.join(__dirname, '..', '..');
-const oud = execSync('git show b8ebc84:dashboard.html', { cwd: repo, maxBuffer: 1 << 26 }).toString();
+const oud = execSync('git show d031a64:dashboard.html', { cwd: repo, maxBuffer: 1 << 26 }).toString();
 const nieuw = fs.readFileSync(path.join(repo, 'dashboard.html'), 'utf8');
 
 function inventaris(h) {
