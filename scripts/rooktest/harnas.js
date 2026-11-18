@@ -21,7 +21,7 @@ module.exports = async function harnas(test, { opstartMs = 2500 } = {}) {
     KROKET_ARCHIEF_PAD: path.join(state, 'grootarchief.ndjson'), SLACK_CHANNEL_ID: 'CKANAAL', KROKET_EMOJI_VERTRAGING_MS: '0',
     GROQ_BASE_URL: 'http://127.0.0.1:9', // groq-sdk leest dit: verbinding geweigerd, geen netwerk
     GEMINI_API_KEY: '', GEMINI_API_KEYS: '', GROQ_API_KEY: 'gsk-nep-ongeldig', OPENROUTER_API_KEY: '', CEREBRAS_API_KEY: '',
-    SAMBANOVA_API_KEY: '', HF_API_TOKEN: '', IMGBB_API_KEY: '', CLOUDFLARE_API_TOKEN: '', DASHBOARD_TOKEN: 'nep',
+    SAMBANOVA_API_KEY: '', HF_API_TOKEN: '', IMGBB_API_KEY: '', CLOUDFLARE_API_TOKEN: '', CF_AI_TOKEN: '', DASHBOARD_TOKEN: 'nep',
     R2_ACCOUNT_ID: 'acc', R2_ACCESS_KEY_ID: 'id', R2_SECRET_ACCESS_KEY: 'geheim', R2_BUCKET: 'emmer', R2_PUBLIC_URL: 'https://beeld.voorbeeld.nl',
   });
 

@@ -92,6 +92,8 @@ const saveDaglimieten = (d) => writeJSON('daglimieten.json', d);
 registreerFeature({ naam: 'daglimieten', state: ['daglimieten.json'] });
 registreerFeature({ naam: 'puntenhistorie', state: ['puntenhistorie.json'] });
 const puntenhistorie = require('./lib/puntenhistorie.js');
+registreerFeature({ naam: 'beeldbudget', state: ['beeldbudget.json'] });
+const beeldbudget = require('./lib/beeldbudget.js');
 const { bouwReeksen } = require('./lib/dashboardreeksen.js');
 const loadGunsten = () => readJSON('gunsten.json', {});
 const saveGunsten = (d) => writeJSON('gunsten.json', d);
@@ -805,8 +807,8 @@ function versVanDeDag(sleutel = null) {
 //
 // Zoekorde: env-pad → een eigen referentie-kroket → de avatar van de bot. Ontbreekt alles, dan is dit
 // null en gaat de beeldopdracht gewoon zonder bijlage — nooit een crash bij het opstarten om een
-// plaatje. Alleen Gemini krijgt de referentie: de HuggingFace- en Pollinations-vangnetten worden als
-// tekst-endpoint aangeroepen en kunnen er niets mee.
+// plaatje. Alleen FLUX.2 klein (Cloudflare) en Gemini krijgen de referentie: de andere schakels worden
+// als tekst-endpoint aangeroepen en kunnen er niets mee.
 //
 // referentie-kroket.jpg is een kale kroket op wit (productfoto, 1000×1000). Dat is bewust béter dan de
 // avatar kroketgod.png: die draagt een gewaad, een pose en een lijst, en zulke eigenschappen lekken bij
@@ -828,6 +830,17 @@ const KROKET_REFERENTIE = (() => {
   }
   return null;
 })();
+// Cloudflare neemt alleen invoerbeelden kleiner dan 512×512: een verkleinde kopie (448×448).
+const KROKET_REFERENTIE_KLEIN = (() => {
+  try { return fs.readFileSync(path.join(__dirname, 'referentie-kroket-klein.jpg')); } catch (_) { return null; }
+})();
+// Neurons per beeld van 1024×1024 volgens Cloudflares prijslijst (nov 2026), naar boven afgerond. klein:
+// 1.363,64 per eerste megapixel plus de referentie; schnell: 4 tegels × 4,8 + 4 stappen × 9,6 = 57,6.
+// klein mag tot 7.500 per dag (5 beelden), zodat er voor schnell altijd nog zo'n 25 overblijven.
+const CF_BEELDMODELLEN = [
+  { naam: 'FLUX.2 klein', model: '@cf/black-forest-labs/flux-2-klein-9b', neurons: 1450, plafond: 7500, multipart: true },
+  { naam: 'FLUX.1 schnell', model: '@cf/black-forest-labs/flux-1-schnell', neurons: 60, plafond: beeldbudget.PLAFOND },
+];
 
 // Het statische deel van de systeemprompt staat in lib/systeemprompt.js (bouwBasisPrompt): eerst
 // de regels, daarna de inkortbare naslag (leden, geboden, stijlvoorbeelden). buildSystemPrompt
@@ -5151,7 +5164,7 @@ async function maakBeeldBytes(beeldPrompt, { portret = null, vangnetPrompt = bee
   // een speler die tien keer op de knop drukt.
   let quotaOp = false;
 
-  // ── Primair: Gemini 2.5 Flash Image, alias "Nano Banana" (roteert over álle Gemini-keys) ──
+  // ── Optioneel (GEMINI_BEELD=1, kost geld): Gemini 2.5 Flash Image, alias "Nano Banana" (roteert over álle Gemini-keys) ──
   // Gebruikt dezelfde key-pool als de tekst-keten (geminiKeys()), dus profiteert nu ook van
   // rotatie bij 429/quota i.p.v. één vaste key. ~500 beelden per dag gratis per project.
   //
@@ -5173,22 +5186,70 @@ async function maakBeeldBytes(beeldPrompt, { portret = null, vangnetPrompt = bee
   const metReferentie = !!KROKET_REFERENTIE
     && process.env.KROKET_REFERENTIE_UIT !== '1'
     && (!!portret || /croquette|kroket/i.test(beeldPrompt));
+  const beeldTekst = `${beeldPrompt}.`
+    + (metReferentie
+      ? ` The attached image is the canonical reference for what a croquette is: that exact deep-fried golden-brown breadcrumb crust, coarse crumb texture, colour and cylindrical shape. Every croquette in the new image must be made of that same material. Take ONLY the material, colour, texture and shape from it — it is a material sample, not a composition: the reference is a bare croquette on a white background with no face or limbs, while the character you draw does have a face, arms and legs, and its pose, clothing, framing, background and lighting come entirely from the description above. Do not reproduce the reference's plain white backdrop or its isolated product-photo framing.`
+      : '')
+    + ' Render no text, letters, numbers or watermarks anywhere in the image.';
   const geminiParts = [
     ...(metReferentie ? [{ inline_data: { mime_type: KROKET_REFERENTIE.mimeType, data: KROKET_REFERENTIE.data } }] : []),
-    { text:
-      `${beeldPrompt}.`
-      + (metReferentie
-        ? ` The attached image is the canonical reference for what a croquette is: that exact deep-fried golden-brown breadcrumb crust, coarse crumb texture, colour and cylindrical shape. Every croquette in the new image must be made of that same material. Take ONLY the material, colour, texture and shape from it — it is a material sample, not a composition: the reference is a bare croquette on a white background with no face or limbs, while the character you draw does have a face, arms and legs, and its pose, clothing, framing, background and lighting come entirely from the description above. Do not reproduce the reference's plain white backdrop or its isolated product-photo framing.`
-        : '')
-      + ' Render no text, letters, numbers or watermarks anywhere in the image.' },
+    { text: beeldTekst },
   ];
   if (metReferentie) console.log(`🖼️ Kroket-referentie meegestuurd (${KROKET_REFERENTIE.bestand}, ${KROKET_REFERENTIE.kb} KB).`);
+
+  // ── Primair: Cloudflare Workers AI, gratis ────────────────────────────────────
+  // Eis van de eigenaar (18 nov): gratis, en niet te misbruiken zodat er kosten komen. Op het Free-plan
+  // geeft Cloudflare boven 10.000 Neurons per dag een fout in plaats van een rekening, en elk beeld wordt
+  // vóór de aanroep geboekt in lib/beeldbudget.js, onder dat tegoed. Het token (CF_AI_TOKEN) hoort alleen
+  // Workers AI-rechten te hebben. FLUX.2 klein eerst (neemt de kroket-referentie mee), schnell als tweede.
+  const cfToken = process.env.CF_AI_TOKEN;
+  const cfAccount = process.env.CF_ACCOUNT_ID || process.env.R2_ACCOUNT_ID;
+  for (const m of (cfToken && cfAccount ? CF_BEELDMODELLEN : [])) {
+    if (buffer) break;
+    const geboekt = beeldbudget.reserveer(readJSON('beeldbudget.json', {}), m.neurons, Date.now(), m.plafond);
+    if (!geboekt) { quotaOp = true; console.log(`🖼️ Beeldbudget van vandaag op voor ${m.naam}.`); continue; }
+    writeJSON('beeldbudget.json', geboekt);
+    try {
+      let body = JSON.stringify({ prompt: kapTekst(vangnetPrompt, 2048), steps: 4 });
+      if (m.multipart) {
+        body = new FormData();
+        body.append('prompt', beeldTekst);
+        body.append('width', '1024');
+        body.append('height', '1024');
+        if (metReferentie && KROKET_REFERENTIE_KLEIN) body.append('input_image_0', new Blob([KROKET_REFERENTIE_KLEIN], { type: 'image/jpeg' }), 'kroket.jpg');
+      }
+      // De ingebouwde fetch van Node, want node-fetch 2 kent geen FormData.
+      const resp = await globalThis.fetch(`https://api.cloudflare.com/client/v4/accounts/${cfAccount}/ai/run/${m.model}`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${cfToken}`, ...(m.multipart ? {} : { 'Content-Type': 'application/json' }) },
+        body,
+        signal: AbortSignal.timeout(60000),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (resp.ok && data.result?.image) {
+        buffer = Buffer.from(data.result.image, 'base64');
+        mimeType = buffer[0] === 0x89 ? 'image/png' : 'image/jpeg';
+        console.log(`✅ Cloudflare ${m.naam} beeld gegenereerd (${Math.round(buffer.length / 1024)} KB)`);
+      } else {
+        console.warn(`⚠️ Cloudflare ${m.naam} ${resp.status}: ${JSON.stringify(data.errors || data).substring(0, 200)}`);
+        if (resp.status === 429) { // dagtegoed bij Cloudflare op (ook als iets anders op het account het gebruikte)
+          writeJSON('beeldbudget.json', beeldbudget.vol(Date.now()));
+          quotaOp = true;
+          break;
+        }
+      }
+    } catch (err) {
+      console.warn(`⚠️ Cloudflare ${m.naam} fout:`, err.message);
+    }
+  }
 
   // Het beeldquotum is een DAGquotum per sleutel (per Google-project). Was het op, dan probeerde elk
   // visioen toch eerst alle drie de sleutels (3 × 429, productielog: 45 keer) voordat het vangnet aan
   // de beurt kwam. Een sleutel met zijn beeldquotum op gaat nu tot middernacht Pacific-tijd op de
   // persistente bank (lib/providerbank.js), en staan ze er allemaal op, dan meteen naar het vangnet.
-  const alleSleutels = geminiKeys();
+  // Alleen met GEMINI_BEELD=1: Google heeft geen gratis beeldtegoed meer, en zet iemand ooit betaling aan
+  // op een van deze projecten (voor tekst), dan zou elk visioen geld kosten.
+  const alleSleutels = !buffer && process.env.GEMINI_BEELD === '1' ? geminiKeys() : [];
   const beeldBankSleutel = (key) => `gemini-beeld:${sleutelId(key)}`;
   const beeldSleutels = alleSleutels.filter(key => !isGebankt(beeldBankSleutel(key)));
   if (alleSleutels.length && !beeldSleutels.length) {
@@ -5251,7 +5312,8 @@ async function maakBeeldBytes(beeldPrompt, { portret = null, vangnetPrompt = bee
   // Gemini's dagquota voor beelden is doorgaans halverwege de dag op. Een deprecatie hoort geen
   // deploy te kosten.
   // 28 stappen is de standaard van SD3-medium (~14s); FLUX-schnell werkte op 4. Vandaar instelbaar.
-  if (!buffer && process.env.HF_API_TOKEN) {
+  // Alleen met HF_BEELD=1: HuggingFace rekent af van tegoed (402 zonder), dus standaard uit.
+  if (!buffer && process.env.HF_API_TOKEN && process.env.HF_BEELD === '1') {
     const hfModel = process.env.HF_IMAGE_MODEL || 'stabilityai/stable-diffusion-3-medium-diffusers';
     const hfStappen = Number(process.env.HF_IMAGE_STEPS) || 28;
     console.log(`🔄 Gemini image niet beschikbaar — fallback naar HuggingFace (${hfModel})...`);
@@ -14607,7 +14669,7 @@ async function voerRitueelUit(client, { userId, ritueel, rest, channelId, respon
 
 
 // De rooktests (scripts/rooktest/) komen zo bij de regisseur.
-if (process.env.KROKET_ROOKTEST) module.exports = { startStilleMissie, dagSleutel, stadKeuzes, voegToeAanArchief, regieKlok, voerOffer, voerBamischijfAanval, bouwDashboardData, voerDashboardActie, saveInstellingen, casinoOpen, regieTik, bouwRegieStand, voerIngreepUit, UITVOERDERS, regieStaat, bewaarRegie, stemZaak, sluitZaak, mogAutonoomPosten, werkdagenStil, casinoToegangReden, casinoMax, casinoPlafond, boekCasinoUitslag, sluitGeleKaartPoll, startGeleKaartPoll, voerDuel, voerEer, winkelPrijs, prijsRedenen, prijsToelichting, CRON_LABELS, geplandeCronMeta, BINGO_POOL, bouwDossierBlok, voerRitueelUit, raadpleegStaat, bewaarRaadpleeg, bouwAppHomeBlocks, bouwNaslagVenster, kapHomeBlocks, stemTribunaal, vollooiMissie, telActie, getMondayOfWeek, kiesOpdrachten, opdrachtHaalbaar, opdrachtTekst, opdrachtPool, alleOpdrachten, kenAlliantiePuntenBonus, draagBijAanSeizoen, bedelUitkomst, legDagstandVast, OPPERKROKET_ID, bouwAppHome2Blocks, publiceerHome, homeKrijgt2, homeKaart, homeBeelden, zorgVoorKaartbeelden };
+if (process.env.KROKET_ROOKTEST) module.exports = { maakBeeldBytes, startStilleMissie, dagSleutel, stadKeuzes, voegToeAanArchief, regieKlok, voerOffer, voerBamischijfAanval, bouwDashboardData, voerDashboardActie, saveInstellingen, casinoOpen, regieTik, bouwRegieStand, voerIngreepUit, UITVOERDERS, regieStaat, bewaarRegie, stemZaak, sluitZaak, mogAutonoomPosten, werkdagenStil, casinoToegangReden, casinoMax, casinoPlafond, boekCasinoUitslag, sluitGeleKaartPoll, startGeleKaartPoll, voerDuel, voerEer, winkelPrijs, prijsRedenen, prijsToelichting, CRON_LABELS, geplandeCronMeta, BINGO_POOL, bouwDossierBlok, voerRitueelUit, raadpleegStaat, bewaarRaadpleeg, bouwAppHomeBlocks, bouwNaslagVenster, kapHomeBlocks, stemTribunaal, vollooiMissie, telActie, getMondayOfWeek, kiesOpdrachten, opdrachtHaalbaar, opdrachtTekst, opdrachtPool, alleOpdrachten, kenAlliantiePuntenBonus, draagBijAanSeizoen, bedelUitkomst, legDagstandVast, OPPERKROKET_ID, bouwAppHome2Blocks, publiceerHome, homeKrijgt2, homeKaart, homeBeelden, zorgVoorKaartbeelden };
 
 // Wat het dashboard over het casino laat zien (bouwDashboardData) en kan (/api/casino).
 function casinoDashboardData(naam) {
