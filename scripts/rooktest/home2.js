@@ -60,6 +60,7 @@ harnas(async (h) => {
   const containers = bl.filter((b) => b.type === 'container');
   h.ok(containers.length >= 4 && containers.every((c) => c.title?.type === 'plain_text' && c.is_collapsible === true && typeof c.default_collapsed === 'boolean' && c.child_blocks.length >= 1 && c.child_blocks.length <= 10), `containers: titel, inklapbaar, <= 10 kinderen (${containers.map((c) => c.title.text).join(' | ')})`);
   h.ok(kinderen(bl).every((k) => !['card', 'carousel', 'data_table', 'data_visualization'].includes(k.type)), 'containers bevatten geen kaart, carrousel of grafiek');
+  h.ok(containers.every((c) => !/\p{Extended_Pictographic}/u.test(c.title.text)), 'containertitels zonder emoji (Slack toont die als :code:)');
   h.ok(containers.find((c) => c.title.text === 'VANDAAG')?.default_collapsed === false && containers.find((c) => c.title.text === 'UW OPDRACHTEN')?.default_collapsed === false, 'VANDAAG en UW OPDRACHTEN staan open');
   const dicht = containers.filter((c) => c.default_collapsed);
   h.ok(dicht.length >= 4 && ['Ranglijst', 'Spellen', 'Recht', 'status', 'Rijk'].every((t) => dicht.some((c) => c.title.text.includes(t))), `inklapbare secties staan dicht (${dicht.map((c) => c.title.text).join(' | ')})`);

@@ -18995,8 +18995,10 @@ function homeKaart({ titel, subtitel, tekst, knoppen = [], beeld }) {
   };
 }
 
+// Slack toont emoji in een containertitel als ':bar_chart:'-code (gezien 18 nov), dus eruit.
+const zonderEmoji = (t) => String(t).replace(/[\p{Extended_Pictographic}\u{FE0F}\u{200D}]/gu, '').replace(/\s+/g, ' ').trim();
 const homeContainer = (titel, kinderen, open = true) => ({
-  type: 'container', title: plain(titel, 75), child_blocks: kinderen.slice(0, 10), is_collapsible: true, default_collapsed: !open,
+  type: 'container', title: plain(zonderEmoji(titel), 75), child_blocks: kinderen.slice(0, 10), is_collapsible: true, default_collapsed: !open,
 });
 
 // Blokken tellen zoals Slack: kinderen van containers en kaarten van een carrousel tellen mee.
