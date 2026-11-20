@@ -892,7 +892,7 @@ function show(id){
   try{localStorage.setItem('dash_sec',id)}catch(_){}
   hideTip();
 }
-function ga(id){show(id);try{history.replaceState(null,'','#'+id)}catch(_){}window.scrollTo(0,0)}
+function ga(id){show(id);try{if(location.hash!=='#'+id)history.pushState(null,'','#'+id)}catch(_){}window.scrollTo(0,0)}
 window.addEventListener('hashchange',()=>show(location.hash.slice(1)));
 
 // tooltip: één voor de hele pagina, inhoud via textContent

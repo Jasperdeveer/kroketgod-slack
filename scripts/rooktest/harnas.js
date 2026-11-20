@@ -29,6 +29,7 @@ module.exports = async function harnas(test, { opstartMs = 2500 } = {}) {
   const r2 = [];
   const fetchPad = require.resolve('node-fetch', { paths: [repo] });
   const nepFetch = async (url, opts = {}) => {
+    if (schakel.fetch) { const r = await schakel.fetch(String(url), opts); if (r) return r; } // per test een eigen antwoord
     if (/r2\.cloudflarestorage\.com/.test(String(url)) && opts.method === 'PUT') {
       r2.push({ url: String(url), bytes: opts.body.length });
       fs.writeFileSync(path.join(uitmap, `r2-${r2.length}.gif`), opts.body);

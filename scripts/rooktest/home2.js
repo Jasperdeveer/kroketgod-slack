@@ -146,6 +146,16 @@ harnas(async (h) => {
   h.ok(metBeeld.find((b) => b.type === 'card').hero_image.image_url === cache.vijand_airfryer_kroket, 'weekvijandkaart krijgt zijn portret');
   await zorgVoorKaartbeelden();
   h.ok(h.r2.length - r2Voor === 13, 'tweede keer: cache hergebruikt, niets opnieuw gezet');
+
+  // Weg op R2 (404): herstelKaartbeelden zet hem opnieuw, onder dezelfde URL.
+  const { herstelKaartbeelden } = h.index;
+  const weg = cache.duel;
+  h.schakel.fetch = (url, opts) => (opts.method === 'HEAD' ? { status: url === weg ? 404 : 200, ok: url !== weg } : null);
+  const r2Herstel = h.r2.length;
+  const hersteld = await herstelKaartbeelden();
+  h.schakel.fetch = null;
+  h.ok(hersteld.length === 1 && hersteld[0] === 'duel' && h.r2.length - r2Herstel === 1 && h.lees('kaartbeelden.json').duel === weg, `herstel: alleen duel opnieuw gezet, zelfde URL (${hersteld.join(',')})`);
+  h.ok((await herstelKaartbeelden()).length === 0, 'herstel zonder netwerkantwoord gooit niets weg');
   schoon(); vol();
 
   // 7. Verbannen lid: kop, alert, VANDAAG en secties; geen actiekaarten.

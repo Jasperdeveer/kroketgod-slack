@@ -13,7 +13,7 @@ const DONDERDAG = Date.parse('2026-11-19T12:00:00Z');
 harnas(async (h) => {
   const { UITVOERDERS, voerIngreepUit, bouwRegieStand, voerBamischijfAanval } = h.index;
   const raid = () => h.lees('bamischijf.json');
-  const zetRaid = (hp, extra = {}) => h.schrijf('bamischijf.json', { ...h.lees('bamischijf.json'), actief: hp > 0, hp, maxHp: 51, strijders: {}, extraAanval: undefined, ...extra });
+  const zetRaid = (hp, extra = {}) => h.schrijf('bamischijf.json', { ...h.lees('bamischijf.json'), actief: hp > 0, hp, maxHp: 51, strijders: {}, extraAanval: undefined, deadlineTs: Date.now() + 2 * 86_400_000, ...extra }); // de seed heeft een vaste deadline (19 nov)
   const keuze = (id) => ({ ingreep: boek(id), doel: null, punten: 0, duurMinuten: 0, reden: 'test' });
   const alles = () => h.posts.map((p) => p.text).join('\n');
 
