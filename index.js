@@ -139,7 +139,7 @@ const { GOKPAUZE_DAGEN, GOKPAUZE_VERBOD, rustEinde, schuif: schuifDag, naCasinoS
 const { boekSpel: boekCasinoStat, vatSamen: vatCasinoSamen, feiten: casinoFeiten, kiesFeiten: kiesCasinoFeiten } = require('./lib/casinostats.js');
 const regie = require('./lib/regie.js');
 const raadpleeg = require('./lib/raadpleeg.js');
-const { LOT_PRIJS, stand: loterijStand, koopLot, trek: trekLoterij } = require('./lib/loterij.js');
+const { LOT_PRIJS, LOT_WAARDE, stand: loterijStand, koopLot, trek: trekLoterij } = require('./lib/loterij.js');
 const { gaveVan, maxHpVoor, isRazend, slaatTerug, terugslagBuit, schadeNaGave, komtTerug, vijandBeurt, aanvalsLimiet, aanvallenGedaan } = require('./lib/weekvijand.js');
 const {
   WAPENS, WAPENREK_MAX, KANON_DOEL, KANON_MIN_LEDEN, VETBOM_KETST_BUIT, PEKEL_AANVALLEN,
@@ -9518,7 +9518,7 @@ const CRON_LABELS = {
   '30 9 * * 1':      { label: 'Weekvijand (opkomst)' },
   '0 11 * * 4':      { label: 'Het Verhoor' },
   '*/20 8-17 * * 1-5': { label: 'Regisseur (kans)', nietInLijst: true }, // elke werkdag-tik zou de lijst 'eerstvolgende' vullen
-  '0 16 * * 5':      { label: 'Frituurloterij (trekking)' },
+  '2 9 * * 1':       { label: 'Frituurloterij (trekking)' },
   '20 9 * * 1':      { label: 'Kroketkroniek' },
 };
 const geplandeCronMeta = []; // { key, label, vast, taak, toonTaak }
@@ -13183,7 +13183,7 @@ const gokpauzeWeigering = async (userId, actie) => (opGokpauze(userId) ? gokpauz
 // of een gesloten venster eet de inzet niet op (wie terugkomt, speelt het af), en een dubbele klik
 // vindt de tweede keer geen spel meer en betaalt dus niet twee keer uit.
 registreerFeature({ naam: 'casino', state: ['casino.json', 'casinobonus.json', 'casinostats.json', 'schuifkast.json'] });
-// De Frituurloterij (regels: lib/loterij.js): een lot kopen in de lobby, de trekking vrijdag 16:00.
+// De Frituurloterij (regels: lib/loterij.js): een lot kopen in de lobby, de trekking maandagochtend.
 registreerFeature({ naam: 'loterij', state: ['loterij.json'] });
 const loadLoterij = () => readJSON('loterij.json', { loten: [], historie: [] });
 const loadCasinoHanden = () => readJSON('casino.json', {});
@@ -13409,7 +13409,7 @@ function casinoVenster(userId, { spel = 'lobby', inzet = 1, beeld = null, meldin
       (hand ? `\n_U heeft nog een open spel: ${CASINO_SPELLEN[hand.spel].naam}._` : '')].filter(Boolean).join('\n')));
     blocks.push({ type: 'actions', elements: Object.entries(CASINO_SPELLEN).map(([id, s]) => casinoKnop(`casino_naar_${id}`, s.naam, 'primary')) });
     const lot = loterijStand(loadLoterij(), userId, dagSleutel());
-    blocks.push(casinoTekst(`🎟️ *Frituurloterij:* de pot staat op *${lot.pot}* (${lot.loten} ${lot.loten === 1 ? 'lot' : 'loten'}). Vrijdag om 16:00 wordt er één getrokken; de winnaar krijgt alles.` +
+    blocks.push(casinoTekst(`🎟️ *Frituurloterij:* de pot staat op *${lot.pot}* (${lot.loten} ${lot.loten === 1 ? 'lot' : 'loten'}). Een lot kost ${LOT_PRIJS} punt en zet er ${LOT_WAARDE} in de pot. Maandagochtend wordt er één getrokken; de winnaar krijgt alles.` +
       (lot.mijnLoten ? ` U heeft er ${lot.mijnLoten}.` : '') + (lot.vandaagGekocht ? ' _Morgen kunt u er weer een kopen._' : '')));
     if (!lot.vandaagGekocht) blocks.push({ type: 'actions', elements: [casinoKnop('casino_zet_lot', `🎟️ Koop een lot (${LOT_PRIJS} punt)`)] });
   } else if (hand?.spel === spel) {
@@ -13675,16 +13675,18 @@ function casinoRoddel(rnd = Math.random) {
   return `🎰 *Gefluister uit het Casino van de Kroket God*\n_De croupiers praten. Afgelopen zeven dagen: ${sam.spellen} spellen, ${huis}._\n\n${regels.join('\n')}`;
 }
 
-// ── Cron: vrijdag 16:00 — de trekking van de Frituurloterij ───────────────────
-// Na het weekoverzicht van 15:00. Eerst opslaan en uitbetalen, dan posten: een mislukte post mag de
-// trekking niet laten herhalen. In stilmodus geen trekking; de pot wacht dan een week.
-planCron('0 16 * * 5', async () => {
+// ── Cron: maandag 09:02 — de trekking van de Frituurloterij ───────────────────
+// Zodat de winnaar de week met de punten begint. Net na de weekopening en niet op '0 9 * * 1' zelf:
+// CRON_LABELS en het dashboard-"overslaan" werken per expressie. Eerst opslaan en uitbetalen, dan
+// posten: een mislukte post mag de trekking niet laten herhalen. In stilmodus geen trekking; de pot
+// wacht dan een week.
+planCron('2 9 * * 1', async () => {
   try {
     if (instelling('stilModus') || instelling('alleenTestkanaal')) return;
     const { staat, uitslag } = trekLoterij(loadLoterij(), dagSleutel(), Math.random, (id) => !!loadMembers()[id] && !isVerbannen(id));
     if (!uitslag) return;
     if (uitslag.doorgeschoven) {
-      await postToChannel(app.client, KANAAL(), `🎟️ *Frituurloterij:* vandaag geen trekking. ${uitslag.deelnemers ? 'Er deed maar één volgeling mee' : 'Er deed geen enkele volgeling mee'}, en tegen jezelf loten is geen loterij. De pot van *${uitslag.pot}* schuift door naar volgende vrijdag. Een lot kost ${LOT_PRIJS} punt in de casinolobby (\`/kroketgod casino\`).`);
+      await postToChannel(app.client, KANAAL(), `🎟️ *Frituurloterij:* vandaag geen trekking. ${uitslag.deelnemers ? 'Er deed maar één volgeling mee' : 'Er deed geen enkele volgeling mee'}, en tegen jezelf loten is geen loterij. De pot van *${uitslag.pot}* schuift door naar volgende maandag. Een lot kost ${LOT_PRIJS} punt en zet er ${LOT_WAARDE} in de pot, in de casinolobby (\`/kroketgod casino\`).`);
       return;
     }
     writeJSON('loterij.json', staat);
@@ -13696,7 +13698,7 @@ planCron('0 16 * * 5', async () => {
       `> De Kroket God steekt zijn hand in de frituurmand: ${uitslag.loten} loten van ${uitslag.deelnemers} volgelingen.\n` +
       `> Hij draait er één om, en het lot is van… *${ontsnapMrkdwn(bijnaam)}*! Goed voor *${uitslag.pot} kroketpunten*` +
       (uitslag.winnendeLoten > 1 ? `, met ${uitslag.winnendeLoten} van de ${uitslag.loten} loten.` : ', met één enkel lot.') +
-      `\n\n_Volgende trekking: vrijdag om 16:00. Een lot kost ${LOT_PRIJS} punt in de casinolobby (\`/kroketgod casino\`), één per dag._`);
+      `\n\n_Volgende trekking: maandagochtend. Een lot kost ${LOT_PRIJS} punt en zet er ${LOT_WAARDE} in de pot, in de casinolobby (\`/kroketgod casino\`), één per dag._`);
   } catch (err) { console.error('Fout bij de trekking van de loterij:', err); }
 }, { timezone: 'Europe/Amsterdam' });
 
@@ -18501,7 +18503,7 @@ const NASLAG = {
         { type: 'section', text: { type: 'mrkdwn', text:
           `${bonus ? `🎁 *Bonus vandaag:* ${bonus} extra ${bonus === 1 ? 'spel' : 'spellen'} voor iedereen (max ${casinoLimiet()} per dag).\n` : ''}` +
           `🎟️ *Frituurloterij:* de pot staat op *${lot.pot}* (${lot.loten} ${lot.loten === 1 ? 'lot' : 'loten'})` +
-          `${lot.mijnLoten ? `, u heeft er ${lot.mijnLoten}` : ''}. Trekking vrijdag 16:00; een lot kost ${LOT_PRIJS} punt in de lobby.` } },
+          `${lot.mijnLoten ? `, u heeft er ${lot.mijnLoten}` : ''}. Trekking maandagochtend; een lot kost ${LOT_PRIJS} punt in de lobby en zet er ${LOT_WAARDE} in de pot.` } },
         { type: 'context', elements: [{ type: 'mrkdwn', text: 'Spelen doet u met de Casino-knop onder UW BEURT of met `/kroketgod casino`.' }] },
       ];
     },

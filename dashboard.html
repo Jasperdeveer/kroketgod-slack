@@ -677,7 +677,7 @@ function kpis(d){
       +kpi('Ingezet vandaag',`${fmtN(cv.ingezet||0)} <small>pt</small>`,{spark:reeks(r.casinoPerDag,'ingezet')})
       +kpi('Uitbetaald vandaag',`${fmtN(cv.uitbetaald||0)} <small>pt</small>`,{spark:reeks(r.casinoPerDag,'uitbetaald')})
       +kpi('Huiswinst vandaag',fmtS((cv.ingezet||0)-(cv.uitbetaald||0)),{sub:'deze week '+fmtS((cw.ingezet||0)-(cw.uitbetaald||0))})
-      +(cas.loterij?kpi('Loterijpot',`${fmtN(cas.loterij.pot)} <small>pt</small>`,{sub:fmtN(cas.loterij.loten)+' loten · trekking vr 16:00'}):''),
+      +(cas.loterij?kpi('Loterijpot',`${fmtN(cas.loterij.pot)} <small>pt</small>`,{sub:fmtN(cas.loterij.loten)+' loten · trekking ma-ochtend'}):''),
     regisseur:kpi('Ingrepen, 14 dagen',fmtN(sum(ingrDag)),{spark:ingrDag,sub:'max '+niv+' per dag'})
       +kpi('Verrassingen deze week',fmtN((r.verrassingen||[]).length),{sub:rg.verrassing?'er loopt er nu een':'nu geen'})
       +kpi('Niveau',esc(rg.niveau||'–'),{sub:'uit · laag · normaal · wild'})
@@ -756,7 +756,7 @@ function lijsten(d){
     +tbl(['','spellen','ingezet','uitbetaald','huis'],[['Vandaag',...huis(cs.vandaag||{})],['Deze week',...huis(cw)],...Object.keys(cw.perSpel||{}).map(k=>[(cs.spelNamen||{})[k]||k,...huis(cw.perSpel[k])])])
     +((cw.perLid||[]).length?'<div class="h4">Per lid, deze week</div>'+tbl(['lid','spellen','netto'],cw.perLid.map(x=>[x.naam,fmtN(x.spellen),fmtS(x.netto)])):'<p class="muted">deze week nog niet gespeeld</p>')
     +(gw?`<p>🏆 Grootste winst: <b>${esc(gw.naam)}</b> +${fmtN(gw.netto)} aan ${esc(gw.spel)}</p>`:'')
-    +(lo?`<p>🎟️ Frituurloterij: pot <b>${fmtN(lo.pot)}</b> · ${fmtN(lo.loten)} loten van ${fmtN(lo.deelnemers)} leden · trekking vrijdag 16:00${lo.laatste?` · laatst gewonnen door <b>${esc(lo.laatste.naam)}</b> (+${fmtN(lo.laatste.pot)})`:''}</p>`:'')
+    +(lo?`<p>🎟️ Frituurloterij: pot <b>${fmtN(lo.pot)}</b> · ${fmtN(lo.loten)} loten van ${fmtN(lo.deelnemers)} leden · trekking maandagochtend${lo.laatste?` · laatst gewonnen door <b>${esc(lo.laatste.naam)}</b> (+${fmtN(lo.laatste.pot)})`:''}</p>`:'')
     +((cs.feiten||[]).length?'<div class="h4">Gefluister deze week'+tip('Wat de casinoroddel van dinsdag 16:30 kan vertellen. Die kiest er vier, over de afgelopen zeven dagen.')+'</div>'+cs.feiten.map(f=>'<div>'+esc(f).replace(/\*([^*]+)\*/g,'<b>$1</b>')+'</div>').join(''):'');
 
   // Providers en quota (Systeem)
